@@ -896,3 +896,7 @@ impl AxiPic {
 #[cfg(test)]
 #[path = "axi_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "axi_bwo_tests.rs"]
+mod bwo_tests;
