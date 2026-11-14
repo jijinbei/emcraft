@@ -13,3 +13,18 @@ cubecl = { max-threads = 1 }
 [[profile.default.overrides]]
 filter = "package(emcraft-gpu)"
 test-group = "cubecl"
+
+# The heavy tests (cargo xtask test --heavy, the CI's heavy job) factor large systems: a CI runner
+# (16 GB, 4 cores) holds two of them at a time, and the solved templates' tour (a radiation solve
+# of 7 GB) only alone. Eight at once had the factorizations refuse for want of memory.
+[profile.heavy]
+test-threads = 2
+slow-timeout = { period = "300s" }
+
+[[profile.heavy.overrides]]
+filter = "package(emcraft-gpu)"
+test-group = "cubecl"
+
+[[profile.heavy.overrides]]
+filter = "test(every_solved_template_opens_with_its_results)"
+threads-required = "num-test-threads"

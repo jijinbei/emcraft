@@ -187,7 +187,8 @@ fn cmd_test(rest: &[&str]) -> Result<(), String> {
     if heavy {
         // Only the ignored tests marked heavy: not a GPU's, benchmarks or tours.
         let names = heavy::names(&[root().join("crates"), root().join("apps")])?;
-        c.args(["--run-ignored", "only", "--no-fail-fast", "-E", &heavy::filter(&names)]);
+        // Two at a time (.config/nextest.toml's heavy profile): their factorizations need the memory.
+        c.args(["--profile", "heavy", "--run-ignored", "only", "--no-fail-fast", "-E", &heavy::filter(&names)]);
     }
     c.arg("--").args(test_args);
     run(c, what)?;
