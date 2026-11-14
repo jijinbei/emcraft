@@ -774,7 +774,8 @@ overlap tests).
 - B. B. Godfrey, J.-L. Vay, *Numerical stability of relativistic beam multidimensional PIC
   simulations employing the Esirkepov algorithm*, J. Comput. Phys. 248:33–46, 2013 — numerical
   Cherenkov radiation of relativistic beams on the Yee grid, and binomial smoothing of the
-  current against it (`emcraft-fdtd::pic::Pic::smooth`).
+  current against it (`emcraft-fdtd::pic::Pic::smooth`); on the r–z grid cells finer along z,
+  c Δt near Δz (the magic time step, Taflove & Hagness §4.3), quiet it (`emcraft-fdtd::axi`).
 - J. P. Verboncoeur, *Symmetric spline weighting for charge and current density in particle simulation*, J. Comput. Phys. 174:421–427, 2001; Birdsall & Langdon §14-11 — particle-in-cell in cylindrical r–z: rings of charge, the fields as circulations over the rings' faces (`emcraft-fdtd::axi`, with Esirkepov's deposition in the indices and the faces' areas).
 - H. R. Johnson, *Backward-wave oscillators*, Proc. IRE 43:684–697, 1955; J. R. Pierce,
   *Traveling-Wave Tubes*, Van Nostrand 1950, ch. II — the backward-wave oscillator's start of

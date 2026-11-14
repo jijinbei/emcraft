@@ -27,6 +27,13 @@
 //! periodic ends; conducting bodies as staircases of cells (`set_metal`, as the Cartesian
 //! grid's); an absorbing layer (CPML along z, Roden & Gedney 2000) inside a conducting end.
 //! One step is the Cartesian grid's: emission, push and deposit, B half, E, B half.
+//!
+//! **Relativistic beams.** On square cells a beam faster than about 0.6c drives the Yee grid's
+//! numerical Cherenkov instability (Godfrey & Vay, J. Comput. Phys. 248:33, 2013): a ring beam's
+//! space-charge depression comes out 6–19 % deep at γ₀ from 1.25 to 3. Cells 8 times finer along
+//! z than along r bring c Δt near Δz at the usual Courant number (0.95), the magic time step
+//! along z (Taflove & Hagness §4.3), and the depression back to 1–4 % of the closed form up to
+//! γ₀ = 5; nearer still (0.999) the leapfrog with particles is unstable.
 
 use std::f64::consts::PI;
 
