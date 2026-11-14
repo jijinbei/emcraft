@@ -782,6 +782,6 @@ overlap tests).
 - B. Levush, T. M. Antonsen, A. Bromborsky, W. R. Lou, Y. Carmel, *Theory of relativistic
   backward-wave oscillators with end reflections*, IEEE Trans. Plasma Sci. 20(3):263–280, 1992 —
   the relativistic gain parameter (the longitudinal mass γ³m) and how end reflections move the
-  start current (`emcraft-theory::bwo::start_current`).
+  start current (`emcraft-theory::bwo::Oscillator`, `bwo::Reflecting`: the echo ρe^{jΦ} in the collector's condition).
 - M. Roberts, *The unreasonable effectiveness of quasirandom sequences*, 2018 — the R₂ sequence
   that spreads emitted particles across a wall's nodes, the same every run.

@@ -65,13 +65,16 @@ fn roots(b: f64, qc: f64) -> [Z; 3] {
     r
 }
 
-/// The boundary conditions' determinant at (CN, b).
-fn determinant(cn: f64, b: f64, qc: f64) -> Z {
+/// The boundary conditions' determinant at (CN, b) over the roots' differences, `echo` the collector end's backward wave per
+/// unit of the gun end's (ρe^{jΦ}; 0 for matched ends).
+fn determinant(cn: f64, b: f64, qc: f64, echo: Z) -> Z {
     let d = roots(b, qc);
     let jb = Z::new(0.0, b);
-    let rows: [[Z; 3]; 3] = [d.map(|x| x + jb), d.map(|x| x * (x + jb)), d.map(|x| (2.0 * std::f64::consts::PI * cn * x).exp())];
+    let rows: [[Z; 3]; 3] = [d.map(|x| x + jb), d.map(|x| x * (x + jb)), d.map(|x| (2.0 * std::f64::consts::PI * cn * x).exp() - echo)];
     let m = |i: usize, j: usize| rows[1][i] * rows[2][j] - rows[1][j] * rows[2][i];
-    rows[0][0] * m(1, 2) - rows[0][1] * m(0, 2) + rows[0][2] * m(0, 1)
+    // Over the roots' differences: two equal roots make two columns equal, a zero that is no start.
+    let apart = (d[0] - d[1]) * (d[1] - d[2]) * (d[2] - d[0]);
+    (rows[0][0] * m(1, 2) - rows[0][1] * m(0, 2) + rows[0][2] * m(0, 1)) / apart
 }
 
 /// Johnson's start of oscillation of a lossless BWO at space-charge parameter `qc` (0 to 1):
@@ -97,12 +100,12 @@ pub fn johnson_start(qc: f64) -> Option<Start> {
         let q = qc * stage as f64 / stages as f64;
         let mut settled = false;
         for _ in 0..100 {
-            let f = determinant(cn, b, q);
+            let f = determinant(cn, b, q, Z::new(0.0, 0.0));
             if f.norm() < 1e-13 {
                 settled = true;
                 break;
             }
-            let (fa, fb) = ((determinant(cn + h, b, q) - f) / h, (determinant(cn, b + h, q) - f) / h);
+            let (fa, fb) = ((determinant(cn + h, b, q, Z::new(0.0, 0.0)) - f) / h, (determinant(cn, b + h, q, Z::new(0.0, 0.0)) - f) / h);
             let det = fa.re * fb.im - fb.re * fa.im;
             if det == 0.0 || !det.is_finite() {
                 return None;
@@ -232,6 +235,182 @@ impl Oscillator {
     }
 }
 
+/// The circuit at one frequency (Hz): the Bloch phase ψ per period of its forward wave (rad), the
+/// coupling impedance of the backward harmonic on the beam (Ω) and the ends' round-trip
+/// reflection ρ = Γ₀Γ_L of the Bloch waves, referred to the structure's two end planes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Sample {
+    pub frequency: f64,
+    pub phase: f64,
+    pub impedance: f64,
+    pub reflection: Z,
+}
+
+/// A backward-wave oscillator of `periods` cells of `period` (m) whose ends reflect (Levush et
+/// al. 1992): the backward wave reaching the gun end comes back as the circuit's forward wave,
+/// Γ₀ of it, which the beam leaves alone (out of step), and at the collector end Γ_L of that
+/// returns as the backward wave. With B and F the Bloch amplitudes at the end planes, F(0) =
+/// Γ₀B(0) and B(L) = Γ_L F(0) e^{−jψN_p}; the backward wave's harmonic e^{−jβₑz + βₑCδz} at the
+/// end planes is its Bloch amplitude, so the collector condition becomes
+///
+/// Σ Aᵢ [e^{2πCNδᵢ} − ρ e^{jΦ}] = 0, Φ = 2πN − ψN_p,
+///
+/// which is Johnson's at ρ = 0. b is the circuit's: βₑ(1 + Cb) = (2π − ψ)/d. The start is where
+/// the determinant vanishes in (I, f), the circuit interpolated linearly between its samples.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Reflecting {
+    /// By rising frequency.
+    pub circuit: Vec<Sample>,
+    pub period: f64,
+    pub periods: usize,
+    pub gamma0: f64,
+    pub charge: f64,
+    pub mass: f64,
+    pub ring: Option<Ring>,
+}
+
+/// The most cells a reflecting oscillator may have.
+const MAX_PERIODS: usize = 100_000;
+
+impl Reflecting {
+    fn valid(&self) -> bool {
+        let finite = |s: &Sample| [s.frequency, s.phase, s.impedance, s.reflection.re, s.reflection.im].iter().all(|x| x.is_finite());
+        self.circuit.len() >= 2
+            && self.circuit.iter().all(|s| finite(s) && s.frequency > 0.0 && s.impedance > 0.0 && s.phase > 0.0 && s.phase < std::f64::consts::PI)
+            && self.circuit.windows(2).all(|w| w[1].frequency > w[0].frequency)
+            && self.period.is_finite()
+            && self.period > 0.0
+            && (1..=MAX_PERIODS).contains(&self.periods)
+    }
+
+    /// The circuit at `f` (Hz), between its samples.
+    fn at(&self, f: f64) -> Option<Sample> {
+        let pair = self.circuit.windows(2).find(|w| f >= w[0].frequency && f <= w[1].frequency)?;
+        let (a, b) = (pair[0], pair[1]);
+        let t = (f - a.frequency) / (b.frequency - a.frequency);
+        Some(Sample {
+            frequency: f,
+            phase: a.phase + t * (b.phase - a.phase),
+            impedance: (a.impedance.ln() + t * (b.impedance.ln() - a.impedance.ln())).exp(),
+            reflection: a.reflection + (b.reflection - a.reflection) * t,
+        })
+    }
+
+    /// The matched oscillator at the circuit's sample `s`.
+    fn matched(&self, s: &Sample) -> Oscillator {
+        Oscillator {
+            impedance: s.impedance,
+            length: self.periods as f64 * self.period,
+            frequency: s.frequency,
+            gamma0: self.gamma0,
+            charge: self.charge,
+            mass: self.mass,
+            ring: self.ring,
+        }
+    }
+
+    /// Pierce's CN, b and QC and the collector's echo ρe^{jΦ} at `current` (A) and `f` (Hz).
+    fn parameters(&self, current: f64, f: f64) -> Option<(f64, f64, f64, Z)> {
+        let s = self.at(f)?;
+        let o = self.matched(&s);
+        let c = (current / o.scale()).cbrt();
+        let qc = o.space_charge(current)?;
+        let v0 = o.speed();
+        let be = 2.0 * std::f64::consts::PI * f / v0;
+        let b = ((2.0 * std::f64::consts::PI - s.phase) / (be * self.period) - 1.0) / c;
+        let n = o.length * f / v0;
+        let phi = 2.0 * std::f64::consts::PI * n - s.phase * self.periods as f64;
+        Some((c * n, b, qc, s.reflection * Z::from_polar(1.0, phi)))
+    }
+
+    /// The boundary conditions' determinant at `current` (A) and `f` (Hz).
+    fn mismatch(&self, current: f64, f: f64) -> Option<Z> {
+        let (cn, b, qc, echo) = self.parameters(current, f)?;
+        Some(determinant(cn, b, qc.min(1.0), echo))
+    }
+
+    /// The start of oscillation: the lowest current (A) at which the determinant vanishes within
+    /// the circuit's samples, and its frequency (Hz); Newton's method on (ln I, f) from Johnson's
+    /// matched start at each sample, bounded. None for hostile input or if none settles.
+    ///
+    /// ```
+    /// use emcraft_theory::bwo::{Oscillator, Reflecting, Sample};
+    /// use num_complex::Complex64 as Z;
+    /// let (q, m, gamma0) = (-1.602_176_634e-19, 9.109_383_701_5e-31, 1.0 + 1e5 / 510_998.95);
+    /// // A circuit in step with a 100 kV beam near ψ = 100°, 11.9 GHz, ends matched.
+    /// let sample = |f: f64, deg: f64, k: f64| Sample { frequency: f, phase: deg.to_radians(), impedance: k, reflection: Z::new(0.0, 0.0) };
+    /// let circuit = vec![sample(11.25e9, 80.0, 0.35), sample(11.91e9, 100.0, 0.59), sample(12.58e9, 120.0, 1.13)];
+    /// let o = Reflecting { circuit: circuit.clone(), period: 0.01, periods: 24, gamma0, charge: q, mass: m, ring: None };
+    /// let (i, f) = o.start().unwrap();
+    /// // Johnson's at that frequency's impedance.
+    /// let s = circuit[1];
+    /// let k = (s.impedance.ln() + (f - s.frequency) / (circuit[0].frequency - s.frequency) * (circuit[0].impedance.ln() - s.impedance.ln())).exp();
+    /// let johnson = Oscillator { impedance: k, length: 0.24, frequency: f, gamma0, charge: q, mass: m, ring: None };
+    /// assert!((i / johnson.start_current().unwrap() - 1.0).abs() < 1e-6);
+    /// assert!(f > 11.5e9 && f < 11.9e9);
+    /// // Reflecting ends move it.
+    /// let echo = Reflecting { circuit: circuit.iter().map(|s| Sample { reflection: Z::new(0.3, 0.0), ..*s }).collect(), ..o.clone() };
+    /// assert!((echo.start().unwrap().0 / i - 1.0).abs() > 0.05);
+    /// assert!(Reflecting { periods: 0, ..o }.start().is_none());
+    /// ```
+    pub fn start(&self) -> Option<(f64, f64)> {
+        if !self.valid()
+            || !(self.gamma0.is_finite()
+                && self.gamma0 > 1.0
+                && self.charge.is_finite()
+                && self.charge != 0.0
+                && self.mass.is_finite()
+                && self.mass > 0.0)
+        {
+            return None;
+        }
+        let ghz = 1e9;
+        // Newton's method, each step halved until it lowers |det| (at most 30 times).
+        let solve = |guess: (f64, f64)| -> Option<(f64, f64)> {
+            let (mut x, mut y) = (guess.0.ln(), guess.1 / ghz);
+            let mut d = self.mismatch(x.exp(), y * ghz)?;
+            for _ in 0..100 {
+                let h = 1e-6;
+                let dx = (self.mismatch((x + h).exp(), y * ghz)? - d) / h;
+                let dy = (self.mismatch(x.exp(), (y + h) * ghz)? - d) / h;
+                let det = dx.re * dy.im - dy.re * dx.im;
+                if det == 0.0 || !det.is_finite() {
+                    return None;
+                }
+                let (mut sx, mut sy) =
+                    (((d.re * dy.im - d.im * dy.re) / det).clamp(-0.5, 0.5), ((dx.re * d.im - dx.im * d.re) / det).clamp(-0.05, 0.05));
+                let mut next = None;
+                for _ in 0..30 {
+                    if let Some(e) = self.mismatch((x - sx).exp(), (y - sy) * ghz).filter(|e| e.norm() < d.norm()) {
+                        next = Some(e);
+                        break;
+                    }
+                    (sx, sy) = (0.5 * sx, 0.5 * sy);
+                }
+                d = next?;
+                // Settled to 1e-9 of the current and 1 Hz (the numerical derivative's noise), at a
+                // zero rather than a stalled step.
+                if sx.abs() < 1e-9 && sy.abs() < 1e-9 {
+                    return (d.norm() < 1e-8).then(|| ((x - sx).exp(), (y - sy) * ghz));
+                }
+                (x, y) = (x - sx, y - sy);
+            }
+            None
+        };
+        // Guesses every 1 % of the circuit's span: each frequency with Johnson's matched start.
+        let (lo, hi) = (self.circuit[0].frequency, self.circuit[self.circuit.len() - 1].frequency);
+        (0..=100)
+            .map(|k| lo + (hi - lo) * k as f64 / 100.0)
+            .filter_map(|f| {
+                let s = self.at(f)?;
+                solve((self.matched(&s).start_current()?, f))
+            })
+            // A start, not the determinant's vanishing as C → 0 (b without bound).
+            .filter(|(i, f)| i.is_finite() && self.parameters(*i, *f).is_some_and(|(cn, b, ..)| cn > 0.05 && b.abs() < 20.0))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,7 +422,7 @@ mod tests {
         let s = johnson_start(0.0).unwrap();
         approx::assert_abs_diff_eq!(s.cn, 0.314, epsilon = 2e-4);
         approx::assert_abs_diff_eq!(s.b, 1.522, epsilon = 3e-4);
-        assert!(determinant(s.cn, s.b, 0.0).norm() < 1e-12);
+        assert!(determinant(s.cn, s.b, 0.0, Z::new(0.0, 0.0)).norm() < 1e-12);
         // Johnson's Fig. 6: CN rises with QC, slowly at first.
         let cns: Vec<f64> = [0.1, 0.2, 0.3, 0.4].iter().map(|q| johnson_start(*q).unwrap().cn).collect();
         assert!(cns.windows(2).all(|w| w[1] > w[0]) && cns[0] > 0.314 && cns[0] < 0.33);
