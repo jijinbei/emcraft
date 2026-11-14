@@ -496,3 +496,77 @@ fn a_backward_wave_oscillator_starts_where_its_reflecting_ends_say() {
         assert!((f / f_start - 1.0).abs() < 0.01, "{} GHz against {} GHz", f * 1e-9, f_start * 1e-9);
     }
 }
+
+/// A periodic stretch of tube: `periods` of `period` (m), its wall at radius `wall(z)`, inside
+/// `outer` (m).
+struct Periodic<W> {
+    periods: usize,
+    period: f64,
+    outer: f64,
+    wall: W,
+}
+
+/// The frequency (Hz) of `tube`'s TM0 Bloch mode on cells of `h`: E_z = J₀(x₀₁r/a) cos(kz +
+/// `shift`) (a the narrowest radius, k = 2πm/(periods · period)) let ring for 40 ns; the
+/// strongest line within `band` (Hz) at a point off the axis, found to 10 MHz and then refined
+/// to 0.1 MHz.
+fn bloch_line(h: f64, tube: &Periodic<impl Fn(f64) -> f64>, m: usize, shift: f64, band: (f64, f64)) -> f64 {
+    let Periodic { periods, period, outer, ref wall } = *tube;
+    use emcraft_theory::bessel::j;
+    use num_complex::Complex64 as Z;
+    let lz = periods as f64 * period;
+    let nz = (lz / h).round() as usize;
+    let g = AxiGrid::new((outer / h).round() as usize, nz, h, lz / nz as f64, Wall::Periodic).unwrap();
+    let dt = g.time_step(0.95);
+    let a = (0..1000).map(|i| wall(period * i as f64 / 1000.0)).fold(f64::INFINITY, f64::min);
+    let k = 2.0 * PI * m as f64 / lz;
+    let mut pic = AxiPic::new(g, dt, Pusher::Boris).unwrap();
+    pic.set(2, |r, z| if r < a { j(0, 2.404_825_557_695_773 * r / a) * (k * z + shift).cos() } else { 0.0 });
+    pic.set_metal(|r, z| r > wall(z));
+    let mut trace = Vec::new();
+    for _ in 0..(40e-9 / dt) as usize {
+        pic.step().unwrap();
+        trace.push((pic.time(), pic.field_at(0.6 * a, 0.3 * period).0[2]));
+    }
+    let line = |f: f64| trace.iter().map(|(t, e)| Z::from_polar(*e, -2.0 * PI * f * t)).sum::<Z>().norm();
+    let best = |lo: f64, hi: f64, n: usize| {
+        (0..=n).map(|i| lo + (hi - lo) * i as f64 / n as f64).map(|f| (line(f), f)).fold((0.0, 0.0), |x, y| if y.0 > x.0 { y } else { x }).1
+    };
+    let coarse = best(band.0, band.1, ((band.1 - band.0) / 10e6).round() as usize);
+    best(coarse - 10e6, coarse + 10e6, 200)
+}
+
+#[test]
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+fn a_rippled_tubes_band_converges_to_its_floquet_modes() {
+    // The sinusoidally rippled tube of relativistic BWOs, r_w = r₀ + h cos(2πz/d) (Swegle,
+    // Poukey & Leifeste, Phys. Fluids 28:2882, 1985): r₀ = 15 mm, h = 1 mm, d = 16.7 mm, within
+    // Rayleigh's limit (k₀h = 0.38), against emcraft_theory::ripple's Floquet modes. Its wall a
+    // staircase, the grid's band sits below them by an error of the cell's first order (−0.35 %
+    // at ψ = π on 0.25 mm cells, −0.77 % on 0.5 mm); from both, Richardson's extrapolation meets
+    // them to 0.1 % across the band and at both edges of the stop band at π.
+    use emcraft_theory::ripple::RippledGuide;
+    let (r0, hr, d) = (0.015f64, 0.001f64, 0.0167f64);
+    let guide = RippledGuide { radius: r0, ripple: hr, period: d };
+    let wall = move |z: f64| r0 + hr * (2.0 * PI * z / d).cos();
+    // (m of 8 periods, the initial standing wave's shift, which of the theory's modes)
+    let modes = [(1usize, 0.0, 0usize), (2, 0.0, 0), (3, 0.0, 0), (4, 0.0, 0), (4, PI / 2.0, 1)];
+    let lines: Vec<(f64, f64, f64)> = std::thread::scope(|s| {
+        let jobs: Vec<_> = modes
+            .iter()
+            .map(|&(m, shift, which)| {
+                s.spawn(move || {
+                    let tube = Periodic { periods: 8, period: d, outer: r0 + hr + 1e-3, wall };
+                    let at = |cell: f64| bloch_line(cell, &tube, m, shift, (6e9, 14e9));
+                    let theory = guide.frequencies(PI * m as f64 / 4.0, 6e9, 14e9, 800, 8).unwrap()[which];
+                    (at(0.5e-3), at(0.25e-3), theory)
+                })
+            })
+            .collect();
+        jobs.into_iter().map(|j| j.join().unwrap()).collect()
+    });
+    for (coarse, fine, theory) in lines {
+        assert!(fine < theory && (fine / theory - 1.0).abs() < 0.005, "{fine} against {theory}");
+        assert!(((2.0 * fine - coarse) / theory - 1.0).abs() < 1e-3, "{coarse}, {fine} against {theory}");
+    }
+}

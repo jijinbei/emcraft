@@ -50,6 +50,7 @@ pub mod nrw;
 pub mod plasma;
 pub mod post;
 pub mod radiation;
+pub mod ripple;
 pub mod slab;
 pub mod stripline;
 pub mod taper;

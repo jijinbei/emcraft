@@ -784,5 +784,10 @@ overlap tests).
   backward-wave oscillators with end reflections*, IEEE Trans. Plasma Sci. 20(3):263–280, 1992 —
   the relativistic gain parameter (the longitudinal mass γ³m) and how end reflections move the
   start current (`emcraft-theory::bwo::Oscillator`, `bwo::Reflecting`: the echo ρe^{jΦ} in the collector's condition).
+- J. A. Swegle, J. W. Poukey, G. T. Leifeste, *Backward wave oscillators with rippled wall
+  resonators: analytic theory and numerical simulation*, Phys. Fluids 28(9):2882–2894, 1985 —
+  the sinusoidally rippled tube's TM0 Bloch modes by a Floquet expansion and the wall's
+  condition taken over a period (`emcraft-theory::ripple`), the slow-wave structure of
+  relativistic BWOs.
 - M. Roberts, *The unreasonable effectiveness of quasirandom sequences*, 2018 — the R₂ sequence
   that spreads emitted particles across a wall's nodes, the same every run.
