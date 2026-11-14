@@ -789,5 +789,11 @@ overlap tests).
   the sinusoidally rippled tube's TM0 Bloch modes by a Floquet expansion and the wall's
   condition taken over a period (`emcraft-theory::ripple`), the slow-wave structure of
   relativistic BWOs.
+- D.-Y. Na, Y. A. Omelchenko, H. Moon, B.-H. V. Borges, F. L. Teixeira, *Axisymmetric
+  charge-conservative electromagnetic particle simulation algorithm on unstructured grids:
+  application to microwave vacuum electronic devices*, J. Comput. Phys. 346:295–317, 2017
+  (arXiv:1701.03784, §5.1) — the published Ku-band relativistic BWO (a 15 ± 2.1 mm ripple of
+  period 7.5 mm, 1.5 kA at 0.877c, 15.59 GHz) the r–z grid is compared with, and how staircased
+  walls lower its line (the heavy test in `emcraft-fdtd::axi`; template `relativistic-bwo`).
 - M. Roberts, *The unreasonable effectiveness of quasirandom sequences*, 2018 — the R₂ sequence
   that spreads emitted particles across a wall's nodes, the same every run.

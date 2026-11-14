@@ -12,7 +12,7 @@
 //! and each probe's field at most [`PROBE_SAMPLES`] times; at the end, the particles (at most
 //! [`SNAPSHOT`], evenly chosen) and each conducting wall's current over the run's second half.
 //! A probe's frequency is that of the upward crossings of its strongest component through its
-//! mean.
+//! mean over the run's second half (a growing oscillation's start left out).
 
 use std::sync::Arc;
 
@@ -442,7 +442,8 @@ fn finish(s: &mut Session, frame: Frame, rec: Recording, probes: &[[f64; 3]], en
             .map(|(at, e)| Probe {
                 at: std::array::from_fn(|d| at[d] + origin[d]),
                 every: rec.probe_every,
-                frequency: frequency(&e, rec.probe_every as f64 * dt),
+                // Over the run's second half: a growing oscillation's start (noise) left out.
+                frequency: frequency(&e[e.len() / 2..], rec.probe_every as f64 * dt),
                 e,
             })
             .collect(),

@@ -798,6 +798,14 @@ pub const TEMPLATES: &[Template] = &[
         group: Group::Particles,
     },
     Template {
+        name: "relativistic-bwo",
+        label: "A relativistic backward-wave oscillator by particle-in-cell in a body of revolution, the Ku-band one of Na et al. (2017): 1.5 kA of 553 keV electrons on a 9–11 mm ring held by 5 T through 14.5 ripples of 15 ± 2.1 mm every 7.5 mm, open at the collector; it oscillates near 15 GHz on these 0.5 mm cells (15.59 GHz published, its walls smooth)",
+        script: include_str!("../scripts/relativistic-bwo.json"),
+        marks: "{}",
+        kinds: &[Analysis::Particles],
+        group: Group::Particles,
+    },
+    Template {
         name: "two-stream",
         label: "The two-stream instability by particle-in-cell: two cold electron streams of 10¹⁶ m⁻³ at ±3·10⁷ m/s in a periodic box one wavelength long; the wave between them grows at ω_b/2 = 2.8·10⁹ /s until they trap it",
         script: include_str!("../scripts/two-stream.json"),

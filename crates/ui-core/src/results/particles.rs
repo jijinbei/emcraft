@@ -185,7 +185,8 @@ mod tests {
             ("particles.walls", json!({"x": "periodic", "y": "periodic", "z": "periodic"})),
             ("particles.plasma", json!({"density": 1e16, "per_cell": [4, 1, 1], "wave": 1e4})),
             ("particles.probe", json!({"at": [10, 0, 0]})),
-            ("solve.particles", json!({"time": 4, "cell": 5})),
+            // Eight periods of ω_p: a probe's frequency is read over the run's second half.
+            ("solve.particles", json!({"time": 9, "cell": 5})),
         ] {
             s.execute(c, &p).unwrap();
         }

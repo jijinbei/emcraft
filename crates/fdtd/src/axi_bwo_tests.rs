@@ -97,7 +97,7 @@ fn strongest(trace: &[(f64, f64)], band: (f64, f64)) -> f64 {
 }
 
 /// The frequency (Hz) of a TM0 Bloch mode of `s` (as [`ringing`]) let ring 40 ns: the strongest
-/// line within `band` at a point off the axis.
+/// line within `band` at a point off the axis, the trace's mean taken out.
 fn bloch_line(s: Structure, cells: Cells, periods: usize, m: usize, shift: f64, band: (f64, f64)) -> f64 {
     let mut pic = ringing(s, cells, periods, m, shift);
     let mut trace = Vec::new();
@@ -105,6 +105,10 @@ fn bloch_line(s: Structure, cells: Cells, periods: usize, m: usize, shift: f64, 
         pic.step().unwrap();
         trace.push((pic.time(), pic.field_at(0.6 * s.narrowest, 0.3 * s.period).0[2]));
     }
+    // The start's divergence leaves a static field behind (no charge holds it): its mean taken
+    // out, lest it leak into the band's lowest lines.
+    let mean = trace.iter().map(|x| x.1).sum::<f64>() / trace.len().max(1) as f64;
+    let trace: Vec<(f64, f64)> = trace.into_iter().map(|(t, e)| (t, e - mean)).collect();
     strongest(&trace, band)
 }
 
@@ -506,36 +510,42 @@ fn a_relativistic_backward_wave_oscillator_starts_where_its_theory_says() {
 }
 
 #[test]
-#[ignore]
-fn explore_ku() {
-    // Na et al., J. Comput. Phys. 346:295, 2017 (arXiv:1701.03784, §5.1): 15.59 GHz.
+#[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+fn a_ku_band_relativistic_bwo_oscillates_at_its_published_frequency() {
+    // Na et al. (J. Comput. Phys. 346:295, 2017; arXiv:1701.03784, §5.1): their Ku-band BWO
+    // (the KU ripple, a 1.5 kA beam at 0.877c on a 9–11 mm ring, 5 T) oscillates at 15.59 GHz,
+    // its walls drawn smoothly (15.575–15.61 GHz as their mesh is refined; on staircased walls
+    // lower, 14.81 and 15.16 GHz). Here the walls are staircases of 0.5 and 0.25 mm cells (4 times
+    // finer along z). The cold π-point the BWO runs just below converges at the cell's second
+    // order (15.25, 15.58 GHz; extrapolated 15.68 GHz, emcraft_theory::ripple's to 0.05 %); the
+    // oscillation, 15.05 and 15.35 GHz, below it, extrapolated to 15.46 GHz at second order and
+    // 15.66 GHz at first: the published line between them, each within 1 % of it.
     use emcraft_theory::ripple::RippledGuide;
     let theory = RippledGuide { radius: 0.015, ripple: 0.0021, period: 0.0075 }.frequencies(PI, 10e9, 20e9, 1000, 8).unwrap()[0];
     let gamma0 = 1.0 / (1.0 - 0.877f64.powi(2)).sqrt();
     let energy = (gamma0 - 1.0) * ELECTRON.rest_energy() / -ELECTRON.charge;
-    let cases: Vec<(f64, usize)> = vec![(0.5e-3, 4), (0.5e-3, 8), (0.25e-3, 4)];
-    let lines: Vec<String> = std::thread::scope(|sc| {
-        let jobs: Vec<_> = cases
+    let runs: Vec<(f64, f64)> = std::thread::scope(|sc| {
+        let jobs: Vec<_> = [0.5e-3, 0.25e-3]
             .iter()
-            .map(|&(h, fine)| {
+            .map(|&h| {
                 sc.spawn(move || {
-                    let cells = Cells { h, fine };
-                    let pi = bloch_line(KU, cells, 2, 1, 0.0, (13e9, 17e9));
+                    let cells = Cells { h, fine: 4 };
+                    // The π-point's standing wave odd about the ripple's trough (the even one, the stop
+                    // band's other edge, lies above 20 GHz).
+                    let pi = bloch_line(KU, cells, 2, 1, PI / 2.0, (14.5e9, 17e9));
                     let beam = Beam { energy, current: 1500.0, inner: 0.009, outer: 0.011, b: 5.0 };
-                    let run = bwo(KU, cells, 14.5, beam, 50e-9, (14.5e9, 16.5e9));
-                    format!(
-                        "h {h} fine {fine}: π-point {:.4} GHz (theory {:.4}), oscillation {:.4} GHz | {}",
-                        pi * 1e-9,
-                        theory * 1e-9,
-                        run.last * 1e-9,
-                        every(&run.lines)
-                    )
+                    (pi, bwo(KU, cells, 14.5, beam, 50e-9, (14.5e9, 16.5e9)).last)
                 })
             })
             .collect();
         jobs.into_iter().map(|j| j.join().unwrap()).collect()
     });
-    for l in lines {
-        println!("{l}");
-    }
+    let [(pi_coarse, coarse), (pi_fine, fine)] = [runs[0], runs[1]];
+    let published = 15.59e9;
+    let (first, second) = (2.0 * fine - coarse, fine + (fine - coarse) / 3.0);
+    assert!(coarse < fine && fine < published && second < published && published < first, "{coarse}, {fine} against {published}");
+    assert!([first, second].iter().all(|f| (f / published - 1.0).abs() < 0.01), "{first}, {second} against {published}");
+    let pi = pi_fine + (pi_fine - pi_coarse) / 3.0;
+    assert!(pi_coarse < pi_fine && pi_fine < theory && (pi / theory - 1.0).abs() < 5e-4, "π-point {pi_coarse}, {pi_fine} against {theory}");
+    assert!(coarse < pi_coarse && fine < pi_fine, "the oscillation below the π-point");
 }
