@@ -308,6 +308,10 @@ fn a_body_of_revolution_refuses_what_it_cannot_run_yet() {
     );
     let e = s.execute("solve.particles", &axi).unwrap_err().to_string();
     assert!(e.contains("dielectric") && e.contains("glass"), "{e}");
+    // An open end on cells 8 times finer along z: its layer at most 64 cells (it asked 80).
+    let mut s = base();
+    s.execute("particles.open", &json!({"face": "z+"})).unwrap();
+    assert!(s.execute("solve.particles", &json!({"time": 0.02, "cell": 1, "axisymmetric": true, "fine": 8})).is_ok());
     let mut s = base();
     for p in [
         json!({"time": 0.1, "cell": 1, "fine": 4}),

@@ -1,0 +1,13 @@
+[
+  {"note": "A particle run confirmed in a body of revolution (solve.particles' axisymmetric, its cells 8 times finer along z) and its time then retyped in the Setup form and confirmed there: the form keeps what it does not show — the body of revolution and its cells along z — rather than dropping them"},
+  {"call": "engine.execute", "params": {"command": "file.new", "params": {}}},
+  {"call": "engine.execute", "params": {"command": "geometry.solid", "params": {"shape": "cylinder", "radius": 10, "length": 50}}},
+  {"call": "engine.execute", "params": {"command": "project.analysis", "params": {"kind": "particles"}}},
+  {"call": "engine.execute", "params": {"command": "particles.beam", "params": {"face": "z-", "current": 10, "energy": 100000, "radius": 6}}},
+  {"call": "engine.execute", "params": {"command": "project.setup", "params": {"kind": "particles", "time": 1, "cell": 1, "axisymmetric": true, "fine": 8}}},
+  {"click": "step:setup"},
+  {"expect": {"inspect": {"workflow.confirmed": true, "workflow.setup.time": "1", "workflow.settings.fine": 8}}},
+  {"call": "ui.set", "params": {"setup": {"time": "2"}}},
+  {"click": "setup:confirm"},
+  {"expect": {"inspect": {"workflow.confirmed": true, "workflow.settings.time": 2.0, "workflow.settings.axisymmetric": true, "workflow.settings.fine": 8}}}
+]

@@ -200,6 +200,12 @@ pub fn integer(text: &str, lo: u64, hi: u64) -> Result<u64, String> {
 /// assert_eq!(params.map(|p| p["points"].clone()), Ok(serde_json::json!(101)));
 /// let (params, f) = checked(Solver::Frequency, 1000, Fields { stop: "5".into(), ..f });
 /// assert!(params.is_err() && f.error("stop").is_some());
+/// // A particle run confirmed in a body of revolution stays one when its time is retyped.
+/// let seen = serde_json::json!({"kind": "particles", "time": 2, "cell": 1, "axisymmetric": true, "fine": 8});
+/// let f = Fields::default().synced(seen).typed("time", "3");
+/// let (params, _) = checked(Solver::Particles, 1000, f);
+/// let p = params.unwrap();
+/// assert_eq!((p["time"].clone(), p["axisymmetric"].clone(), p["fine"].clone()), (serde_json::json!(3.0), serde_json::json!(true), serde_json::json!(8)));
 /// ```
 pub fn checked(solver: Solver, limit: u64, f: Fields) -> (Result<Value, String>, Fields) {
     let f = f.with_defaults();
@@ -242,6 +248,15 @@ pub fn checked(solver: Solver, limit: u64, f: Fields) -> (Result<Value, String>,
     }
     if solver == Solver::TimeDomain && !f.excite.is_empty() {
         p["excite"] = json!(f.excite);
+    }
+    // What the form does not show of a particle run's confirmed settings — its push, a body of
+    // revolution and its cells along z — stays as confirmed.
+    if solver == Solver::Particles {
+        for k in ["vay", "axisymmetric", "fine"] {
+            if let Some(v) = f.seen.as_ref().and_then(|s| s.get(k)) {
+                p[k] = v.clone();
+            }
+        }
     }
     // The lowest modes, none left out: the frequency is the one the mesh is for, not a target
     // whose nearest modes could leave a lower one out (a cavity's dimensions changed moved its

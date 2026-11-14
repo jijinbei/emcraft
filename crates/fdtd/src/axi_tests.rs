@@ -171,6 +171,41 @@ fn a_relativistic_ring_beam_keeps_its_depression_on_cells_fine_along_z() {
 }
 
 #[test]
+fn one_thread_and_seven_give_the_same_bits() {
+    // A ring beam through a corrugated tube with an absorbing end, metal and an axial field: the
+    // fields by z rows and the rings by chunks on the threads, their currents added in the rings'
+    // order — the run is the same to the bit on any number of threads.
+    let run = || {
+        let g = AxiGrid::new(26, 120, 0.5e-3, 0.5e-3, Wall::Conductor).unwrap();
+        let mut pic = AxiPic::new(g, g.time_step(0.95), Pusher::Boris).unwrap();
+        pic.set_metal(|r, z| r > if ((z / 0.01).rem_euclid(1.0) - 0.25).abs() < 0.25 { 0.013 } else { 0.010 });
+        pic.absorb(true, 10).unwrap();
+        pic.set(5, |_, _| 2.0);
+        let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
+        let pulse = Pulse::Steady { current: 200.0, rise: 0.1e-9 };
+        pic.inject(Injection {
+            high: false,
+            population: k,
+            pulse,
+            inner: 0.0075,
+            radius: 0.0085,
+            energy: 0.3 * ELECTRON.rest_energy(),
+            per_step: 64,
+        })
+        .unwrap();
+        for _ in 0..400 {
+            pic.step().unwrap();
+        }
+        let (field, kinetic) = pic.energy();
+        let rings: Vec<u64> = pic.populations()[k].rings.iter().flat_map(|p| [p.r.to_bits(), p.z.to_bits(), p.u[2].to_bits()]).collect();
+        (field.to_bits(), kinetic.to_bits(), rings, pic.gauss().iter().map(|g| g.to_bits()).collect::<Vec<_>>())
+    };
+    let one = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap().install(run);
+    let many = rayon::ThreadPoolBuilder::new().num_threads(7).build().unwrap().install(run);
+    assert!(!one.2.is_empty() && one == many, "one thread and seven differ");
+}
+
+#[test]
 fn hostile_axisymmetric_settings_are_refused() {
     assert!(AxiGrid::new(0, 10, 1e-3, 1e-3, Wall::Conductor).is_err());
     assert!(AxiGrid::new(10, 10, f64::NAN, 1e-3, Wall::Conductor).is_err());

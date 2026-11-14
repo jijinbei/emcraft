@@ -7,7 +7,7 @@
 //! across and `fine` times finer along z (8 for beams faster than about 0.6c: the numerical
 //! Cherenkov instability, `emcraft_fdtd::axi`'s docs); the time step 0.95 of the grid's limit.
 //! The ends conducting or periodic as particles.walls sets z; an open end a CPML of
-//! [`super::LAYER`] × `fine` cells beyond it, the geometry carried on into it as it is at the
+//! [`super::LAYER`] × `fine` cells (at most `emcraft_fdtd::pic::MAX_LAYER`) beyond it, the geometry carried on into it as it is at the
 //! face. Whatever lies outside the solid in the half plane θ = 0 is a conductor.
 //!
 //! **The sources.** Beams and bunches through z− or z+ on the axis, and an axial magnetic field;
@@ -104,7 +104,7 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &Settings) -> Result<Value
     let nz = ((z_hi - z_lo) / (set.cell / set.fine as f64)).round().clamp(2.0, 1e9) as usize;
     let dz = (z_hi - z_lo) / nz as f64;
     let opened = |high: bool| m.open.iter().any(|f| f.axis == 2 && f.high == high);
-    let layer = LAYER * set.fine;
+    let layer = (LAYER * set.fine).min(emcraft_fdtd::pic::MAX_LAYER);
     let (below, above) = (usize::from(opened(false)) * layer, usize::from(opened(true)) * layer);
     let wall = match m.walls[2] {
         Wall::Periodic => pic::Wall::Periodic,

@@ -19,19 +19,19 @@ use crate::pic::{Pulse, Wall};
 const X01: f64 = 2.404_825_557_695_773;
 
 /// A slow-wave structure: its period (m) and its wall's radius at z (m from its start,
-/// periodic), its narrowest radius, the drift tubes' radius beyond its ends, and the grid's.
+/// periodic), its narrowest radius, the drift tubes' radii before and after it, and the grid's.
 #[derive(Clone, Copy)]
 struct Structure {
     period: f64,
     wall: fn(f64) -> f64,
     narrowest: f64,
-    drift: f64,
+    drift: [f64; 2],
     outer: f64,
 }
 
 /// A tube 10 mm inside its teeth, grooves 5 mm wide to 13 mm, period 10 mm (grooves at the
 /// period's first half): the non-relativistic BWO's.
-const CORRUGATED: Structure = Structure { period: 0.010, wall: corrugated, narrowest: 0.010, drift: 0.013, outer: 0.013 };
+const CORRUGATED: Structure = Structure { period: 0.010, wall: corrugated, narrowest: 0.010, drift: [0.013; 2], outer: 0.013 };
 
 fn corrugated(z: f64) -> f64 {
     if ((z / 0.010).rem_euclid(1.0) - 0.25).abs() < 0.25 { 0.013 } else { 0.010 }
@@ -39,10 +39,22 @@ fn corrugated(z: f64) -> f64 {
 
 /// A tube rippled sinusoidally, 15 ± 1 mm with a period of 16.7 mm (Swegle et al.'s kind of
 /// structure, within Rayleigh's limit), the drift tubes at its widest.
-const RIPPLED: Structure = Structure { period: 0.0167, wall: rippled, narrowest: 0.014, drift: 0.016, outer: 0.017 };
+const RIPPLED: Structure = Structure { period: 0.0167, wall: rippled, narrowest: 0.014, drift: [0.016; 2], outer: 0.017 };
 
 fn rippled(z: f64) -> f64 {
     0.015 + 0.001 * (2.0 * PI * z / 0.0167).cos()
+}
+
+/// The Ku-band relativistic BWO of D.-Y. Na, Y. A. Omelchenko, H. Moon, B.-H. V. Borges,
+/// F. L. Teixeira (*Axisymmetric charge-conservative electromagnetic particle simulation
+/// algorithm on unstructured grids: application to microwave vacuum electronic devices*,
+/// J. Comput. Phys. 346:295–317, 2017; arXiv:1701.03784, §5.1): a ripple
+/// R(z) = (A + B)/2 + (A − B)/2 cos(2πz/C), A = 17.1 mm, B = 12.9 mm, C = 7.5 mm, 14.5 periods,
+/// begun here at a trough and ended at a crest, the drift tubes at those radii.
+const KU: Structure = Structure { period: 0.0075, wall: ku, narrowest: 0.0129, drift: [0.0129, 0.0171], outer: 0.018 };
+
+fn ku(z: f64) -> f64 {
+    0.015 - 0.0021 * (2.0 * PI * z / 0.0075).cos()
 }
 
 /// Cells `h` across and `h / fine` along z (fine along z for relativistic beams: the numerical
@@ -171,16 +183,23 @@ fn cold_band(s: Structure, cells: Cells, periods: usize, modes: std::ops::RangeI
         .collect()
 }
 
-/// `periods` of `s` between 20 mm of drift tube each end and a CPML of 10 × fine cells; and
+/// `periods` of `s` between 20 mm of drift tube each end and a CPML of 10 × fine cells (at most
+/// 64); and
 /// where the structure begins (m).
-fn tube(s: Structure, cells: Cells, periods: usize) -> (AxiPic, f64) {
-    let layer = 10 * cells.fine;
+fn tube(s: Structure, cells: Cells, periods: f64) -> (AxiPic, f64) {
+    let layer = (10 * cells.fine).min(crate::pic::MAX_LAYER);
     let dz = cells.h / cells.fine as f64;
-    let (buffer, length) = (0.02f64, periods as f64 * s.period);
+    let (buffer, length) = (0.02f64, periods * s.period);
     let g = cells.grid(s.outer, length + 2.0 * (layer as f64 * dz + buffer), Wall::Conductor);
     let mut pic = AxiPic::new(g, g.time_step(0.95), Pusher::Boris).unwrap();
     let z0 = layer as f64 * g.dz + buffer;
-    pic.set_metal(|r, z| r > if z > z0 && z < z0 + length { (s.wall)(z - z0) } else { s.drift });
+    pic.set_metal(|r, z| {
+        r > match z {
+            z if z <= z0 => s.drift[0],
+            z if z >= z0 + length => s.drift[1],
+            z => (s.wall)(z - z0),
+        }
+    });
     pic.absorb(false, layer).unwrap();
     pic.absorb(true, layer).unwrap();
     (pic, z0)
@@ -203,10 +222,17 @@ impl Beam {
     }
 }
 
-/// A BWO: `beam` through the cathode end of the [`tube`] of `periods`. Each ns, the strongest
-/// line of E_z within `band` (Hz; 21 lines) near the structure's cathode end (the window's mean,
-/// the beam's own static field, taken out) and its frequency.
-fn bwo(s: Structure, cells: Cells, periods: usize, beam: Beam, time: f64, band: (f64, f64)) -> Vec<(f64, f64)> {
+/// A BWO's run: each ns, the strongest line of E_z within the band watched (21 lines) near the
+/// structure's cathode end (the window's mean, the beam's own static field, taken out) and its
+/// frequency; and the line over the run's last third, to 0.1 MHz.
+struct Oscillation {
+    lines: Vec<(f64, f64)>,
+    last: f64,
+}
+
+/// A BWO: `beam` through the cathode end of the [`tube`] of `periods`, watched within `band`
+/// (Hz).
+fn bwo(s: Structure, cells: Cells, periods: f64, beam: Beam, time: f64, band: (f64, f64)) -> Oscillation {
     let (mut pic, z0) = tube(s, cells, periods);
     let dt = pic.dt();
     pic.set(5, |_, _| beam.b);
@@ -220,9 +246,14 @@ fn bwo(s: Structure, cells: Cells, periods: usize, beam: Beam, time: f64, band: 
     let zero = Z::new(0.0, 0.0);
     let (mut sums, mut basis, mut mean) = (vec![zero; freqs.len()], vec![zero; freqs.len()], 0.0);
     let mut out = Vec::new();
-    for n in 0..(time / dt) as usize {
+    let steps = (time / dt) as usize;
+    let mut tail = Vec::new();
+    for n in 0..steps {
         pic.step().unwrap();
         let (e, t) = (pic.field_at(pr, pz).0[2], pic.time());
+        if n >= steps - steps / 3 {
+            tail.push((t, e));
+        }
         mean += e;
         for ((s, b), f) in sums.iter_mut().zip(basis.iter_mut()).zip(&freqs) {
             let w = Z::from_polar(1.0, -2.0 * PI * f * t);
@@ -237,7 +268,9 @@ fn bwo(s: Structure, cells: Cells, periods: usize, beam: Beam, time: f64, band: 
             mean = 0.0;
         }
     }
-    out
+    let average = tail.iter().map(|x| x.1).sum::<f64>() / tail.len().max(1) as f64;
+    let tail: Vec<(f64, f64)> = tail.into_iter().map(|(t, e)| (t, e - average)).collect();
+    Oscillation { lines: out, last: strongest(&tail, band) }
 }
 
 /// The round-trip reflection ρ = Γ₀Γ_L of the [`tube`]'s ends for its TM01 Bloch waves at each
@@ -248,7 +281,7 @@ fn bwo(s: Structure, cells: Cells, periods: usize, beam: Beam, time: f64, band: 
 /// comes only from the cathode end's reflection, right of it one along −z only from the
 /// collector's: a/b = Γ₀e^{−2jψs} there, b/a = Γ_L e^{2jψs} at the other end.
 fn reflections(s: Structure, cells: Cells, periods: usize, inset: usize, freqs: &[f64], psi: impl Fn(f64) -> f64) -> Vec<Z> {
-    let (mut pic, z0) = tube(s, cells, periods);
+    let (mut pic, z0) = tube(s, cells, periods as f64);
     let mid = z0 + 0.5 * periods as f64 * s.period;
     let a = s.narrowest;
     pic.set(2, |r, z| if r < a { j(0, X01 * r / a) * (-((z - mid) / (0.3 * s.period)).powi(2)).exp() } else { 0.0 });
@@ -383,7 +416,7 @@ fn a_backward_wave_oscillator_starts_where_its_reflecting_ends_say() {
     let runs = [(12, 0.65, short), (12, 1.35, short), (24, 0.6, long), (24, 1.8, long)];
     let lines: Vec<Vec<(f64, f64)>> = std::thread::scope(|sc| {
         let handles: Vec<_> =
-            runs.iter().map(|&(n, x, (i, f))| sc.spawn(move || bwo(s, cells, n, beam(x * i), 100e-9, (0.98 * f, 1.02 * f)))).collect();
+            runs.iter().map(|&(n, x, (i, f))| sc.spawn(move || bwo(s, cells, n as f64, beam(x * i), 100e-9, (0.98 * f, 1.02 * f)).lines)).collect();
         handles.into_iter().map(|t| t.join().unwrap()).collect()
     });
     for (pair, (_, f_start)) in lines.chunks(2).zip([short, long]) {
@@ -459,8 +492,10 @@ fn a_relativistic_backward_wave_oscillator_starts_where_its_theory_says() {
     assert!(rho.iter().all(|r| r.norm() < 0.1), "{rho:?}");
     assert!((200.0..500.0).contains(&current) && (matched.0 / current - 1.0).abs() < 0.1, "{current} A at {f_start} Hz, matched {matched:?}");
     let lines: Vec<Vec<(f64, f64)>> = std::thread::scope(|sc| {
-        let jobs: Vec<_> =
-            [0.6, 1.4].iter().map(|&x| sc.spawn(move || bwo(s, cells, 16, beam(x * current), 60e-9, (0.95 * f_start, 1.05 * f_start)))).collect();
+        let jobs: Vec<_> = [0.6, 1.4]
+            .iter()
+            .map(|&x| sc.spawn(move || bwo(s, cells, 16.0, beam(x * current), 60e-9, (0.95 * f_start, 1.05 * f_start)).lines))
+            .collect();
         jobs.into_iter().map(|j| j.join().unwrap()).collect()
     });
     let noise = peak(&lines[0], 10, 30).0;
@@ -468,4 +503,39 @@ fn a_relativistic_backward_wave_oscillator_starts_where_its_theory_says() {
     let (top, f) = peak(&lines[1], 0, 60);
     assert!(top > 100.0 * noise, "above the start: {}", every(&lines[1]));
     assert!((f / f_start - 1.0).abs() < 0.015, "{} GHz against {} GHz", f * 1e-9, f_start * 1e-9);
+}
+
+#[test]
+#[ignore]
+fn explore_ku() {
+    // Na et al., J. Comput. Phys. 346:295, 2017 (arXiv:1701.03784, §5.1): 15.59 GHz.
+    use emcraft_theory::ripple::RippledGuide;
+    let theory = RippledGuide { radius: 0.015, ripple: 0.0021, period: 0.0075 }.frequencies(PI, 10e9, 20e9, 1000, 8).unwrap()[0];
+    let gamma0 = 1.0 / (1.0 - 0.877f64.powi(2)).sqrt();
+    let energy = (gamma0 - 1.0) * ELECTRON.rest_energy() / -ELECTRON.charge;
+    let cases: Vec<(f64, usize)> = vec![(0.5e-3, 4), (0.5e-3, 8), (0.25e-3, 4)];
+    let lines: Vec<String> = std::thread::scope(|sc| {
+        let jobs: Vec<_> = cases
+            .iter()
+            .map(|&(h, fine)| {
+                sc.spawn(move || {
+                    let cells = Cells { h, fine };
+                    let pi = bloch_line(KU, cells, 2, 1, 0.0, (13e9, 17e9));
+                    let beam = Beam { energy, current: 1500.0, inner: 0.009, outer: 0.011, b: 5.0 };
+                    let run = bwo(KU, cells, 14.5, beam, 50e-9, (14.5e9, 16.5e9));
+                    format!(
+                        "h {h} fine {fine}: π-point {:.4} GHz (theory {:.4}), oscillation {:.4} GHz | {}",
+                        pi * 1e-9,
+                        theory * 1e-9,
+                        run.last * 1e-9,
+                        every(&run.lines)
+                    )
+                })
+            })
+            .collect();
+        jobs.into_iter().map(|j| j.join().unwrap()).collect()
+    });
+    for l in lines {
+        println!("{l}");
+    }
 }

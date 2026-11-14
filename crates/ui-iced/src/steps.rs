@@ -312,7 +312,8 @@ pub fn stepped(app: &App) -> bool {
 }
 
 /// The workflow's state for `ui.inspect`: the step open, each step's status and checks, the
-/// kind, the Setup form, whether its settings are confirmed, a refusal and a failure.
+/// kind, the Setup form, whether its settings are confirmed and what they are, a refusal and a
+/// failure.
 pub fn inspect(app: &App) -> Value {
     let states = app.statuses();
     let steps: serde_json::Map<String, Value> = states.iter().map(|s| (s.step.id().to_owned(), json!(s.status.id()))).collect();
@@ -331,6 +332,7 @@ pub fn inspect(app: &App) -> Value {
         "setup": fields,
         "errors": f.errors.iter().map(|(k, v)| ((*k).to_owned(), json!(v))).collect::<serde_json::Map<_, _>>(),
         "confirmed": !app.unconfirmed(),
+        "settings": emcraft_engine::job::setup_reply(&app.session),
         "refused": app.workflow.refusal,
         "failure": app.workflow.failure.as_ref().map(|(c, e)| json!({"command": c, "error": e})),
         "check": app.workflow.check,

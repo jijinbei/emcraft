@@ -212,10 +212,26 @@ pub struct AxiPic {
     populations: Vec<Rings>,
     injections: Vec<Injection>,
     metal: Option<Vec<bool>>,
+    /// Whether each E_r, E_z, E_θ point touches metal (empty without metal).
+    held: [Vec<bool>; 3],
     layers: Option<Layers>,
     count: u64,
     steps: usize,
 }
+
+/// A ring's fate in a step: kept, dropped (its momentum no number), or absorbed by a wall
+/// (`collected[axis][end]`) or the metal (none), with its charge (C) and kinetic energy (J).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fate {
+    Kept,
+    Lost,
+    Absorbed { wall: Option<(usize, usize)>, q: f64, kinetic: f64 },
+}
+
+/// The rings pushed between their additions to the current are replayed (bounding the
+/// additions held), and the rings each thread takes at a time.
+const WAVE: usize = 1 << 16;
+const CHUNK: usize = 512;
 
 /// Lattices' order in `lats`.
 const ER: usize = 0;
@@ -275,6 +291,7 @@ impl AxiPic {
             populations: Vec::new(),
             injections: Vec::new(),
             metal: None,
+            held: [Vec::new(), Vec::new(), Vec::new()],
             layers: None,
             count: 0,
             steps: 0,
@@ -381,6 +398,13 @@ impl AxiPic {
             (0..g.nz).flat_map(|k| (0..g.nr).map(move |i| (i, k))).map(|(i, k)| metal((i as f64 + 0.5) * g.dr, (k as f64 + 0.5) * g.dz)).collect();
         let any = cells.contains(&true);
         self.metal = any.then_some(cells);
+        self.held = [ER, EZ, ET].map(|which| {
+            let lat = self.lats[which];
+            if !any {
+                return Vec::new();
+            }
+            (0..lat.nz).flat_map(|k| (0..lat.nr).map(move |i| (i, k))).map(|(i, k)| self.held(which, i, k)).collect()
+        });
         // E on edges touching metal starts at zero.
         for (which, lat) in [(ER, self.lats[ER]), (EZ, self.lats[EZ]), (ET, self.lats[ET])] {
             for k in 0..lat.nz {
@@ -577,7 +601,22 @@ impl AxiPic {
         for k in 0..self.populations.len() {
             let species = self.populations[k].species;
             let mut rings = std::mem::take(&mut self.populations[k].rings);
-            rings.retain_mut(|p| self.advance(species, p, &mut moved));
+            let fates = self.advance_all(species, &mut rings);
+            for (p, fate) in rings.iter().zip(&fates) {
+                match *fate {
+                    Fate::Kept => {}
+                    Fate::Lost => moved.lost += 1,
+                    Fate::Absorbed { wall, q, kinetic } => {
+                        match wall {
+                            Some((axis, end)) => moved.collected[axis][end] += q,
+                            None => moved.metal += q,
+                        }
+                        moved.kinetic_out += p.w * kinetic;
+                    }
+                }
+            }
+            let mut kept = fates.iter().map(|f| *f == Fate::Kept);
+            rings.retain(|_| kept.next().unwrap_or(true));
             self.populations[k].rings = rings;
         }
         self.faraday(0.5 * self.dt);
@@ -629,14 +668,47 @@ impl AxiPic {
         Ok(())
     }
 
-    /// Pushes, moves and deposits ring `p`; false when it is gone.
-    fn advance(&mut self, species: Species, p: &mut Ring, moved: &mut Moved) -> bool {
+    /// Every ring of `rings` pushed and moved, chunk by chunk on the threads, their currents
+    /// added to J in the rings' order (as one thread would, the same bits on any number); their
+    /// fates.
+    fn advance_all(&mut self, species: Species, rings: &mut [Ring]) -> Vec<Fate> {
+        use rayon::prelude::*;
+        let mut fates = Vec::with_capacity(rings.len());
+        for wave in rings.chunks_mut(WAVE) {
+            let this = &*self;
+            let batches: Vec<(Vec<(u8, u32, f64)>, Vec<Fate>)> = wave
+                .par_chunks_mut(CHUNK)
+                .map(|chunk| {
+                    let mut adds = Vec::with_capacity(chunk.len() * 24);
+                    let fates = chunk.iter_mut().map(|p| this.advance(species, p, &mut |w, id, v| adds.push((w, id as u32, v)))).collect();
+                    (adds, fates)
+                })
+                .collect();
+            for (adds, batch) in batches {
+                for (w, id, v) in adds {
+                    let j = match w {
+                        0 => &mut self.jr,
+                        1 => &mut self.jz,
+                        _ => &mut self.jt,
+                    };
+                    if let Some(x) = j.get_mut(id as usize) {
+                        *x += v;
+                    }
+                }
+                fates.extend(batch);
+            }
+        }
+        fates
+    }
+
+    /// Pushes and moves ring `p`, its current handed to `add(component, id, value)` (0: J_r,
+    /// 1: J_z, 2: J_θ; A/m²); its fate.
+    fn advance(&self, species: Species, p: &mut Ring, add: &mut impl FnMut(u8, usize, f64)) -> Fate {
         let g = self.grid;
         let (e, b) = self.field_at(p.r, p.z);
         let u = push(self.pusher, species, p.u, e, b, self.dt);
         if !u.iter().all(|v| v.is_finite()) {
-            moved.lost += 1;
-            return false;
+            return Fate::Lost;
         }
         let v = velocity(u);
         // Straight in the plane θ = 0, then turned back onto it.
@@ -668,36 +740,26 @@ impl AxiPic {
             z1 = (p.z + f * (z1 - p.z)).clamp(0.0, g.length());
         }
         let q = species.charge * p.w;
-        self.deposit(p.r, p.z, r1, z1, q);
-        self.deposit_theta(0.5 * (p.r + r1), 0.5 * (p.z + z1), q * v[1]);
-        let absorbed = |moved: &mut Moved| moved.kinetic_out += p.w * species.kinetic(u1);
+        self.deposit((p.r, p.z), (r1, z1), q, add);
+        self.deposit_theta(0.5 * (p.r + r1), 0.5 * (p.z + z1), q * v[1], add);
+        let kinetic = species.kinetic(u1);
         match hit {
-            Some(2) => {
-                moved.collected[0][1] += q;
-                absorbed(moved);
-                return false;
-            }
-            Some(end) => {
-                moved.collected[2][end] += q;
-                absorbed(moved);
-                return false;
-            }
+            Some(2) => return Fate::Absorbed { wall: Some((0, 1)), q, kinetic },
+            Some(end) => return Fate::Absorbed { wall: Some((2, end)), q, kinetic },
             None => {}
         }
         if self.metal_cell((r1 / g.dr).floor() as isize, (z1 / g.dz).floor() as isize) {
-            moved.metal += q;
-            absorbed(moved);
-            return false;
+            return Fate::Absorbed { wall: None, q, kinetic };
         }
         p.r = r1;
         p.z = if g.z_wall == Wall::Periodic { z1.rem_euclid(g.length()) } else { z1 };
         p.u = u1;
-        true
+        Fate::Kept
     }
 
     /// The current of charge `q` (C) moving from (r0, z0) to (r1, z1) in a step (z unwrapped):
     /// Esirkepov's flux through each node ring's faces, over their areas.
-    fn deposit(&mut self, r0: f64, z0: f64, r1: f64, z1: f64, q: f64) {
+    fn deposit(&self, (r0, z0): (f64, f64), (r1, z1): (f64, f64), q: f64, add: &mut impl FnMut(u8, usize, f64)) {
         let g = self.grid;
         let window = |x0: f64, x1: f64, h: f64| -> (isize, [f64; 4], [f64; 4]) {
             let first = (x0 / h).floor() as isize - 1;
@@ -724,9 +786,7 @@ impl AxiPic {
                     continue;
                 }
                 let face = 2.0 * PI * (i as f64 + 0.5) * g.dr * g.dz;
-                if let Some(v) = self.jr.get_mut(ler.at(i as usize, k)) {
-                    *v += flux / face;
-                }
+                add(0, ler.at(i as usize, k), flux / face);
             }
         }
         // I_z through the node rings' areas: the running sum over k.
@@ -744,15 +804,13 @@ impl AxiPic {
             for mz in 0..3 {
                 flux -= q * dsz[mz] * across / self.dt;
                 let Some(k) = g.wz(fz + mz as isize, false) else { continue };
-                if let Some(v) = self.jz.get_mut(lez.at(i as usize, k)) {
-                    *v += flux / area;
-                }
+                add(1, lez.at(i as usize, k), flux / area);
             }
         }
     }
 
     /// The azimuthal current q v_θ (A·m) at (r, z) on E_θ's nodes, over their rings' volumes.
-    fn deposit_theta(&mut self, r: f64, z: f64, qv: f64) {
+    fn deposit_theta(&self, r: f64, z: f64, qv: f64, add: &mut impl FnMut(u8, usize, f64)) {
         let g = self.grid;
         let let_ = self.lats[ET];
         let (sr, sz) = (r / g.dr, z / g.dz);
@@ -765,131 +823,144 @@ impl AxiPic {
             for (dk, wz) in [(0, 1.0 - (sz - k0)), (1, sz - k0)] {
                 let Some(k) = g.wz(k0 as isize + dk, true) else { continue };
                 let volume = g.volume(i as usize);
-                if let Some(v) = self.jt.get_mut(let_.at(i as usize, k)) {
-                    *v += qv * wr * wz / volume;
-                }
+                add(2, let_.at(i as usize, k), qv * wr * wz / volume);
             }
         }
     }
 
-    /// A z difference through the layers: d + ψ, ψ advanced (`which` ψ, B's coefficients or E's,
-    /// at z point `k`, node or centre).
+    /// A z difference through the layers: d + ψ, ψ advanced (`coefficients` B's or E's, z point
+    /// `k`, a node or a centre).
     #[inline]
-    fn stretch(layers: Option<&mut Layers>, (which, field_b): (usize, bool), (node, k, id): (bool, usize, usize), d: f64) -> f64 {
-        let Some(l) = layers else { return d };
-        let set = if field_b { &l.b } else { &l.e };
+    fn stretch(coefficients: Option<&[Vec<Cpml>; 2]>, (node, k): (bool, usize), psi: Option<&mut f64>, d: f64) -> f64 {
+        let (Some(set), Some(psi)) = (coefficients, psi) else { return d };
         let c = set[usize::from(!node)].get(k).copied().unwrap_or(Cpml::NONE);
         if c == Cpml::NONE {
             return d;
         }
-        let Some(psi) = l.psi[which].get_mut(id) else { return d };
         *psi = c.psi(*psi, d);
         d + *psi
     }
 
-    /// B advanced by `dt` (s): ∂B/∂t = −∇ × E.
+    /// B advanced by `dt` (s): ∂B/∂t = −∇ × E, each z row on the threads.
     fn faraday(&mut self, dt: f64) {
         let g = self.grid;
         let [ler, lez, let_, lbr, lbz, lbt] = self.lats;
-        let f = &mut self.f;
-        let mut layers = self.layers.as_mut();
+        let Fields { er, ez, et, br, bz, bt } = &mut self.f;
+        let (er, ez, et) = (&*er, &*ez, &*et);
+        let (coefficients, psi) = match self.layers.as_mut() {
+            Some(l) => (Some(&l.b), Some(&mut l.psi)),
+            None => (None, None),
+        };
+        let [_, _, psi_bt, psi_br] = match psi {
+            Some([a, b, c, d]) => [Some(a), Some(b), Some(c), Some(d)],
+            None => [None, None, None, None],
+        };
         // B_θ: −(∂z E_r − ∂r E_z).
-        for k in 0..lbt.nz {
-            let Some(kp) = g.wz(k as isize + 1, true) else { continue };
-            for i in 0..lbt.nr {
-                let dz = (f.er[ler.at(i, kp)] - f.er[ler.at(i, k)]) / g.dz;
-                let id = lbt.at(i, k);
-                let dz = Self::stretch(layers.as_deref_mut(), (2, true), (false, k, id), dz);
-                let dr = (f.ez[lez.at(i + 1, k)] - f.ez[lez.at(i, k)]) / g.dr;
-                f.bt[id] -= dt * (dz - dr);
+        by_rows(bt, psi_bt, lbt.nr, |k, row, mut psi| {
+            let Some(kp) = g.wz(k as isize + 1, true) else { return };
+            for (i, v) in row.iter_mut().enumerate() {
+                let dz = (er[ler.at(i, kp)] - er[ler.at(i, k)]) / g.dz;
+                let dz = Self::stretch(coefficients, (false, k), psi.as_deref_mut().and_then(|p| p.get_mut(i)), dz);
+                let dr = (ez[lez.at(i + 1, k)] - ez[lez.at(i, k)]) / g.dr;
+                *v -= dt * (dz - dr);
             }
-        }
+        });
         // B_r: +∂z E_θ.
-        for k in 0..lbr.nz {
-            let Some(kp) = g.wz(k as isize + 1, true) else { continue };
-            for i in 0..lbr.nr {
-                let id = lbr.at(i, k);
-                let dz = (f.et[let_.at(i, kp)] - f.et[let_.at(i, k)]) / g.dz;
-                let dz = Self::stretch(layers.as_deref_mut(), (3, true), (false, k, id), dz);
-                f.br[id] += dt * dz;
+        by_rows(br, psi_br, lbr.nr, |k, row, mut psi| {
+            let Some(kp) = g.wz(k as isize + 1, true) else { return };
+            for (i, v) in row.iter_mut().enumerate() {
+                let dz = (et[let_.at(i, kp)] - et[let_.at(i, k)]) / g.dz;
+                *v += dt * Self::stretch(coefficients, (false, k), psi.as_deref_mut().and_then(|p| p.get_mut(i)), dz);
             }
-        }
+        });
         // B_z: −(1/r) ∂r (r E_θ).
-        for k in 0..lbz.nz {
-            for i in 0..lbz.nr {
+        by_rows(bz, None, lbz.nr, |k, row, _| {
+            for (i, v) in row.iter_mut().enumerate() {
                 let (r0, r1, rm) = (i as f64 * g.dr, (i + 1) as f64 * g.dr, (i as f64 + 0.5) * g.dr);
-                let curl = (r1 * f.et[let_.at(i + 1, k)] - r0 * f.et[let_.at(i, k)]) / (rm * g.dr);
-                f.bz[lbz.at(i, k)] -= dt * curl;
+                *v -= dt * (r1 * et[let_.at(i + 1, k)] - r0 * et[let_.at(i, k)]) / (rm * g.dr);
             }
-        }
+        });
     }
 
-    /// E advanced by a step: ε₀ ∂E/∂t = ∇ × B/μ₀ − J, off the walls and metal it is tangential to.
+    /// E advanced by a step: ε₀ ∂E/∂t = ∇ × B/μ₀ − J, off the walls and metal it is tangential
+    /// to, each z row on the threads.
     fn ampere(&mut self) {
         let g = self.grid;
         let dt = self.dt;
         let c2 = C0 * C0;
         let [ler, lez, let_, lbr, lbz, lbt] = self.lats;
-        // Held edges first (they need &self).
-        let held: [Vec<bool>; 3] = [ER, EZ, ET].map(|which| {
-            let lat = self.lats[which];
-            if self.metal.is_none() {
-                return Vec::new();
-            }
-            (0..lat.nz).flat_map(|k| (0..lat.nr).map(move |i| (i, k))).map(|(i, k)| self.held(which, i, k)).collect()
-        });
+        let held = &self.held;
         let is_held = |w: usize, id: usize| held[w].get(id).copied().unwrap_or(false);
-        let f = &mut self.f;
-        let mut layers = self.layers.as_mut();
+        let (jr, jz, jt) = (&self.jr, &self.jz, &self.jt);
+        let Fields { er, ez, et, br, bz, bt } = &mut self.f;
+        let (br, bz, bt) = (&*br, &*bz, &*bt);
+        let (coefficients, psi) = match self.layers.as_mut() {
+            Some(l) => (Some(&l.e), Some(&mut l.psi)),
+            None => (None, None),
+        };
+        let [psi_er, psi_et, _, _] = match psi {
+            Some([a, b, c, d]) => [Some(a), Some(b), Some(c), Some(d)],
+            None => [None, None, None, None],
+        };
         // E_r: −c² ∂z B_θ − J_r/ε₀, off the conducting ends.
-        for k in 0..ler.nz {
+        by_rows(er, psi_er, ler.nr, |k, row, mut psi| {
             if g.z_end(k) {
-                continue;
+                return;
             }
-            let Some(km) = g.wz(k as isize - 1, false) else { continue };
-            for i in 0..ler.nr {
+            let Some(km) = g.wz(k as isize - 1, false) else { return };
+            for (i, v) in row.iter_mut().enumerate() {
                 let id = ler.at(i, k);
-                let dz = (f.bt[lbt.at(i, k.min(lbt.nz - 1))] - f.bt[lbt.at(i, km)]) / g.dz;
-                let dz = Self::stretch(layers.as_deref_mut(), (0, false), (true, k, id), dz);
-                if is_held(0, id) {
-                    continue;
+                let dz = (bt[lbt.at(i, k.min(lbt.nz - 1))] - bt[lbt.at(i, km)]) / g.dz;
+                let dz = Self::stretch(coefficients, (true, k), psi.as_deref_mut().and_then(|p| p.get_mut(i)), dz);
+                if !is_held(0, id) {
+                    *v += dt * (-c2 * dz - jr[id] / EPS0);
                 }
-                f.er[id] += dt * (-c2 * dz - self.jr[id] / EPS0);
             }
-        }
+        });
         // E_θ: c²(∂z B_r − ∂r B_z) − J_θ/ε₀, off the axis, the wall and the ends.
-        for k in 0..let_.nz {
+        by_rows(et, psi_et, let_.nr, |k, row, mut psi| {
             if g.z_end(k) {
-                continue;
+                return;
             }
-            let Some(km) = g.wz(k as isize - 1, false) else { continue };
-            for i in 1..g.nr {
+            let Some(km) = g.wz(k as isize - 1, false) else { return };
+            for (i, v) in row.iter_mut().enumerate().take(g.nr).skip(1) {
                 let id = let_.at(i, k);
-                let dz = (f.br[lbr.at(i, k.min(lbr.nz - 1))] - f.br[lbr.at(i, km)]) / g.dz;
-                let dz = Self::stretch(layers.as_deref_mut(), (1, false), (true, k, id), dz);
-                let dr = (f.bz[lbz.at(i, k)] - f.bz[lbz.at(i - 1, k)]) / g.dr;
-                if is_held(2, id) {
-                    continue;
+                let dz = (br[lbr.at(i, k.min(lbr.nz - 1))] - br[lbr.at(i, km)]) / g.dz;
+                let dz = Self::stretch(coefficients, (true, k), psi.as_deref_mut().and_then(|p| p.get_mut(i)), dz);
+                let dr = (bz[lbz.at(i, k)] - bz[lbz.at(i - 1, k)]) / g.dr;
+                if !is_held(2, id) {
+                    *v += dt * (c2 * (dz - dr) - jt[id] / EPS0);
                 }
-                f.et[id] += dt * (c2 * (dz - dr) - self.jt[id] / EPS0);
             }
-        }
+        });
         // E_z: c² (1/r) ∂r (r B_θ) − J_z/ε₀, off the wall; on the axis 4B_θ(r_½)/Δr.
-        for k in 0..lez.nz {
-            for i in 0..g.nr {
+        by_rows(ez, None, lez.nr, |k, row, _| {
+            for (i, v) in row.iter_mut().enumerate().take(g.nr) {
                 let id = lez.at(i, k);
                 let curl = if i == 0 {
-                    4.0 * f.bt[lbt.at(0, k)] / g.dr
+                    4.0 * bt[lbt.at(0, k)] / g.dr
                 } else {
                     let (rp, rm, r) = ((i as f64 + 0.5) * g.dr, (i as f64 - 0.5) * g.dr, i as f64 * g.dr);
-                    (rp * f.bt[lbt.at(i, k)] - rm * f.bt[lbt.at(i - 1, k)]) / (r * g.dr)
+                    (rp * bt[lbt.at(i, k)] - rm * bt[lbt.at(i - 1, k)]) / (r * g.dr)
                 };
-                if is_held(1, id) {
-                    continue;
+                if !is_held(1, id) {
+                    *v += dt * (c2 * curl - jz[id] / EPS0);
                 }
-                f.ez[id] += dt * (c2 * curl - self.jz[id] / EPS0);
             }
+        });
+    }
+}
+
+/// `row(k, values of row k, the layers' ψ of row k)` for each z row (of `nr` points) of
+/// `values`, on the threads: each value written by one of them, from values the update does not
+/// change (the same bits on any number of threads).
+fn by_rows(values: &mut [f64], psi: Option<&mut Vec<f64>>, nr: usize, row: impl Fn(usize, &mut [f64], Option<&mut [f64]>) + Sync + Send) {
+    use rayon::prelude::*;
+    match psi {
+        Some(psi) if psi.len() == values.len() => {
+            values.par_chunks_mut(nr).zip(psi.par_chunks_mut(nr)).enumerate().for_each(|(k, (v, p))| row(k, v, Some(p)));
         }
+        _ => values.par_chunks_mut(nr).enumerate().for_each(|(k, v)| row(k, v, None)),
     }
 }
 
