@@ -221,3 +221,99 @@ fn an_open_face_lets_a_beam_and_its_field_out() {
     s.execute("particles.open", &json!({"face": "z+", "closed": true})).unwrap();
     assert!(s.model.particles.open.is_empty());
 }
+
+#[test]
+fn a_bunch_through_a_pillbox_as_a_body_of_revolution_leaves_its_loss_factor() {
+    // The closed pillbox of the Cartesian case run on the r–z grid (Wilson, SLAC-PUB-4547, 1989,
+    // §3; emcraft_theory::wake): the same loss factor, the box the cylinder's.
+    let mut s = Session::new();
+    run(
+        &mut s,
+        &[
+            ("geometry.solid", json!({"shape": "cylinder", "radius": 10, "length": 13.06})),
+            ("project.analysis", json!({"kind": "particles"})),
+            ("particles.bunch", json!({"face": "z-", "charge": 1, "length": 2, "energy": 1e10})),
+            ("particles.probe", json!({"at": [5, 0, 6.5]})),
+        ],
+    );
+    let r = s.execute("solve.particles", &json!({"time": 0.12, "cell": 0.5, "axisymmetric": true})).unwrap();
+    let want = emcraft_theory::wake::Pillbox::new(0.01, 0.01306).loss_factor(1.0, 2e-3 / 299_792_458.0).unwrap() * 1e-12;
+    let k = r["loss_factor_v_per_pc"].as_f64().unwrap();
+    assert!((k / want - 1.0).abs() < 4e-3, "{k} V/pC against {want}");
+    assert_eq!(r["cells"], json!([40, 40, 26]));
+    assert!(r["walls"]["z+"]["current"].as_f64().is_some_and(f64::is_sign_negative) && r["walls"].get("x-").is_none(), "{r}");
+    let kept = s.results.particles.clone().unwrap();
+    assert!(kept.axisymmetric && (kept.area(2) / (std::f64::consts::PI * 1e-4) - 1.0).abs() < 1e-12);
+}
+
+#[test]
+fn a_relativistic_ring_beam_in_a_body_of_revolution_sinks_to_its_closed_form() {
+    // Bogdankevich & Rukhadze's ring (Sov. Phys. Usp. 14:163, 1971) at γ₀ = 3 and 0.7 of its
+    // limiting current, confirmed as the job's settings: on cells 8 times finer along z its
+    // depression is the closed form's to 3.5 % (on square cells the grid's numerical Cherenkov
+    // instability deepens it by a quarter, emcraft_fdtd::axi).
+    use emcraft_theory::plasma::AnnularBeam;
+    let beam = AnnularBeam { gamma0: 3.0, ratio: 10.0 / 6.0, charge: -1.602_176_634e-19, mass: 9.109_383_701_5e-31 };
+    let current = 0.7 * beam.limiting().unwrap();
+    let mut s = Session::new();
+    run(
+        &mut s,
+        &[
+            ("geometry.solid", json!({"shape": "cylinder", "radius": 10, "length": 50})),
+            ("project.analysis", json!({"kind": "particles"})),
+            ("particles.magnetic", json!({"b": [0, 0, 10]})),
+            ("particles.beam", json!({"face": "z-", "current": current, "energy": 2.0 * 510_998.95, "radius": 6.25, "inner": 5.75, "rise": 200})),
+            ("project.setup", json!({"time": 1.2, "cell": 1, "axisymmetric": true, "fine": 8})),
+        ],
+    );
+    assert_eq!(crate::job::setup_reply(&s)["fine"], json!(8));
+    let r = s.execute("solve.run", &json!({})).unwrap();
+    let want = 3.0 - beam.depressed(current).unwrap();
+    let got = 3.0 - r["mid_gamma"].as_f64().unwrap();
+    assert!((got / want - 1.0).abs() < 0.035, "depression {got} against {want}");
+}
+
+#[test]
+fn a_body_of_revolution_refuses_what_it_cannot_run_yet() {
+    let base = || {
+        let mut s = Session::new();
+        run(
+            &mut s,
+            &[
+                ("geometry.solid", json!({"shape": "cylinder", "radius": 10, "length": 20})),
+                ("particles.beam", json!({"face": "z-", "current": 1, "energy": 1e4, "radius": 3})),
+            ],
+        );
+        s
+    };
+    let axi = json!({"time": 0.1, "cell": 1, "axisymmetric": true});
+    for (step, word) in [
+        (("particles.emitter", json!({"face": "z-"})), "emitting"),
+        (("particles.magnetic", json!({"b": [1, 0, 0]})), "across the axis"),
+        (("particles.open", json!({"face": "x+"})), "faces other"),
+        (("particles.beam", json!({"face": "z-", "current": 1, "energy": 1e4, "radius": 1, "at": [3, 0, 0]})), "off the axis"),
+    ] {
+        let mut s = base();
+        s.execute(step.0, &step.1).unwrap();
+        let e = s.execute("solve.particles", &axi).unwrap_err().to_string();
+        assert!(e.contains("not supported yet") && e.contains(word), "{e}");
+    }
+    let mut s = base();
+    run(
+        &mut s,
+        &[
+            ("model.material.create", json!({"name": "glass", "eps_r": 4})),
+            ("geometry.solid", json!({"shape": "cylinder", "radius": 2, "length": 5, "material": "glass"})),
+        ],
+    );
+    let e = s.execute("solve.particles", &axi).unwrap_err().to_string();
+    assert!(e.contains("dielectric") && e.contains("glass"), "{e}");
+    let mut s = base();
+    for p in [
+        json!({"time": 0.1, "cell": 1, "fine": 4}),
+        json!({"time": 0.1, "cell": 1, "axisymmetric": true, "fine": 17}),
+        json!({"time": 0.1, "cell": 1, "axisymmetric": true, "fine": 0}),
+    ] {
+        assert!(s.execute("solve.particles", &p).is_err(), "{p}");
+    }
+}

@@ -79,13 +79,28 @@ pub enum Setup {
         frequency: Option<Hertz>,
     },
     /// Particles in the box's fields for `time` (s) on a grid of `cell`, pushed by Vay's scheme
-    /// or (`vay` false) Boris's.
+    /// or (`vay` false) Boris's; in a body of revolution about z (`axisymmetric`), its cells
+    /// `fine` times finer along z than across.
     Particles {
         time: Positive,
         cell: Metres,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         vay: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        axisymmetric: bool,
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        fine: usize,
     },
+}
+
+/// A particle run's cells along z per cell across, by default.
+const fn one() -> usize {
+    1
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_one(n: &usize) -> bool {
+    *n == 1
 }
 
 impl Setup {

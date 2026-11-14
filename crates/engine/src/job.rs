@@ -70,6 +70,8 @@ pub fn parse(s: &Session, p: &Params) -> Result<Setup> {
             time: emcraft_model::Positive::new(p.positive("time").required()? * 1e-9)?,
             cell: p.metres("cell").required()?,
             vay: p.flag("vay").or(false)?,
+            axisymmetric: p.flag("axisymmetric").or(false)?,
+            fine: p.integer("fine", 1..=crate::particles::MAX_FINE).or(1)?,
         },
     };
     Ok(setup)
@@ -91,7 +93,7 @@ pub fn setup_reply(s: &Session) -> Value {
         }
         Setup::Radiation { frequency, order: o } => json!({"frequency": f(*frequency), "order": order(*o)}),
         Setup::System { band, points, frequency } => system(s, *band, *points, *frequency),
-        Setup::Particles { time, cell, vay } => particles(s, *time, *cell, *vay),
+        Setup::Particles { .. } => particles(s, setup),
     };
     v["kind"] = json!(setup.analysis().id());
     v
@@ -124,7 +126,7 @@ pub fn solve_of(s: &Session, setup: &Setup) -> (&'static str, Value) {
         }
         Setup::Radiation { frequency, order } => ("solve.radiation", json!({"frequency": f(*frequency), "order": u8::from(*order)})),
         Setup::System { band, points, frequency } => ("solve.system", system(s, *band, *points, *frequency)),
-        Setup::Particles { time, cell, vay } => ("solve.particles", particles(s, *time, *cell, *vay)),
+        Setup::Particles { .. } => ("solve.particles", particles(s, setup)),
     }
 }
 
@@ -138,10 +140,17 @@ fn system(s: &Session, band: Band, points: std::num::NonZeroUsize, frequency: Op
 }
 
 /// A particle run's settings as its solve takes them: the time in ns, the cell in display units.
-fn particles(s: &Session, time: emcraft_model::Positive, cell: emcraft_model::Metres, vay: bool) -> Value {
+fn particles(s: &Session, setup: &Setup) -> Value {
+    let Setup::Particles { time, cell, vay, axisymmetric, fine } = setup else { return json!({}) };
     let mut v = json!({"time": time.get() * 1e9, "cell": s.show_length(cell.get())});
-    if vay {
+    if *vay {
         v["vay"] = json!(true);
+    }
+    if *axisymmetric {
+        v["axisymmetric"] = json!(true);
+    }
+    if *fine != 1 {
+        v["fine"] = json!(fine);
     }
     v
 }

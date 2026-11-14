@@ -1,0 +1,7 @@
+[
+ {"command": "geometry.solid", "params": {"shape": "cylinder", "radius": 10, "length": 80}},
+ {"command": "project.analysis", "params": {"kind": "particles"}},
+ {"command": "particles.magnetic", "params": {"b": [0, 0, 10]}},
+ {"command": "particles.beam", "params": {"face": "z-", "current": 13109.341202057669, "energy": 1021997.9, "radius": 6.25, "inner": 5.75, "rise": 200}},
+ {"command": "solve.particles", "params": {"time": 4, "cell": 1, "axisymmetric": true, "fine": 8}, "id": "run"}
+]

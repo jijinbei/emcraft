@@ -376,7 +376,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "project.setup",
         label: "Confirm the run's settings",
-        doc: "Confirms the run's settings for the job's kind of analysis (or `kind`), as the Setup step shows them: a sweep's band (`start`, `stop`), `points` and element `order`; the time domain's band, `points`, `cell` and the ports to `excite`; the eigenmodes' `count` near `frequency` (or the lowest, `lowest`) and `order`; a radiation solve's `frequency` and `order`; a system's band, `points` and the `frequency` its budget is shown at; a particle run's `time`, `cell` and push (`vay`). The job is then ready: the Setup step is done and Run (solve.run) runs them. Choosing another kind (project.analysis) takes them back. The band also sets meshing by wavelength (its top) and the port previews. Undo goes back.",
+        doc: "Confirms the run's settings for the job's kind of analysis (or `kind`), as the Setup step shows them: a sweep's band (`start`, `stop`), `points` and element `order`; the time domain's band, `points`, `cell` and the ports to `excite`; the eigenmodes' `count` near `frequency` (or the lowest, `lowest`) and `order`; a radiation solve's `frequency` and `order`; a system's band, `points` and the `frequency` its budget is shown at; a particle run's `time`, `cell`, push (`vay`) and body of revolution (`axisymmetric`, `fine`). The job is then ready: the Setup step is done and Run (solve.run) runs them. Choosing another kind (project.analysis) takes them back. The band also sets meshing by wavelength (its top) and the port previews. Undo goes back.",
         params: &[
             opt("kind", K::String, "the kind of analysis (default the job's): `frequency`, `eigenmodes`, `radiation`, `time_domain` or `system`; choosing it as project.analysis does").one_of(&Analysis::IDS),
             opt("start", K::Number, "the band's start (a sweep, the time domain, a system)").of(F),
@@ -390,6 +390,8 @@ pub static COMMANDS: &[CommandSpec] = &[
             opt("excite", K::Array, "the time domain's ports to excite, by name (default the first)"),
             opt("time", K::Number, "a particle run's time in ns"),
             opt("vay", K::Boolean, "a particle run pushed by Vay's scheme rather than Boris's (default false)"),
+            opt("axisymmetric", K::Boolean, "a particle run in a body of revolution about z (default false)"),
+            opt("fine", K::Integer, "a particle run in a body of revolution: cells this many times finer along z, 1 to 16 (default 1)"),
         ],
         effect: Effect::Record,
         invalidates: None,
@@ -830,11 +832,13 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "solve.particles",
         label: "Solve particles",
-        doc: "Particle-in-cell in time (docs/adr/0012-particles.md): the particles' own fields with the box's, self-consistent. The box is the geometry's bounds in cells of about `cell` along each axis, its walls as particles.walls sets them; E on the cells' edges and B on their faces (Yee), leapfrogged with macro-particles pushed by the relativistic Boris (or `vay`) push; their current deposited by Esirkepov's scheme (Comput. Phys. Commun. 135, 2001), so Gauss's law holds to rounding. Plasmas, emitters, bunches, a held voltage and a static magnetic field from particles.*; the solid's outside and its conducting bodies as staircases of cells (E on their edges held at zero, particles reaching them absorbed). The reply gives the grid, the particles at the end, each conducting wall's current (A, the charge's rate: negative for electrons arriving) and current density over the run's second half, each probe's frequency, the energies, the current into the bodies, and with bunches alone the loss factor (V/pC); the run's history, probes and last particles are kept for the window (and the project file).",
+        doc: "Particle-in-cell in time (docs/adr/0012-particles.md): the particles' own fields with the box's, self-consistent. The box is the geometry's bounds in cells of about `cell` along each axis, its walls as particles.walls sets them; E on the cells' edges and B on their faces (Yee), leapfrogged with macro-particles pushed by the relativistic Boris (or `vay`) push; their current deposited by Esirkepov's scheme (Comput. Phys. Commun. 135, 2001), so Gauss's law holds to rounding. Plasmas, emitters, bunches, a held voltage and a static magnetic field from particles.*; the solid's outside and its conducting bodies as staircases of cells (E on their edges held at zero, particles reaching them absorbed). The reply gives the grid, the particles at the end, each conducting wall's current (A, the charge's rate: negative for electrons arriving) and current density over the run's second half, each probe's frequency, the energies, the current into the bodies, and with bunches alone the loss factor (V/pC); the run's history, probes and last particles are kept for the window (and the project file). With `axisymmetric` the geometry is a body of revolution about z (emcraft_fdtd::axi): the fields that do not vary round the axis on an r–z grid, the particles rings, `fine` times finer along z (8 quiets the numerical Cherenkov instability of relativistic beams).",
         params: &[
             opt("time", K::Number, "how long to run, in ns (default the confirmed settings')"),
             opt("cell", K::Number, "the cell's size (default the confirmed settings')").of(L),
             opt("vay", K::Boolean, "push by Vay's scheme rather than Boris's (default the confirmed settings', else false)"),
+            opt("axisymmetric", K::Boolean, "run the geometry as a body of revolution about the z axis (x = y = 0, as solve.revolution), on an r–z grid: beams and bunches through z− or z+ on the axis, a magnetic field along z, vacuum and conductors (default the confirmed settings', else false)"),
+            opt("fine", K::Integer, "in a body of revolution, cells this many times finer along z than across, 1 to 16: 8 for beams faster than about 0.6c (default the confirmed settings', else 1)"),
         ],
         effect: Effect::Solve,
         invalidates: None,

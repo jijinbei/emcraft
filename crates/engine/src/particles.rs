@@ -25,6 +25,8 @@ use serde_json::{Value, json};
 
 use crate::{EngineError, Params, Result, Session};
 
+mod axi;
+
 /// The most records of the run's history, samples of each probe and particles kept at the end.
 pub const HISTORY: usize = 2000;
 pub const PROBE_SAMPLES: usize = 20_000;
@@ -95,6 +97,10 @@ pub struct PicResult {
     /// squared (V/C), the loss factor once the bunches have gone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loss_factor: Option<f64>,
+    /// Run in a body of revolution about z: the box the cylinder's (its radius half the box's
+    /// side), cells[0] and cells[1] twice its radial cells, its particles spread round the axis.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub axisymmetric: bool,
 }
 
 impl PicResult {
@@ -106,8 +112,12 @@ impl PicResult {
         (finite && sized && probes && self.cells.iter().all(|n| *n >= 1)).then_some(()).ok_or_else(|| "a particle run out of its bounds".to_owned())
     }
 
-    /// A conducting wall's area (m²).
+    /// A conducting wall's area (m²): a cylinder's end in a body of revolution.
     pub fn area(&self, axis: usize) -> f64 {
+        if self.axisymmetric && axis == 2 {
+            let radius = 0.5 * self.cells[0] as f64 * self.h[0];
+            return std::f64::consts::PI * radius * radius;
+        }
         (0..3).filter(|d| *d != axis).map(|d| self.cells[d] as f64 * self.h[d]).product()
     }
 }
@@ -258,10 +268,23 @@ pub fn clear(s: &mut Session, _: &Params) -> Result<Value> {
     })
 }
 
-/// The run's settings: its time (s), cell (m) and push, given or confirmed.
-fn settings(s: &Session, p: &Params) -> Result<(f64, f64, Pusher)> {
+/// The most cells along z per cell across in a body of revolution.
+pub const MAX_FINE: usize = 16;
+
+/// A run's settings: its time (s), cell (m) and push; in a body of revolution, its cells `fine`
+/// times finer along z.
+struct Settings {
+    time: f64,
+    cell: f64,
+    pusher: Pusher,
+    axisymmetric: bool,
+    fine: usize,
+}
+
+/// The run's settings, given or confirmed.
+fn settings(s: &Session, p: &Params) -> Result<Settings> {
     let setup = match s.model.job.setup() {
-        Some(emcraft_model::Setup::Particles { time, cell, vay }) => Some((time.get(), cell.get(), *vay)),
+        Some(emcraft_model::Setup::Particles { time, cell, vay, axisymmetric, fine }) => Some((time.get(), cell.get(), *vay, *axisymmetric, *fine)),
         _ => None,
     };
     let hint = "give it (or confirm the settings with project.setup)";
@@ -271,7 +294,170 @@ fn settings(s: &Session, p: &Params) -> Result<(f64, f64, Pusher)> {
     };
     let cell = p.positive_length("cell").or_maybe(setup.map(|x| x.1)).required_or(hint)?;
     let vay = p.flag("vay").or(setup.is_some_and(|x| x.2))?;
-    Ok((time, cell, if vay { Pusher::Vay } else { Pusher::Boris }))
+    let axisymmetric = p.flag("axisymmetric").or(setup.is_some_and(|x| x.3))?;
+    let fine = p.integer("fine", 1..=MAX_FINE).or(setup.map_or(1, |x| x.4))?;
+    if !(1..=MAX_FINE).contains(&fine) {
+        return Err(p.error("fine", format!("1 to {MAX_FINE} cells along z per cell across")));
+    }
+    if fine != 1 && !axisymmetric {
+        return Err(p.error("fine", "cells finer along z are for a body of revolution (axisymmetric)"));
+    }
+    Ok(Settings { time, cell, pusher: if vay { Pusher::Vay } else { Pusher::Boris }, axisymmetric, fine })
+}
+
+/// The steps of `dt` (s) a run of `time` (s) takes, within the solver's bound.
+fn steps_of(p: &Params, time: f64, dt: f64) -> Result<usize> {
+    let steps = (time / dt).ceil();
+    if !(steps >= 1.0 && steps <= emcraft_fdtd::MAX_STEPS as f64) {
+        return Err(p.error("time", format!("{steps} steps of {dt:e} s: 1 to {}", emcraft_fdtd::MAX_STEPS)));
+    }
+    Ok(steps as usize)
+}
+
+/// What recording a run needs of it, on the Cartesian grid or in a body of revolution.
+trait Run {
+    fn advance(&mut self) -> Result<pic::Moved>;
+    /// The energy in the field and in the particles (J).
+    fn energies(&self) -> (f64, f64);
+    fn held(&self) -> usize;
+    /// E (V/m, along x, y, z) at a point (m from the grid's corner).
+    fn e_at_point(&self, at: [f64; 3]) -> [f64; 3];
+    fn now(&self) -> f64;
+}
+
+impl Run for Pic {
+    fn advance(&mut self) -> Result<pic::Moved> {
+        self.step().map_err(fdtd)
+    }
+    fn energies(&self) -> (f64, f64) {
+        let e = self.energy();
+        (e.field, e.kinetic)
+    }
+    fn held(&self) -> usize {
+        self.particles()
+    }
+    fn e_at_point(&self, at: [f64; 3]) -> [f64; 3] {
+        self.e_at(at)
+    }
+    fn now(&self) -> f64 {
+        self.time()
+    }
+}
+
+/// A run's record: its history, each probe's field, the second half's tallies, the particles
+/// dropped and the charge emitted.
+struct Recording {
+    history: Vec<Record>,
+    fields: Vec<Vec<[f64; 3]>>,
+    late: pic::Moved,
+    lost: usize,
+    charge: f64,
+    probe_every: usize,
+}
+
+/// `steps` of `run` (each `dt`, s), its history and the field at `probes` (m from the grid's
+/// corner) recorded.
+fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]]) -> Result<Recording> {
+    let (every, probe_every) = (steps.div_ceil(HISTORY), steps.div_ceil(PROBE_SAMPLES));
+    let mut history = Vec::new();
+    let mut fields: Vec<Vec<[f64; 3]>> = vec![Vec::new(); probes.len()];
+    let (mut since, mut late) = (pic::Moved::default(), pic::Moved::default());
+    let mut lost = 0;
+    let mut charge = 0.0;
+    let half = steps / 2;
+    for n in 0..steps {
+        if n % (steps / 200).max(1) == 0 {
+            crate::progress::report(n, steps, "solve.particles")?;
+        }
+        let moved = run.advance()?;
+        lost += moved.lost;
+        charge += moved.emitted;
+        for acc in [&mut since].into_iter().chain((n >= half).then_some(&mut late)) {
+            acc.emitted += moved.emitted;
+            acc.metal += moved.metal;
+            for (a, b) in acc.collected.iter_mut().flatten().zip(moved.collected.iter().flatten()) {
+                *a += b;
+            }
+        }
+        if (n + 1) % probe_every == 0 {
+            for (f, at) in fields.iter_mut().zip(probes) {
+                f.push(run.e_at_point(*at));
+            }
+        }
+        if (n + 1) % every == 0 || n + 1 == steps {
+            let span = (n + 1 - history.len() * every).max(1) as f64 * dt;
+            let (field, kinetic) = run.energies();
+            let rate = |q: f64| q / span;
+            history.push(Record {
+                t: run.now(),
+                field,
+                kinetic,
+                particles: run.held(),
+                emitted: rate(since.emitted),
+                collected: since.collected.map(|w| w.map(rate)),
+            });
+            since = pic::Moved::default();
+        }
+    }
+    Ok(Recording { history, fields, late, lost, charge, probe_every })
+}
+
+/// The grid a run's result describes: its corner (m), cells and their sizes (m), time step (s)
+/// and steps; whether it is a body of revolution.
+struct Frame {
+    origin: [f64; 3],
+    cells: [usize; 3],
+    h: [f64; 3],
+    dt: f64,
+    steps: usize,
+    axisymmetric: bool,
+}
+
+/// A run at its end: the field's energy before it and now (J), its particles (at most
+/// [`SNAPSHOT`] of them) and how many it holds.
+struct End {
+    fields: (f64, f64),
+    snapshot: Vec<Snap>,
+    particles: usize,
+}
+
+/// A run's result from its record and its end; kept, and the reply.
+fn finish(s: &mut Session, frame: Frame, rec: Recording, probes: &[[f64; 3]], end: End) -> Result<Value> {
+    let End { fields, snapshot, particles } = end;
+    let m = &s.model.particles;
+    let only_bunches = !m.bunches.is_empty() && m.emitters.is_empty() && m.plasmas.is_empty() && m.beams.is_empty();
+    let Frame { origin, cells, h, dt, steps, axisymmetric } = frame;
+    let span = (steps - steps / 2) as f64 * dt;
+    let result = PicResult {
+        origin,
+        cells,
+        h,
+        walls: m.walls,
+        dt,
+        steps,
+        history: rec.history,
+        probes: probes
+            .iter()
+            .zip(rec.fields)
+            .map(|(at, e)| Probe {
+                at: std::array::from_fn(|d| at[d] + origin[d]),
+                every: rec.probe_every,
+                frequency: frequency(&e, rec.probe_every as f64 * dt),
+                e,
+            })
+            .collect(),
+        snapshot,
+        particles,
+        lost: rec.lost,
+        collected: rec.late.collected.map(|w| w.map(|q| q / span)),
+        emitted: rec.late.emitted / span,
+        metal: rec.late.metal / span,
+        loss_factor: (only_bunches && rec.charge != 0.0).then(|| (fields.1 - fields.0) / (rec.charge * rec.charge)),
+        axisymmetric,
+    };
+    let reply = reply(s, &result);
+    s.results.particles = Some(Arc::new(result));
+    Ok(reply)
 }
 
 /// The grid of the model's box in cells of about `cell`.
@@ -425,22 +611,18 @@ fn build(s: &Session, grid: Grid, region: &Region, dt: f64, pusher: Pusher) -> R
 /// (or at its delay), its centre the point given or the face's centre.
 fn bunch(region: &Region, b: &emcraft_model::particles::Bunch, population: usize) -> pic::Bunch {
     let energy = b.energy * EV;
-    let u = ELECTRON.momentum(energy, [1.0, 0.0, 0.0]);
-    let speed = emcraft_particles::velocity(u)[0].max(1.0);
-    let sigma = b.length / speed;
     let axis = b.face.axis.min(2);
     let centre = region.centre(axis, b.at);
-    pic::Bunch {
-        axis,
-        high: b.face.high,
-        population,
-        pulse: pic::Pulse::Gaussian { charge: b.charge, t0: b.delay.unwrap_or(5.0 * sigma), sigma },
-        centre,
-        radius: b.radius,
-        inner: 0.0,
-        energy,
-        per_step: b.per_step,
-    }
+    pic::Bunch { axis, high: b.face.high, population, pulse: bunch_pulse(b), centre, radius: b.radius, inner: 0.0, energy, per_step: b.per_step }
+}
+
+/// A bunch's pulse: its duration its length at its speed, its peak five durations in (or at its
+/// delay).
+fn bunch_pulse(b: &emcraft_model::particles::Bunch) -> pic::Pulse {
+    let u = ELECTRON.momentum(b.energy * EV, [1.0, 0.0, 0.0]);
+    let speed = emcraft_particles::velocity(u)[0].max(1.0);
+    let sigma = b.length / speed;
+    pic::Pulse::Gaussian { charge: b.charge, t0: b.delay.unwrap_or(5.0 * sigma), sigma }
 }
 
 /// A steady beam on the grid: its centre the point given or the face's centre.
@@ -518,91 +700,21 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
     if !s.model.particles.has_sources() {
         return Err(EngineError::failed("nothing puts particles in the box: an emitter (particles.emitter) or a plasma (particles.plasma)"));
     }
-    let (time, cell, pusher) = settings(s, p)?;
-    let (grid, region) = grid(s, cell)?;
+    let set = settings(s, p)?;
+    if set.axisymmetric {
+        return axi::solve(s, p, &set);
+    }
+    let (grid, region) = grid(s, set.cell)?;
     let origin = region.origin;
     let dt = grid.time_step(COURANT);
-    let steps = (time / dt).ceil();
-    if !(steps >= 1.0 && steps <= emcraft_fdtd::MAX_STEPS as f64) {
-        return Err(p.error("time", format!("{steps} steps of {dt:e} s: 1 to {}", emcraft_fdtd::MAX_STEPS)));
-    }
-    let steps = steps as usize;
-    let mut run = build(s, grid, &region, dt, pusher)?;
-    let field_before = run.energy().field;
-    let m = &s.model.particles;
-    let only_bunches = !m.bunches.is_empty() && m.emitters.is_empty() && m.plasmas.is_empty() && m.beams.is_empty();
+    let steps = steps_of(p, set.time, dt)?;
+    let mut run = build(s, grid, &region, dt, set.pusher)?;
+    let before = run.energy().field;
     let probes: Vec<[f64; 3]> = s.model.particles.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
-    let (every, probe_every) = (steps.div_ceil(HISTORY), steps.div_ceil(PROBE_SAMPLES));
-    let mut history = Vec::new();
-    let mut fields: Vec<Vec<[f64; 3]>> = vec![Vec::new(); probes.len()];
-    let (mut since, mut late) = (pic::Moved::default(), pic::Moved::default());
-    let mut lost = 0;
-    let mut charge = 0.0;
-    let half = steps / 2;
-    for n in 0..steps {
-        if n % (steps / 200).max(1) == 0 {
-            crate::progress::report(n, steps, "solve.particles")?;
-        }
-        let moved = run.step().map_err(fdtd)?;
-        lost += moved.lost;
-        charge += moved.emitted;
-        for acc in [&mut since].into_iter().chain((n >= half).then_some(&mut late)) {
-            acc.emitted += moved.emitted;
-            acc.metal += moved.metal;
-            for (a, b) in acc.collected.iter_mut().flatten().zip(moved.collected.iter().flatten()) {
-                *a += b;
-            }
-        }
-        if (n + 1) % probe_every == 0 {
-            for (f, at) in fields.iter_mut().zip(&probes) {
-                f.push(run.e_at(*at));
-            }
-        }
-        if (n + 1) % every == 0 || n + 1 == steps {
-            let span = (n + 1 - history.len() * every).max(1) as f64 * dt;
-            let energy = run.energy();
-            let rate = |q: f64| q / span;
-            history.push(Record {
-                t: run.time(),
-                field: energy.field,
-                kinetic: energy.kinetic,
-                particles: run.particles(),
-                emitted: rate(since.emitted),
-                collected: since.collected.map(|w| w.map(rate)),
-            });
-            since = pic::Moved::default();
-        }
-    }
-    let span = (steps - half) as f64 * dt;
-    let result = PicResult {
-        origin,
-        cells: grid.axes.map(|a| a.cells),
-        h: grid.axes.map(|a| a.h),
-        walls: s.model.particles.walls,
-        dt,
-        steps,
-        history,
-        probes: probes
-            .iter()
-            .zip(fields)
-            .map(|(at, e)| Probe {
-                at: std::array::from_fn(|d| at[d] + origin[d]),
-                every: probe_every,
-                frequency: frequency(&e, probe_every as f64 * dt),
-                e,
-            })
-            .collect(),
-        snapshot: snapshot(&run, origin),
-        particles: run.particles(),
-        lost,
-        collected: late.collected.map(|w| w.map(|q| q / span)),
-        emitted: late.emitted / span,
-        metal: late.metal / span,
-        loss_factor: (only_bunches && charge != 0.0).then(|| (run.energy().field - field_before) / (charge * charge)),
-    };
-    let reply = reply(s, &result);
-    s.results.particles = Some(Arc::new(result));
-    Ok(reply)
+    let rec = record(&mut run, steps, dt, &probes)?;
+    let frame = Frame { origin, cells: grid.axes.map(|a| a.cells), h: grid.axes.map(|a| a.h), dt, steps, axisymmetric: false };
+    let end = End { fields: (before, run.energy().field), snapshot: snapshot(&run, origin), particles: run.particles() };
+    finish(s, frame, rec, &probes, end)
 }
 
 /// At most [`SNAPSHOT`] of the run's particles, evenly chosen.
@@ -644,7 +756,7 @@ fn mid_gamma(r: &PicResult, axis: usize) -> Option<f64> {
 pub(crate) fn reply(s: &Session, r: &PicResult) -> Value {
     let mut walls = serde_json::Map::new();
     for axis in 0..3 {
-        if r.walls[axis] != Wall::Conductor {
+        if r.walls[axis] != Wall::Conductor || (r.axisymmetric && axis < 2) {
             continue;
         }
         for (side, high) in [(0, false), (1, true)] {

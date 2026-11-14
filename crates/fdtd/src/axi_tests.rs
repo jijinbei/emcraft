@@ -96,6 +96,38 @@ fn a_bunch_on_the_axis_leaves_the_pillboxs_loss_factor() {
     assert!((got / want - 1.0).abs() < 2e-3, "{got:e} V/C against {want:e}");
 }
 
+/// A ring beam of `current` A at `gamma0` (5.75–6.25 mm in radius) sent in through the low end
+/// of a conducting tube 10 mm in radius and `l` long, held by 10 T, on cells of `h` across and
+/// `h / fine` along z, for `time` (s): the mean γ in the tube's middle third and the current
+/// reaching its far end (A), over the run's second half.
+fn ring_beam(gamma0: f64, current: f64, l: f64, h: f64, fine: usize, time: f64) -> (f64, f64) {
+    let (r, rb) = (0.01f64, 0.006);
+    let dz = h / fine as f64;
+    let g = AxiGrid::new((r / h).round() as usize, (l / dz).round() as usize, h, dz, Wall::Conductor).unwrap();
+    let dt = g.time_step(0.95);
+    let mut pic = AxiPic::new(g, dt, Pusher::Boris).unwrap();
+    pic.set(5, |_, _| 10.0);
+    let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
+    let pulse = Pulse::Steady { current, rise: 0.2e-9 };
+    let energy = (gamma0 - 1.0) * ELECTRON.rest_energy();
+    pic.inject(Injection { high: false, population: k, pulse, inner: rb - 0.25e-3, radius: rb + 0.25e-3, energy, per_step: 16 }).unwrap();
+    let steps = (time / dt) as usize;
+    let (mut out, mut sum, mut n) = (0.0, 0.0, 0usize);
+    for s in 0..steps {
+        let m = pic.step().unwrap();
+        if s >= steps / 2 {
+            out += m.collected[2][1];
+            if s % 10 == 0 {
+                for p in pic.populations()[k].rings.iter().filter(|p| p.z > l / 3.0 && p.z < 2.0 * l / 3.0) {
+                    sum += emcraft_particles::gamma(p.u);
+                    n += 1;
+                }
+            }
+        }
+    }
+    (sum / n.max(1) as f64, out.abs() / ((steps - steps / 2) as f64 * dt))
+}
+
 #[test]
 fn a_ring_beam_sinks_by_its_space_charge_and_stops_at_the_limit() {
     // Bogdankevich & Rukhadze (Sov. Phys. Usp. 14:163, 1971): γ₀ = 1.25 on a 6 mm ring in a 10 mm
@@ -104,47 +136,13 @@ fn a_ring_beam_sinks_by_its_space_charge_and_stops_at_the_limit() {
     // (γ₀ ≳ 1.5) drive the grid's numerical Cherenkov instability on these square cells (cells
     // finer along z: the next test).
     use emcraft_theory::plasma::AnnularBeam;
-    let (r, rb, l, h) = (0.01f64, 0.006, 0.08, 0.5e-3);
-    let beam = AnnularBeam { gamma0: 1.25, ratio: r / rb, charge: ELECTRON.charge, mass: ELECTRON.mass };
+    let beam = AnnularBeam { gamma0: 1.25, ratio: 10.0 / 6.0, charge: ELECTRON.charge, mass: ELECTRON.mass };
     let il = beam.limiting().unwrap();
-    let run = |current: f64| {
-        let g = AxiGrid::new((r / h).round() as usize, (l / h).round() as usize, h, h, Wall::Conductor).unwrap();
-        let dt = g.time_step(0.95);
-        let mut pic = AxiPic::new(g, dt, Pusher::Boris).unwrap();
-        pic.set(5, |_, _| 10.0);
-        let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
-        let pulse = Pulse::Steady { current, rise: 0.2e-9 };
-        pic.inject(Injection {
-            high: false,
-            population: k,
-            pulse,
-            inner: rb - 0.25e-3,
-            radius: rb + 0.25e-3,
-            energy: 0.25 * ELECTRON.rest_energy(),
-            per_step: 16,
-        })
-        .unwrap();
-        let steps = (2e-9 / dt) as usize;
-        let (mut out, mut sum, mut n) = (0.0, 0.0, 0usize);
-        for s in 0..steps {
-            let m = pic.step().unwrap();
-            if s >= steps / 2 {
-                out += m.collected[2][1];
-                if s % 10 == 0 {
-                    for p in pic.populations()[k].rings.iter().filter(|p| p.z > l / 3.0 && p.z < 2.0 * l / 3.0) {
-                        sum += emcraft_particles::gamma(p.u);
-                        n += 1;
-                    }
-                }
-            }
-        }
-        (sum / n.max(1) as f64, out.abs() / ((steps - steps / 2) as f64 * dt))
-    };
     let want = beam.depressed(0.7 * il).unwrap();
-    let (g, passed) = run(0.7 * il);
+    let (g, passed) = ring_beam(1.25, 0.7 * il, 0.08, 0.5e-3, 1, 2e-9);
     assert!(((1.25 - g) / (1.25 - want) - 1.0).abs() < 0.04, "γ_b {g} against {want}");
     assert!((passed / (0.7 * il) - 1.0).abs() < 0.02);
-    let (_, over) = run(1.3 * il);
+    let (_, over) = ring_beam(1.25, 1.3 * il, 0.08, 0.5e-3, 1, 2e-9);
     assert!(over < 1.0 * il && over > 0.8 * il, "{over} A past the limit {il}");
 }
 
@@ -159,41 +157,11 @@ fn a_relativistic_ring_beam_keeps_its_depression_on_cells_fine_along_z() {
     // the closed form's to 3 % here (in an 80 mm tube 1–4 % shallower for γ₀ from 1.25 to 5
     // alike, and steady for 20 ns; on square cells 6–19 % deeper).
     use emcraft_theory::plasma::AnnularBeam;
-    let (r, rb, l, h, gamma0) = (0.01f64, 0.006, 0.05, 1e-3, 3.0);
-    let beam = AnnularBeam { gamma0, ratio: r / rb, charge: ELECTRON.charge, mass: ELECTRON.mass };
+    let gamma0 = 3.0;
+    let beam = AnnularBeam { gamma0, ratio: 10.0 / 6.0, charge: ELECTRON.charge, mass: ELECTRON.mass };
     let current = 0.7 * beam.limiting().unwrap();
     let want = gamma0 - beam.depressed(current).unwrap();
-    let depression = |fine: usize| {
-        let dz = h / fine as f64;
-        let g = AxiGrid::new((r / h).round() as usize, (l / dz).round() as usize, h, dz, Wall::Conductor).unwrap();
-        let dt = g.time_step(0.95);
-        let mut pic = AxiPic::new(g, dt, Pusher::Boris).unwrap();
-        pic.set(5, |_, _| 10.0);
-        let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
-        let pulse = Pulse::Steady { current, rise: 0.2e-9 };
-        pic.inject(Injection {
-            high: false,
-            population: k,
-            pulse,
-            inner: rb - 0.25e-3,
-            radius: rb + 0.25e-3,
-            energy: (gamma0 - 1.0) * ELECTRON.rest_energy(),
-            per_step: 16,
-        })
-        .unwrap();
-        let steps = (1.2e-9 / dt) as usize;
-        let (mut sum, mut n) = (0.0, 0usize);
-        for s in 0..steps {
-            pic.step().unwrap();
-            if s >= steps / 2 && s % 10 == 0 {
-                for p in pic.populations()[k].rings.iter().filter(|p| p.z > l / 3.0 && p.z < 2.0 * l / 3.0) {
-                    sum += emcraft_particles::gamma(p.u);
-                    n += 1;
-                }
-            }
-        }
-        (gamma0 - sum / n.max(1) as f64) / want
-    };
+    let depression = |fine: usize| (gamma0 - ring_beam(gamma0, current, 0.05, 1e-3, fine, 1.2e-9).0) / want;
     let (square, fine) = std::thread::scope(|s| {
         let square = s.spawn(|| depression(1));
         (square.join().unwrap(), depression(8))

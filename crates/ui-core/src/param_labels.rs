@@ -53,6 +53,8 @@ pub fn param_label(command: &str, name: &'static str) -> &'static str {
         ("particles.beam", "inner") => t!("Inner radius").en(),
         ("particles.beam", "rise") => t!("Rise (ps)").en(),
         ("solve.particles" | "project.setup", "vay") => t!("Vay's push").en(),
+        ("solve.particles" | "project.setup", "axisymmetric") => t!("Body of revolution").en(),
+        ("solve.particles" | "project.setup", "fine") => t!("Finer along z").en(),
         ("filter.synthesize" | "results.coupling", "order") => t!("Resonators").en(),
         ("filter.synthesize", "zeros") => t!("Transmission zeros ω").en(),
         ("results.coupling", "zeros") => t!("Transmission zeros").en(),
