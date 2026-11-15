@@ -77,6 +77,8 @@ pub mod pic;
 mod planewave;
 mod solid;
 mod surface;
+#[cfg(test)]
+mod testkit;
 mod yee;
 
 /// The most cells a grid may have.

@@ -188,8 +188,7 @@ fn cold_band(s: Structure, cells: Cells, periods: usize, modes: std::ops::RangeI
 }
 
 /// `periods` of `s` between 20 mm of drift tube each end and a CPML of 10 × fine cells (at most
-/// 64); and
-/// where the structure begins (m).
+/// 64): the run, and where the structure begins (m).
 fn tube(s: Structure, cells: Cells, periods: f64) -> (AxiPic, f64) {
     let layer = (10 * cells.fine).min(crate::pic::MAX_LAYER);
     let dz = cells.h / cells.fine as f64;

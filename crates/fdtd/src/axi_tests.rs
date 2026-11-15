@@ -8,15 +8,7 @@ use emcraft_particles::{ELECTRON, Pusher, Species};
 
 use super::*;
 use crate::pic::{Pulse, Wall};
-
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> f64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-        (self.0 >> 11) as f64 / (1u64 << 53) as f64
-    }
-}
+use crate::testkit::Lcg;
 
 fn pillbox(h: f64) -> (AxiPic, f64, f64) {
     let (a, l) = (0.01f64, 0.01306f64);

@@ -9,19 +9,10 @@ use emcraft_particles::{ELECTRON, Pusher, Species};
 use emcraft_theory::plasma::{child_langmuir_relativistic, plasma_frequency};
 
 use super::*;
+use crate::testkit::Lcg;
 
 fn axis(cells: usize, h: f64, wall: Wall) -> Axis {
     Axis { cells, h, wall }
-}
-
-/// A deterministic sequence in [0, 1) (a linear congruential generator's top bits).
-struct Lcg(u64);
-
-impl Lcg {
-    fn next(&mut self) -> f64 {
-        self.0 = self.0.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-        (self.0 >> 11) as f64 / (1u64 << 53) as f64
-    }
 }
 
 #[test]
