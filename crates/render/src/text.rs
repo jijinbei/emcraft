@@ -181,23 +181,27 @@ fn set(face: &FontRef<'static>, nodes: &[math::Node], size: f32) -> Boxed {
     out
 }
 
+/// The fallback's glyph for `ch` when it is to set it: `whole` (the run is set in the fallback),
+/// or the face has none for `ch` — in either case only if the fallback has one.
+fn in_fallback<'a>(face: &FontRef<'static>, alt: Option<&'a FontVec>, ch: char, whole: bool) -> Option<(&'a FontVec, GlyphId)> {
+    let a = alt?;
+    let id = a.glyph_id(ch);
+    ((whole || face.glyph_id(ch).0 == 0) && id.0 != 0).then_some((a, id))
+}
+
 /// Plain characters at em `size`, kerned.
 fn run(face: &FontRef<'static>, text: &str, size: f32) -> Boxed {
     let scaled = face.as_scaled(PxScale::from(size));
     let alt = fallback();
     // A run with characters only the fallback has (a translation's kana) is drawn in it
     // whole, its letters and digits too: one typeface on the line, not two side by side.
-    let whole = alt.as_deref().is_some_and(|a| text.chars().any(|c| face.glyph_id(c).0 == 0 && a.glyph_id(c).0 != 0));
+    let whole = text.chars().any(|c| in_fallback(face, alt.as_deref(), c, false).is_some());
     let mut caret = 0.0f32;
     let mut previous: Option<GlyphId> = None;
     let mut marks = Vec::with_capacity(text.len());
     for ch in text.chars() {
         let id = face.glyph_id(ch);
-        if (id.0 == 0 || whole)
-            && let Some(a) = alt.as_deref()
-            && a.glyph_id(ch).0 != 0
-        {
-            let aid = a.glyph_id(ch);
+        if let Some((a, aid)) = in_fallback(face, alt.as_deref(), ch, whole) {
             marks.push(Mark::Glyph { id: aid, x: caret, y: 0.0, size, alt: true });
             caret += a.as_scaled(PxScale::from(size)).h_advance(aid);
             previous = None;
@@ -258,12 +262,9 @@ pub fn width_glyph_by_glyph(text: &str, scale: usize) -> f64 {
     let size = em(scale);
     let alt = fallback();
     let shown: String = math::to_unicode(text).chars().take(MAX_CHARS).collect();
-    let advance = |ch: char| {
-        let id = f.glyph_id(ch);
-        match alt.as_deref() {
-            Some(a) if id.0 == 0 && a.glyph_id(ch).0 != 0 => a.as_scaled(PxScale::from(size)).h_advance(a.glyph_id(ch)),
-            _ => f.as_scaled(PxScale::from(size)).h_advance(id),
-        }
+    let advance = |ch: char| match in_fallback(f, alt.as_deref(), ch, false) {
+        Some((a, id)) => a.as_scaled(PxScale::from(size)).h_advance(id),
+        None => f.as_scaled(PxScale::from(size)).h_advance(f.glyph_id(ch)),
     };
     f64::from(shown.chars().map(advance).sum::<f32>()).max(width(text, scale))
 }
