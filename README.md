@@ -16,7 +16,7 @@
 <p align="center"><em>
   Drawn in SolidCraft, solved in EMCraft: a WR-90 guide with two 3 mm posts passes near 9.8 GHz
   (twice as fast; the solve sped up). <a href="docs/media/demo.mp4">The full walk-through with
-  captions (MP4)</a>.
+  English captions (MP4)</a>.
 </em></p>
 
 ## Quick start
