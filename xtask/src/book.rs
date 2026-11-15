@@ -222,13 +222,26 @@ fn generate(root: &Path) -> Result<Facts, String> {
     facts(&read(&root.join("docs/oracle.md"))?, &read(&root.join("docs/features.md"))?, &read(&root.join(SAMPLES))?)
 }
 
-/// `mdbook <verb>` on the book.
+/// `mdbook <verb>` on the book. What it logs is shown; an error it only logs (a page including
+/// a file that is not there builds all the same) fails the build.
 fn mdbook(root: &Path, verb: &str) -> Result<(), String> {
     let program = std::env::var("MDBOOK").unwrap_or_else(|_| "mdbook".into());
-    let status = Command::new(&program).arg(verb).arg(root.join(BOOK)).status().map_err(|e| {
-        format!("{program}: {e}\nmdBook builds the book: `cargo binstall mdbook`, or a release of {MDBOOK_RELEASES}; $MDBOOK names it when it is not on the PATH")
-    })?;
-    if status.success() { Ok(()) } else { Err(format!("mdbook {verb} failed ({status})")) }
+    let mut command = Command::new(&program);
+    command.arg(verb).arg(root.join(BOOK));
+    let missing = |e: std::io::Error| {
+        format!(
+            "{program}: {e}\nmdBook builds the book: `cargo binstall mdbook`, or a release of {MDBOOK_RELEASES}; $MDBOOK names it when it is not on the PATH"
+        )
+    };
+    if verb == "serve" {
+        let status = command.status().map_err(missing)?;
+        return if status.success() { Ok(()) } else { Err(format!("mdbook serve failed ({status})")) };
+    }
+    let out = command.output().map_err(missing)?;
+    let log = String::from_utf8_lossy(&out.stderr);
+    eprint!("{log}");
+    let errors = log.lines().filter(|l| l.trim_start().starts_with("ERROR")).count();
+    if out.status.success() && errors == 0 { Ok(()) } else { Err(format!("mdbook {verb} failed ({}, {errors} error(s) logged)", out.status)) }
 }
 
 const MDBOOK_RELEASES: &str = "https://github.com/rust-lang/mdBook/releases";

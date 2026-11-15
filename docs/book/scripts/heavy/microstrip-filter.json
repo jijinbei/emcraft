@@ -1,0 +1,24 @@
+[
+  {"command": "pcb.load", "params": {"data": {
+    "name": "open-stub notch filter",
+    "layers": [
+      {"name": "F.Cu", "z": 0, "eps_below": 3.55},
+      {"name": "B.Cu", "z": 0.508, "eps_below": 1}
+    ],
+    "segments": [
+      {"id": "in", "net": "S", "layer": "F.Cu", "start": [0, 0], "end": [10, 0], "width": 1.1},
+      {"id": "out", "net": "S", "layer": "F.Cu", "start": [10, 0], "end": [20, 0], "width": 1.1},
+      {"id": "stub", "net": "S", "layer": "F.Cu", "start": [10, 0], "end": [10, 9], "width": 1.1}
+    ],
+    "copper": []
+  }}},
+  {"command": "pcb.region", "params": {"lo": [-2, -5], "hi": [22, 13], "above": 5, "below": 0}},
+  {"command": "pcb.port", "params": {"name": "1", "segment": "in", "end": "start"}},
+  {"command": "pcb.port", "params": {"name": "2", "segment": "out", "end": "end"}},
+  {"command": "mesh.generate", "params": {"size": 2, "strip_edge": 0.25}},
+  {"command": "solve.frequency", "params": {"start": 1, "stop": 10, "points": 101, "order": 2}},
+  {"command": "results.check", "params": {}},
+  {"command": "view.sparameters", "params": {"path": "stub-s.png"}},
+  {"command": "results.touchstone", "params": {"path": "stub.s2p"}},
+  {"command": "file.save", "params": {"path": "stub.emcraft", "fields": false}}
+]

@@ -1,0 +1,15 @@
+[
+  {"command": "geometry.iris_filter", "params": {
+    "width": 22.86, "height": 10.16, "irises": 4, "iris_length": 2, "end_width": 12.75,
+    "inner_width": 9.25, "cavity": 15, "inner_cavity": 16.75, "feed": 15
+  }},
+  {"command": "model.port.create", "params": {"name": "1", "end": "start", "modes": 4}},
+  {"command": "model.port.create", "params": {"name": "2", "end": "end", "modes": 4}},
+  {"command": "mesh.generate", "params": {"size": 3, "edge": 0.1, "size_y": 10.16}},
+  {"command": "solve.frequency", "params": {"start": 9, "stop": 11, "points": 101, "order": 2}},
+  {"command": "results.check", "params": {}},
+  {"command": "view.sparameters", "params": {"path": "bandpass-s.png"}},
+  {"command": "view.field", "params": {"path": "bandpass-field.png", "frequency": 10}},
+  {"command": "results.touchstone", "params": {"path": "bandpass.s2p"}},
+  {"command": "file.save", "params": {"path": "bandpass.emcraft", "fields": false}}
+]

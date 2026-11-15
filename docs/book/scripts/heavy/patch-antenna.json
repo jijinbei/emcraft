@@ -1,0 +1,12 @@
+[
+  {"command": "file.sample", "params": {
+    "name": "patch-antenna", "values": {"l": 9.4, "w": 11.86, "inset": 3.0}
+  }},
+  {"command": "solve.radiation", "params": {"frequency": 10}},
+  {"command": "results.far_field", "params": {"theta": [90], "phi": 90}},
+  {"command": "results.far_field", "params": {"theta": [90], "phi": 270}},
+  {"command": "view.pattern", "params": {
+    "path": "patch-pattern.png", "phi": 90, "quantity": "realized_gain", "polar": true
+  }},
+  {"command": "file.save", "params": {"path": "patch.emcraft"}}
+]

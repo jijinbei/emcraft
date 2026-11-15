@@ -1,0 +1,14 @@
+[
+  {"command": "geometry.waveguide", "params": {
+    "width": 22.86, "height": 10.16, "sections": [{"length": 30, "material": "vacuum"}]
+  }},
+  {"command": "model.walls", "params": {"conductivity": 58000000.0}},
+  {"command": "mesh.generate", "params": {"size": 3}},
+  {"command": "solve.eigenmodes", "params": {"lowest": true, "count": 4, "order": 2}},
+  {"command": "results.eigenmodes", "params": {}},
+  {"command": "view.field", "params": {"path": "cavity-e.png", "mode": 1, "component": "ey"}},
+  {"command": "view.field", "params": {
+    "path": "cavity-h.png", "mode": 1, "component": "|h|", "arrows": ["h"], "phase": 90
+  }},
+  {"command": "file.save", "params": {"path": "cavity.emcraft"}}
+]

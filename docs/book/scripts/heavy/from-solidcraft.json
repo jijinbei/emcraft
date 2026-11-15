@@ -1,0 +1,15 @@
+[
+  {"command": "geometry.import", "params": {
+    "path": "post.solidcraft", "materials": {"Body1": "interior"}, "parameters": {"d": 4}
+  }},
+  {"command": "model.port.create", "params": {"name": "1", "end": "start", "modes": 4}},
+  {"command": "model.port.create", "params": {"name": "2", "end": "end", "modes": 4}},
+  {"command": "mesh.adapt", "params": {
+    "size": 6, "frequency": 10, "passes": 3, "tolerance": 0.003, "order": 2
+  }},
+  {"command": "solve.frequency", "params": {"start": 8, "stop": 12, "points": 41, "order": 2}},
+  {"command": "results.check", "params": {}},
+  {"command": "view.sparameters", "params": {"path": "post-s.png"}},
+  {"command": "view.field", "params": {"path": "post-field.png", "frequency": 10}},
+  {"command": "file.save", "params": {"path": "post.emcraft", "fields": false}}
+]
