@@ -48,12 +48,20 @@ pub struct ParamSpec {
     pub doc: &'static str,
     /// The values a string parameter may take, when it is a choice.
     pub choices: &'static [&'static str],
+    /// What a dialog calls it, in English (translated where it is shown): a word or two; its
+    /// name when none is given. The name stays what commands, scripts and automation use.
+    pub label: &'static str,
 }
 
 impl ParamSpec {
     /// A parameter every call must give.
     pub const fn required(name: &'static str, kind: Kind, doc: &'static str) -> ParamSpec {
-        ParamSpec { name, kind, quantity: Quantity::None, required: true, doc, choices: &[] }
+        ParamSpec { name, kind, quantity: Quantity::None, required: true, doc, choices: &[], label: name }
+    }
+
+    /// The parameter as a dialog calls it.
+    pub const fn labelled(self, label: &'static str) -> ParamSpec {
+        ParamSpec { label, ..self }
     }
 
     /// A parameter calls may leave out.
