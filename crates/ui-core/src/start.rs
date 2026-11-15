@@ -49,25 +49,6 @@ pub fn template_picture(name: &str, values: &Value, size: [usize; 2], theme: &Th
     Ok(TemplatePicture::Scene { scene: built.scene, camera, ground: (t.viewport_top.rgb(), t.viewport_bottom.rgb()) })
 }
 
-/// A template's description as a card's name and the line under it: split at its first colon,
-/// comma, dash or bracket that leaves a name of 6 to 48 characters (`Waveguide high-pass
-/// filter` · `WR-90 filled with …`), else whole as the name.
-pub fn title_and_rest(about: &str) -> (&str, &str) {
-    let mut best: Option<usize> = None;
-    for sep in [": ", "：", ", ", "、", " — ", " (", "（"] {
-        if let Some(i) = about.find(sep) {
-            let n = about[..i].chars().count();
-            if (6..=48).contains(&n) && best.is_none_or(|b| i < b) {
-                best = Some(i);
-            }
-        }
-    }
-    match best {
-        Some(i) => (about[..i].trim(), about[i..].trim_start_matches([':', '：', ',', '、', ' ', '—']).trim()),
-        None => (about.trim(), ""),
-    }
-}
-
 /// A group of templates' title.
 pub fn group_title(group: Group) -> crate::lang::Text {
     match group {
@@ -89,10 +70,18 @@ pub fn group_title(group: Group) -> crate::lang::Text {
 
 #[cfg(test)]
 mod tests {
+    /// Every template has a title a card's line holds, in English and in Japanese (cards once
+    /// showed a whole description, cut where it ran out of room).
     #[test]
-    fn a_description_splits_into_a_name_and_a_line() {
-        assert_eq!(super::title_and_rest("Waveguide high-pass filter: WR-90 filled"), ("Waveguide high-pass filter", "WR-90 filled"));
-        assert_eq!(super::title_and_rest("Straight rectangular waveguide, WR-90 (a × b)"), ("Straight rectangular waveguide", "WR-90 (a × b)"));
-        assert_eq!(super::title_and_rest("Short"), ("Short", ""));
+    fn every_template_has_a_short_title_in_each_language() {
+        let ja = crate::lang::find("ja").unwrap_or_else(|| panic!("no Japanese"));
+        for s in emcraft_engine::templates::TEMPLATES {
+            assert!((1..=MAX_TITLE).contains(&s.title.chars().count()), "{}: `{}`", s.name, s.title);
+            let shown = ja.sample_titles.get(s.name).unwrap_or_else(|| panic!("{}: no Japanese title", s.name));
+            assert!((1..=MAX_TITLE).contains(&shown.chars().count()), "{}: `{shown}`", s.name);
+        }
     }
+
+    /// The most characters a card's title takes: one line of its 240-point width.
+    const MAX_TITLE: usize = 28;
 }

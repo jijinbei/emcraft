@@ -6,7 +6,7 @@
 //! purpose chosen on the start page), Reset puts the defaults back. The fields are the shared
 //! rules' ([`emcraft_ui_core::template_card`]).
 
-use emcraft_ui_core::lang::{parameter_label, sample_label, tr};
+use emcraft_ui_core::lang::{parameter_label, sample_label, sample_title, tr};
 use emcraft_ui_core::template_card::TemplateCard;
 use iced::widget::{Column, Space, button, center, column, container, image, opaque, row, text, text_input};
 use iced::{Alignment, Element, Fill, Task, Widget};
@@ -114,12 +114,9 @@ impl App {
 pub fn view(app: &App) -> Option<Element<'_, Message>> {
     let card = app.template.card.as_ref()?;
     let t = app.look.tokens;
-    let title = row![
-        text(sample_label(&card.name).to_owned()).size(t.font_heading),
-        container(text(card.name.clone()).size(t.font_small).color(t.text_dim)).padding([t.space_2, t.space_6]).style(look::ground(t))
-    ]
-    .spacing(t.space_8)
-    .align_y(Alignment::Center);
+    let title =
+        column![text(sample_title(&card.name)).size(t.font_heading), text(sample_label(&card.name).to_owned()).size(t.font_small).color(t.text_dim)]
+            .spacing(t.space_4);
     let fields = card.fields.iter().enumerate().map(|(i, f)| {
         let bad = f.value().is_none();
         let words = match &f.label {

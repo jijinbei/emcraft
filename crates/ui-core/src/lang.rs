@@ -64,6 +64,9 @@ struct File {
     commands: HashMap<String, CommandText>,
     #[serde(default)]
     samples: HashMap<String, String>,
+    /// The templates' titles (a few words), by template name.
+    #[serde(default)]
+    sample_titles: HashMap<String, String>,
     /// The templates' parameters' labels (`iris thickness`), by their English.
     #[serde(default)]
     parameters: HashMap<String, String>,
@@ -90,6 +93,7 @@ pub struct Language {
     pub strings: HashMap<String, String>,
     pub commands: HashMap<String, CommandText>,
     pub samples: HashMap<String, String>,
+    pub sample_titles: HashMap<String, String>,
     pub parameters: HashMap<String, String>,
 }
 
@@ -106,9 +110,15 @@ fn catalog() -> &'static Catalog {
         let mut problems = Vec::new();
         for &(id, text) in BUILT_IN {
             match serde_json::from_str::<File>(text) {
-                Ok(f) => {
-                    list.push(Language { id, name: f.name, strings: f.strings, commands: f.commands, samples: f.samples, parameters: f.parameters })
-                }
+                Ok(f) => list.push(Language {
+                    id,
+                    name: f.name,
+                    strings: f.strings,
+                    commands: f.commands,
+                    samples: f.samples,
+                    sample_titles: f.sample_titles,
+                    parameters: f.parameters,
+                }),
                 Err(e) => problems.push(format!("language `{id}` left out: {e}")),
             }
         }
@@ -246,6 +256,7 @@ pub fn script_chars(id: &str) -> Vec<char> {
         .strings
         .values()
         .chain(l.samples.values())
+        .chain(l.sample_titles.values())
         .chain(l.parameters.values())
         .chain(l.commands.values().flat_map(|c| std::iter::once(&c.label).chain(std::iter::once(&c.doc)).chain(c.params.values())));
     let set: BTreeSet<char> = texts.flat_map(|t| t.chars()).filter(cjk).collect();
@@ -446,6 +457,14 @@ pub fn sample_label(name: &str) -> &'static str {
     match translation().and_then(|l| l.samples.get(name)) {
         Some(s) if !s.is_empty() => s,
         _ => emcraft_engine::templates::find(name).map_or("", |s| s.label),
+    }
+}
+
+/// Template `name`'s title (a few words: a card's) in the current language.
+pub fn sample_title(name: &str) -> &'static str {
+    match translation().and_then(|l| l.sample_titles.get(name)) {
+        Some(s) if !s.is_empty() => s,
+        _ => emcraft_engine::templates::find(name).map_or("", |s| s.title),
     }
 }
 

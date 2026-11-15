@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 
 use emcraft_engine::templates::{Group, TEMPLATES};
 use emcraft_ui_core::files::{FileAction, Then};
-use emcraft_ui_core::lang::{sample_label, tr};
-use emcraft_ui_core::start::{TemplatePicture, group_title, template_picture, title_and_rest};
+use emcraft_ui_core::lang::{sample_label, sample_title, tr};
+use emcraft_ui_core::start::{TemplatePicture, group_title, template_picture};
 use emcraft_ui_core::theme::Theme;
 use iced::widget::image::Handle;
 use iced::widget::{Column, Space, button, column, container, image, row, scrollable, text};
@@ -65,21 +65,19 @@ impl App {
     }
 }
 
-/// A template's card: its picture (a gap while drawing), its name and the line under it.
+/// A template's card: its picture (a gap while drawing) and its title; what it is in full on
+/// hover.
 fn card<'a>(app: &'a App, name: &'static str) -> Element<'a, Message> {
     let t = app.look.tokens;
     let picture: Element<Message> = match app.thumbs.1.get(name) {
         Some(Ok(h)) => image(h.clone()).width(CARD[0]).height(CARD[1]).boxed(),
         _ => Space::new().width(CARD[0]).height(CARD[1]).boxed(),
     };
-    let (title, rest) = title_and_rest(sample_label(name));
-    let rest = if rest.is_empty() { name } else { rest };
-    let body = column![picture, text(title.to_owned()).size(t.font_body), text(rest.to_owned()).size(t.font_small).color(t.text_dim)]
-        .spacing(t.space_4)
-        .width(CARD[0]);
+    let body = column![picture, text(sample_title(name)).size(t.font_body)].spacing(t.space_4).width(CARD[0]);
     // Its card opens: its parameters and its model, before it is built.
     let open = Message::Template(crate::template_dialog::TemplateAct::Open(Some(name)));
-    button(body).padding(t.space_8).style(look::row(t, false)).on_press(open).boxed()
+    let card = button(body).padding(t.space_8).style(look::row(t, false)).on_press(open).boxed();
+    crate::parts::hint_text(t, card, sample_label(name))
 }
 
 /// The start page.
@@ -113,17 +111,12 @@ pub fn view(app: &App) -> Element<'_, Message> {
     // project for it beside them.
     let kinds = emcraft_ui_core::steps::Solver::ALL.into_iter().map(|k| {
         let on = app.purpose == Some(k);
-        let face = row![
-            crate::icons::view(emcraft_ui_core::steps::kinds::card(k).glyph, 22.0, t.icon, t.accent),
-            column![
-                text(tr(emcraft_ui_core::steps::kinds::card(k).name)).size(t.font_body),
-                text(tr(emcraft_ui_core::steps::kinds::card(k).plain)).size(t.font_small).color(t.text_dim)
-            ]
-            .spacing(t.space_2)
-        ]
-        .spacing(t.space_8)
-        .align_y(iced::Alignment::Center);
-        button(face).padding(t.space_8).width(260).style(look::row(t, on)).on_press(Message::Purpose((!on).then_some(k))).boxed()
+        let kind = emcraft_ui_core::steps::kinds::card(k);
+        let face = row![crate::icons::view(kind.glyph, 22.0, t.icon, t.accent), text(tr(kind.name)).size(t.font_body)]
+            .spacing(t.space_8)
+            .align_y(iced::Alignment::Center);
+        let choose = button(face).padding(t.space_8).style(look::row(t, on)).on_press(Message::Purpose((!on).then_some(k))).boxed();
+        crate::parts::hint_text(t, choose, tr(kind.plain))
     });
     let purposes =
         column![text(tr(t!("Analysis"))).size(t.font_heading), row(kinds).spacing(t.space_8).wrap().vertical_spacing(t.space_8)].spacing(t.space_8);
