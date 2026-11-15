@@ -1,42 +1,35 @@
-//! Escape on the iced window: given to the top layer open
-//! ([`emcraft_ui_core::layer::Layer`], top first) — a question, the template's card, the command
-//! search, the dialog, the settings, the 3D view's tool (what it picked first, then the tool), the
-//! selection — unless a field it does not own has the keyboard (Escape then only lets go of the
-//! field). A grip being dragged lets go first.
+//! Escape on the iced window: the shared rules ([`emcraft_ui_core::window::Open`]) pick the
+//! layer it closes from what the window has open; here, the message that closes it. A grip being
+//! dragged lets go first.
 
 use emcraft_ui_core::files::{Answer, FileAction};
 use emcraft_ui_core::layer::Layer;
+use emcraft_ui_core::window::{DialogOpen, Open};
 
 use crate::app::{App, Message};
 
-/// The layers open now, top first.
-pub fn stack(app: &App) -> Vec<Layer> {
-    // The project's pages in view: the start page and the settings cover them.
-    let project = !(app.home || app.settings);
-    let open = |l: Layer| match l {
-        Layer::Ask => app.asking.is_some(),
-        Layer::Template => app.template.card.is_some(),
-        Layer::Search => !app.search.is_empty(),
-        // An item's form waits unseen off the project's pages.
-        Layer::Dialog => app.dialog.as_ref().is_some_and(|d| d.item.is_none() || project),
-        Layer::Settings => app.settings,
-        Layer::Tool => project && app.tool.is_some(),
-        Layer::Selection => project && !app.selection.is_clear(),
-        Layer::Reports => app.crashes.shown.is_some(),
-        // The pen and the box being dragged are not the iced window's (the box is the 3D view's
-        // own, let go there).
-        Layer::Pen | Layer::Box => false,
-    };
-    Layer::ALL.into_iter().filter(|l| open(*l)).collect()
+/// What is open in the window now, as [`emcraft_ui_core::window::Open`] weighs it.
+pub fn open(app: &App) -> Open {
+    Open {
+        cover: app.cover,
+        ask: app.asking.is_some(),
+        template: app.template.card.is_some(),
+        search: !app.search.is_empty(),
+        dialog: app.dialog.as_ref().map(|d| if d.item.is_some() { DialogOpen::ItemForm } else { DialogOpen::Command }),
+        tool: app.tool.is_some(),
+        selection: !app.selection.is_clear(),
+        reports: app.crashes.shown.is_some(),
+    }
 }
 
-/// The layer Escape closes: the top one, unless a field took the key (`captured`) and the top
-/// layer is not one whose own fields it holds (a question, the search, a card or a dialog over
-/// the window: what is under them takes no keys).
+/// The layers open now, top first.
+pub fn stack(app: &App) -> Vec<Layer> {
+    open(app).stack()
+}
+
+/// The layer Escape closes ([`Open::escape_target`]).
 pub fn target(app: &App, captured: bool) -> Option<Layer> {
-    let top = *stack(app).first()?;
-    let owned = matches!(top, Layer::Ask | Layer::Search | Layer::Template | Layer::Reports | Layer::Dialog);
-    (!captured || owned).then_some(top)
+    open(app).escape_target(captured)
 }
 
 /// What closes layer `l` (the tool and the selection are the window's own, closed there).

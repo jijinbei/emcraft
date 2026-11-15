@@ -36,8 +36,8 @@ pub fn handles(app: &App) -> Vec<(String, Message)> {
     let replies = &app.replies;
     let pages = crate::run::PAGES.into_iter().filter(|v| v.available(&app.session, replies)).map(|v| (format!("page:{}", v.id()), Message::Page(v)));
     let bar = [
-        ("start".to_owned(), Message::Home(!app.home)),
-        ("settings".to_owned(), Message::Settings(!app.settings)),
+        ("start".to_owned(), Message::Home(!app.cover.start())),
+        ("settings".to_owned(), Message::Settings(!app.cover.settings())),
         ("file:new".to_owned(), Message::File(FileAction::Request(Then::New))),
         ("file:open".to_owned(), Message::File(FileAction::Request(Then::Open))),
         ("file:save".to_owned(), Message::File(FileAction::Save)),
@@ -47,7 +47,7 @@ pub fn handles(app: &App) -> Vec<(String, Message)> {
     ];
     // The tree's ▶ and ＋ (the open list's commands too).
     let kind = app.solver();
-    let parts: Vec<&emcraft_ui_core::outline::Part> = app.tree.iter().flat_map(|(_, t)| t).filter(|_| !app.home && !app.settings).collect();
+    let parts: Vec<&emcraft_ui_core::outline::Part> = app.tree.iter().flat_map(|(_, t)| t).filter(|_| app.cover.project()).collect();
     let plays = parts.iter().filter_map(|p| match p.head {
         emcraft_ui_core::outline::Head::Step(s) => {
             emcraft_ui_core::outline::play(s).map(|id| (format!("play:{}", s.id()), crate::browser::play_message(app, id)))
@@ -106,7 +106,7 @@ pub fn handles(app: &App) -> Vec<(String, Message)> {
     let style = crate::style_card::handles(app);
     // The start page's purposes and templates, and the template card's buttons.
     use crate::template_dialog::TemplateAct;
-    let start = app.home.then(|| {
+    let start = app.cover.start().then(|| {
         let import = ("home:import".to_owned(), Message::File(FileAction::Request(Then::Import)));
         let purposes = emcraft_ui_core::steps::Solver::ALL.into_iter().map(|k| (format!("purpose:{}", k.id()), Message::Purpose(Some(k))));
         let templates =
@@ -171,8 +171,8 @@ pub fn inspect(app: &App) -> Value {
     json!({
         "project": {"name": app.session.name(), "dirty": app.session.is_dirty(), "path": app.session.path()},
         "page": app.page.id(),
-        "settings": app.settings,
-        "start": app.home,
+        "settings": app.cover.settings(),
+        "start": app.cover.start(),
         "adding": app.adding,
         "error": app.error,
         "font": app.font.text(),

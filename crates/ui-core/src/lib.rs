@@ -83,8 +83,8 @@ pub mod template_card;
 pub mod theme;
 pub mod toast;
 pub mod tools;
-pub mod ui_state;
 pub mod view;
+pub mod window;
 
 #[cfg(test)]
 mod lang_tests;

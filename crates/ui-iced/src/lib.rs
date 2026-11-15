@@ -151,7 +151,7 @@ pub fn run(launch: Launch) -> iced::Result {
         {
             app.fail(e);
         }
-        let thumbs = if app.home { app.draw_thumbs() } else { iced::Task::none() };
+        let thumbs = if app.cover.start() { app.draw_thumbs() } else { iced::Task::none() };
         (app, thumbs)
     };
     iced::application(start, app::App::react, app::App::view)

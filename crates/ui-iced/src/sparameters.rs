@@ -388,7 +388,7 @@ fn history(app: &App) -> Element<'_, Message> {
 /// (`s:display:<id>`), mixed mode, the table, each kept solve (`history:<id>` draws it over the
 /// chart; `history:<id>:restore`, `:pin`, `:delete`), Refine and ✕ for the band picked.
 pub fn handles(app: &App) -> Vec<(String, Message)> {
-    if app.page != emcraft_ui_core::view::View::SParameters || app.settings || app.home {
+    if app.page != emcraft_ui_core::view::View::SParameters || !app.cover.project() {
         return Vec::new();
     }
     let v = &app.sview;

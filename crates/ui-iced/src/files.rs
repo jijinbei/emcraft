@@ -84,7 +84,7 @@ impl App {
             // dialog open on the geometry's step.
             Then::Import => {
                 self.opened("file.new", &json!({}));
-                self.home = false;
+                self.cover = self.cover.with_start(false);
                 if self.purpose == Some(emcraft_ui_core::steps::Solver::Pcb) {
                     return self.pick(Purpose::Import);
                 }

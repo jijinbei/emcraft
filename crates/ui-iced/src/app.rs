@@ -3,6 +3,7 @@
 //! command run on the session (a long one on the worker, [`crate::run`]) and the chain and the
 //! scene read again after it.
 
+use emcraft_ui_core::window::Cover;
 use std::collections::BTreeMap;
 
 use emcraft_engine::Session;
@@ -284,11 +285,11 @@ pub struct App {
     pub(crate) prefs_path: Option<std::path::PathBuf>,
     /// Copies of unsaved work, and the clock they are due by.
     pub(crate) autosave: emcraft_ui_core::autosave::Autosave,
-    /// The themes there are (the user's too), and whether the settings page is shown.
+    /// The themes there are (the user's too).
     pub(crate) themes: Themes,
-    pub(crate) settings: bool,
-    /// The start page is shown, and the templates' pictures.
-    pub(crate) home: bool,
+    /// What covers the project's pages: the start page, the settings, or nothing.
+    pub(crate) cover: Cover,
+    /// The templates' pictures on the start page.
     pub(crate) thumbs: crate::start::Thumbs,
     began: std::time::Instant,
     /// The charts as drawn.
@@ -389,8 +390,7 @@ impl App {
             prefs_path: None,
             autosave: Default::default(),
             themes: Themes::load(None),
-            settings: false,
-            home: sample.is_none(),
+            cover: if sample.is_none() { Cover::Start } else { Cover::Project },
             thumbs: Default::default(),
             began: std::time::Instant::now(),
             charts: crate::charts::Charts::default(),
@@ -460,7 +460,7 @@ impl App {
     fn keys_free(&self) -> bool {
         // An item's form beside the view leaves them free (a field typed in takes its own keys).
         let form = self.dialog.as_ref().is_none_or(|d| d.item.is_some());
-        matches!(self.page, View::Model | View::Pcb) && form && self.asking.is_none() && !self.home && !self.settings
+        matches!(self.page, View::Model | View::Pcb) && form && self.asking.is_none() && self.cover.project()
     }
 
     /// On the PCB page, a net picked in 3D: the command that makes it the route.
@@ -662,8 +662,8 @@ impl App {
     /// The page in view (the start page and the settings over the project's).
     fn page_view(&self) -> Element<'_, Message> {
         match self.page {
-            _ if self.settings => crate::settings::view(self),
-            _ if self.home => crate::start::view(self),
+            _ if self.cover.settings() => crate::settings::view(self),
+            _ if self.cover.start() => crate::start::view(self),
             View::Model => crate::model::view(self),
             View::Eigenmodes => crate::eigenmodes::view(self),
             View::Particles => crate::particles::view(self),
@@ -938,7 +938,7 @@ impl App {
                 self.update(m);
                 // A face read from a chosen font file, given to iced.
                 let font = self.font_load.take().map_or_else(Task::none, |bytes| iced::font::load(bytes).discard());
-                font.chain(if self.home { self.draw_thumbs() } else { Task::none() })
+                font.chain(if self.cover.start() { self.draw_thumbs() } else { Task::none() })
             }
             m => {
                 self.update(m);
@@ -987,14 +987,14 @@ impl App {
             .chain(crate::files::edits(self))
             .chain(std::iter::once(
                 button(text(emcraft_ui_core::lang::tr(t!("Start"))).size(t.font_button))
-                    .style(look::bar_toggle(t, self.home))
-                    .on_press(Message::Home(!self.home))
+                    .style(look::bar_toggle(t, self.cover.start()))
+                    .on_press(Message::Home(!self.cover.start()))
                     .boxed(),
             ))
             .chain(std::iter::once(
                 button(text(emcraft_ui_core::lang::tr(t!("Settings"))).size(t.font_button))
-                    .style(look::bar_toggle(t, self.settings))
-                    .on_press(Message::Settings(!self.settings))
+                    .style(look::bar_toggle(t, self.cover.settings()))
+                    .on_press(Message::Settings(!self.cover.settings()))
                     .boxed(),
             )))
         .spacing(t.space_12)
@@ -1003,10 +1003,10 @@ impl App {
         .wrap()
         .vertical_spacing(t.space_6);
         // The command search at the bar's right (on the project's pages).
-        let search = (!self.settings && !self.home).then(|| crate::search::field(self));
+        let search = (self.cover.project()).then(|| crate::search::field(self));
         let bar = row(std::iter::once(container(bar).width(Fill).boxed()).chain(search)).spacing(t.space_12).align_y(Alignment::Center);
         let bar = container(bar).padding([t.space_6, t.space_12]).width(Fill).style(look::app_bar(t));
-        let project = !self.settings && !self.home;
+        let project = self.cover.project();
         // What the search finds, under the bar.
         let found = project.then(|| crate::search::results(self)).flatten();
         // The tree at the page's left, the properties panel at its right, their widths from the
@@ -1067,8 +1067,7 @@ impl App {
             Message::Page(v) => {
                 self.note(emcraft_ui_core::action::Action::SetView(v));
                 self.show(v);
-                self.settings = false;
-                self.home = false;
+                self.cover = Cover::Project;
                 None
             }
             Message::View3d(nav) => {
@@ -1311,13 +1310,11 @@ impl App {
                 None
             }
             Message::Settings(on) => {
-                self.settings = on;
-                self.home &= !on;
+                self.cover = self.cover.with_settings(on);
                 None
             }
             Message::Home(on) => {
-                self.home = on;
-                self.settings &= !on;
+                self.cover = self.cover.with_start(on);
                 None
             }
             Message::Thumb(name, drawn) => {

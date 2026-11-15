@@ -311,7 +311,7 @@ fn pulse<'a>(app: &'a App) -> Element<'a, Message> {
 /// (`auto` the engine's pick), `pattern:cut:<id>`, `pattern:quantity:<id>`,
 /// `pattern:component:<id>`, `pulse:chirp:<id>`, `pulse:show:power|frequency`, `pulse:run`.
 pub fn handles(app: &App) -> Vec<(String, Message)> {
-    if app.settings || app.home {
+    if !app.cover.project() {
         return Vec::new();
     }
     match app.page {

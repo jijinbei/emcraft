@@ -13,7 +13,7 @@ code to be written. iced is that toolkit in pure Rust (MIT).
 
 ## Decision
 
-- **Shared rules first.** What a window decides — its state and transitions (`UiState`), the
+- **Shared rules first.** What a window decides — its state and transitions (`window::Cover`, Escape's layers: `window::Open`; the egui-era `UiState` and `Pages` were removed once iced was the only window), the
   actions, the dialogs' fields, the views and their handles, the translations, a system's
   layout, gestures, cards and budget — lives in `emcraft-ui-core` (L6, after the engine), with no
   toolkit below it. Both windows build on it; neither repeats it.

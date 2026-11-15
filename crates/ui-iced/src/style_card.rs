@@ -170,7 +170,7 @@ pub fn card(app: &App) -> Option<Element<'_, Message>> {
 /// The card's handles: `chart:style` opens or closes it; while open `style:reset`,
 /// `style:grid` and `style:legend:<id>`.
 pub fn handles(app: &App) -> Vec<(String, Message)> {
-    let Some(id) = style::chart_of(app.page).filter(|_| !app.settings && !app.home) else { return Vec::new() };
+    let Some(id) = style::chart_of(app.page).filter(|_| app.cover.project()) else { return Vec::new() };
     let toggle = ("chart:style".to_owned(), send(StyleAct::Toggle));
     let open = (app.style.open == Some(id)).then(|| {
         let shown = emcraft_engine::views::shown_style(&app.session, id);

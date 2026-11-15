@@ -13,6 +13,7 @@ use emcraft_ui_core::steps::devices::DeviceSelection;
 use emcraft_ui_core::steps::form::Fields;
 use emcraft_ui_core::steps::run::Window;
 use emcraft_ui_core::view::View;
+use emcraft_ui_core::window::Cover;
 use iced::Color;
 use serde_json::{Value, json};
 
@@ -272,7 +273,7 @@ impl App {
     /// calls for; a board's steps are its PCB page, a system's its chain, the kind (step 0) the
     /// model with no panel. A dialog of another step closes.
     pub(crate) fn open_step(&mut self, step: Option<Step>) {
-        (self.home, self.settings) = (false, false);
+        self.cover = Cover::Project;
         // A step's node shows its panel: an item's form gives way, its row let go.
         if self.dialog.as_ref().is_some_and(|d| d.item.is_some()) {
             self.dialog = None;
@@ -304,7 +305,7 @@ impl App {
 /// Whether the project is worked in steps: not a board's nor a system's, outside the start and
 /// settings pages.
 pub fn stepped(app: &App) -> bool {
-    !app.home && !app.settings && !matches!(app.solver(), Solver::Pcb | Solver::System)
+    app.cover.project() && !matches!(app.solver(), Solver::Pcb | Solver::System)
 }
 
 /// The workflow's state for `ui.inspect`: the step open, each step's status and checks, the

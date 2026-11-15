@@ -74,7 +74,7 @@ pub enum Action {
     Redo,
     /// Cancels the running job.
     CancelJob,
-    /// Closes a layer of the window (Escape closes the top one: `crate::ui_state`).
+    /// Closes a layer of the window (Escape closes the top one: `crate::window::Open::escape_target`).
     Close(crate::layer::Layer),
     /// Opens the command search's list (its field typed in or focused).
     OpenSearch,

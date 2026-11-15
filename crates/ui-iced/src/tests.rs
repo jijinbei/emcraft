@@ -749,7 +749,7 @@ fn settings_change_the_window_at_once() {
     use emcraft_ui_core::action::Pref;
     let mut app = App::new(Some("highpass"));
     app.update(Message::Settings(true));
-    assert!(app.settings);
+    assert!(app.cover.settings());
     app.update(Message::Pref(Pref::Theme("dark".into())));
     assert_eq!(app.look.theme.name, "dark");
     app.update(Message::Pref(Pref::Length(emcraft_model::units::Length::Metre)));
@@ -767,7 +767,7 @@ fn settings_change_the_window_at_once() {
     app.update(Message::Pref(Pref::Navigation("nowhere".into())));
     assert!(app.error.as_deref().is_some_and(|e| e.contains("nowhere")));
     app.update(Message::Page(emcraft_ui_core::view::View::Model));
-    assert!(!app.settings, "a page leaves the settings");
+    assert!(!app.cover.settings(), "a page leaves the settings");
 }
 
 /// The start page: a window opened on nothing shows it; a template's picture is its model drawn
@@ -777,7 +777,7 @@ fn the_start_page_draws_templates_and_opens_one() {
     use emcraft_ui_core::files::{FileAction, Then};
     let _gpu = gpu();
     let mut app = App::new(None);
-    assert!(app.home);
+    assert!(app.cover.start());
     // A system has no model to draw: its card goes without a picture.
     assert!(crate::start::drawn("adsb-receiver", (*app.look.theme).clone()).is_err());
     for name in ["highpass", "cavity"] {
@@ -796,7 +796,7 @@ fn the_start_page_draws_templates_and_opens_one() {
     }
     let open = Then::Sample { name: "cavity".into(), values: serde_json::Value::Null, purpose: None };
     app.update(Message::File(FileAction::Request(open)));
-    assert!(!app.home && app.session.name() == "cavity");
+    assert!(!app.cover.start() && app.session.name() == "cavity");
 }
 
 /// The port modes page, on the replies kept: before the modes are solved it says what they

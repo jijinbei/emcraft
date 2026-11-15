@@ -6,6 +6,7 @@
 use emcraft_ui_core::job::{self, Job, Poll, Then};
 use emcraft_ui_core::lang::{args, command_label, tr, trf};
 use emcraft_ui_core::view::View;
+use emcraft_ui_core::window::Cover;
 use serde_json::{Value, json};
 
 use crate::app::App;
@@ -89,7 +90,7 @@ impl App {
         if emcraft_ui_core::after::opens_project(id) {
             self.for_another_project();
         } else if emcraft_ui_core::after::leaves_start(id) {
-            self.home = false;
+            self.cover = self.cover.with_start(false);
         }
         self.read();
         // The page the command calls for (the shared rules: a solve its results', a study its
@@ -117,7 +118,7 @@ impl App {
         self.pinned = None;
         self.pulse = Default::default();
         self.dialog = None;
-        (self.home, self.settings) = (false, false);
+        self.cover = Cover::Project;
         self.page = crate::app::first_page(&self.session);
         self.adding = None;
         self.view3d.field = crate::view3d::field::start();
