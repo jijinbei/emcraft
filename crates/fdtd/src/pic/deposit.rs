@@ -21,27 +21,27 @@ use super::grid::Grid;
 
 /// The first-order shape: the weight on a node `s` cells away.
 #[inline]
-fn shape(s: f64) -> f64 {
+pub(crate) fn shape(s: f64) -> f64 {
     (1.0 - s.abs()).max(0.0)
 }
 
 /// The nodes around a move along one axis: the first (the node below the old cell), and the
 /// weights before and after on it and the three above.
-struct Window {
-    first: isize,
-    before: [f64; 4],
-    after: [f64; 4],
+pub(crate) struct Window {
+    pub(crate) first: isize,
+    pub(crate) before: [f64; 4],
+    pub(crate) after: [f64; 4],
 }
 
 impl Window {
-    fn of(x0: f64, x1: f64, h: f64) -> Window {
+    pub(crate) fn of(x0: f64, x1: f64, h: f64) -> Window {
         let (s0, s1) = (x0 / h, x1 / h);
         let first = s0.floor() as isize - 1;
         let at = |s: f64| std::array::from_fn(|m| shape(s - (first + m as isize) as f64));
         Window { first, before: at(s0), after: at(s1) }
     }
 
-    fn change(&self) -> [f64; 4] {
+    pub(crate) fn change(&self) -> [f64; 4] {
         std::array::from_fn(|m| self.after[m] - self.before[m])
     }
 }

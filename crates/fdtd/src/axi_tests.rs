@@ -20,7 +20,8 @@ impl Lcg {
 
 fn pillbox(h: f64) -> (AxiPic, f64, f64) {
     let (a, l) = (0.01f64, 0.01306f64);
-    let g = AxiGrid::new((a / h).round() as usize, (l / h).round() as usize, h, l / (l / h).round(), Wall::Conductor).unwrap();
+    let g =
+        AxiGrid::new((a / h).round() as usize, h, Axis { cells: (l / h).round() as usize, h: l / (l / h).round(), wall: Wall::Conductor }).unwrap();
     let dt = g.time_step(0.95);
     (AxiPic::new(g, dt, Pusher::Boris).unwrap(), a, l)
 }
@@ -33,7 +34,7 @@ fn a_pillbox_rings_at_tm010() {
     let (mut pic, a, l) = pillbox(0.25e-3);
     let dt = pic.dt();
     let x01 = 2.404_825_557_695_773;
-    pic.set(2, |r, _| j(0, x01 * r / a));
+    pic.set(Component::Ez, |r, _| j(0, x01 * r / a));
     let mut ups = Vec::new();
     let mut last = pic.field_at(0.0, 0.5 * l).0[2];
     for n in 0..((5.0 / 11.47e9) / dt) as usize {
@@ -55,7 +56,7 @@ fn a_pillbox_rings_at_tm010() {
 fn rings_keep_gauss_law_to_rounding(#[case] wall: Wall) {
     // Electron and positron rings up to γ ≈ 2 in every direction, a static B_z, a metal block
     // and the walls: the flux form ε₀∮E·dA − Q stays where it started at every node.
-    let g = AxiGrid::new(12, 30, 1e-3, 0.8e-3, wall).unwrap();
+    let g = AxiGrid::new(12, 1e-3, Axis { cells: 30, h: 0.8e-3, wall }).unwrap();
     let mut pic = AxiPic::new(g, g.time_step(0.9), Pusher::Vay).unwrap();
     pic.set_metal(|r, z| r > 0.009 && (z - 0.012).abs() < 0.002);
     let mut rnd = Lcg(5);
@@ -66,7 +67,7 @@ fn rings_keep_gauss_law_to_rounding(#[case] wall: Wall) {
             .collect();
         pic.add(Rings { species, rings }).unwrap();
     }
-    pic.set(5, |_, _| 0.2);
+    pic.set(Component::Bz, |_, _| 0.2);
     let before = pic.gauss();
     let scale = before.iter().fold(0.0f64, |m, v| m.max(v.abs()));
     for _ in 0..150 {
@@ -91,7 +92,7 @@ fn a_bunch_on_the_axis_leaves_the_pillboxs_loss_factor() {
     for _ in 0..((10.0 * sigma + l / C0) / dt) as usize + 10 {
         q += pic.step().unwrap().emitted;
     }
-    let got = pic.energy().0 / (q * q);
+    let got = pic.energy().field / (q * q);
     let want = emcraft_theory::wake::Pillbox::new(a, l).loss_factor(1.0, sigma).unwrap();
     assert!((got / want - 1.0).abs() < 2e-3, "{got:e} V/C against {want:e}");
 }
@@ -103,10 +104,10 @@ fn a_bunch_on_the_axis_leaves_the_pillboxs_loss_factor() {
 fn ring_beam(gamma0: f64, current: f64, l: f64, h: f64, fine: usize, time: f64) -> (f64, f64) {
     let (r, rb) = (0.01f64, 0.006);
     let dz = h / fine as f64;
-    let g = AxiGrid::new((r / h).round() as usize, (l / dz).round() as usize, h, dz, Wall::Conductor).unwrap();
+    let g = AxiGrid::new((r / h).round() as usize, h, Axis { cells: (l / dz).round() as usize, h: dz, wall: Wall::Conductor }).unwrap();
     let dt = g.time_step(0.95);
     let mut pic = AxiPic::new(g, dt, Pusher::Boris).unwrap();
-    pic.set(5, |_, _| 10.0);
+    pic.set(Component::Bz, |_, _| 10.0);
     let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
     let pulse = Pulse::Steady { current, rise: 0.2e-9 };
     let energy = (gamma0 - 1.0) * ELECTRON.rest_energy();
@@ -176,11 +177,11 @@ fn one_thread_and_seven_give_the_same_bits() {
     // fields by z rows and the rings by chunks on the threads, their currents added in the rings'
     // order — the run is the same to the bit on any number of threads.
     let run = || {
-        let g = AxiGrid::new(26, 120, 0.5e-3, 0.5e-3, Wall::Conductor).unwrap();
+        let g = AxiGrid::new(26, 0.5e-3, Axis { cells: 120, h: 0.5e-3, wall: Wall::Conductor }).unwrap();
         let mut pic = AxiPic::new(g, g.time_step(0.95), Pusher::Boris).unwrap();
         pic.set_metal(|r, z| r > if ((z / 0.01).rem_euclid(1.0) - 0.25).abs() < 0.25 { 0.013 } else { 0.010 });
         pic.absorb(true, 10).unwrap();
-        pic.set(5, |_, _| 2.0);
+        pic.set(Component::Bz, |_, _| 2.0);
         let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
         let pulse = Pulse::Steady { current: 200.0, rise: 0.1e-9 };
         pic.inject(Injection {
@@ -196,7 +197,7 @@ fn one_thread_and_seven_give_the_same_bits() {
         for _ in 0..400 {
             pic.step().unwrap();
         }
-        let (field, kinetic) = pic.energy();
+        let Energy { field, kinetic, .. } = pic.energy();
         let rings: Vec<u64> = pic.populations()[k].rings.iter().flat_map(|p| [p.r.to_bits(), p.z.to_bits(), p.u[2].to_bits()]).collect();
         (field.to_bits(), kinetic.to_bits(), rings, pic.gauss().iter().map(|g| g.to_bits()).collect::<Vec<_>>())
     };
@@ -207,10 +208,10 @@ fn one_thread_and_seven_give_the_same_bits() {
 
 #[test]
 fn hostile_axisymmetric_settings_are_refused() {
-    assert!(AxiGrid::new(0, 10, 1e-3, 1e-3, Wall::Conductor).is_err());
-    assert!(AxiGrid::new(10, 10, f64::NAN, 1e-3, Wall::Conductor).is_err());
-    assert!(AxiGrid::new(100_000, 100_000, 1e-3, 1e-3, Wall::Conductor).is_err());
-    let g = AxiGrid::new(10, 20, 1e-3, 1e-3, Wall::Conductor).unwrap();
+    assert!(AxiGrid::new(0, 1e-3, Axis { cells: 10, h: 1e-3, wall: Wall::Conductor }).is_err());
+    assert!(AxiGrid::new(10, f64::NAN, Axis { cells: 10, h: 1e-3, wall: Wall::Conductor }).is_err());
+    assert!(AxiGrid::new(100_000, 1e-3, Axis { cells: 100_000, h: 1e-3, wall: Wall::Conductor }).is_err());
+    let g = AxiGrid::new(10, 1e-3, Axis { cells: 20, h: 1e-3, wall: Wall::Conductor }).unwrap();
     for dt in [0.0, f64::NAN, g.time_step(1.2)] {
         assert!(AxiPic::new(g, dt, Pusher::Boris).is_err());
     }
@@ -242,10 +243,10 @@ fn hostile_axisymmetric_settings_are_refused() {
     // A refused layer leaves none behind: the low end's layer of 12 then fits (once the 25 cells
     // were kept and 12 + 25 refused too).
     assert!(pic.absorb(false, 12).is_ok());
-    let periodic = AxiGrid::new(10, 20, 1e-3, 1e-3, Wall::Periodic).unwrap();
+    let periodic = AxiGrid::new(10, 1e-3, Axis { cells: 20, h: 1e-3, wall: Wall::Periodic }).unwrap();
     let mut p = AxiPic::new(periodic, periodic.time_step(0.9), Pusher::Boris).unwrap();
     assert!(p.absorb(false, 4).is_err());
     // A field beyond physics drops the ring rather than poisoning the grid.
-    pic.set(2, |_, _| f64::INFINITY);
+    pic.set(Component::Ez, |_, _| f64::INFINITY);
     assert_eq!(pic.step().unwrap().lost, 1);
 }

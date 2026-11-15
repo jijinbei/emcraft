@@ -16,7 +16,7 @@
 
 use emcraft_model::units::C0;
 
-use super::grid::{Grid, Lattice, Wall};
+use super::grid::{Axis, Grid, Lattice, Wall};
 use crate::yee::{Cpml, Grading};
 use crate::{Result, invalid};
 
@@ -63,7 +63,32 @@ impl Absorber {
             return Err(invalid("absorber", format!("a layer of 1 to {MAX_LAYER} cells inside a conducting wall, the axis longer than its layers")));
         }
         self.cells[axis][usize::from(high)] = cells;
-        let [lo, hi] = self.cells[axis].map(|n| n as f64 * a.h);
+        let graded = Graded::along(a, self.cells[axis], dt);
+        self.e[axis] = graded.e;
+        self.b[axis] = graded.b;
+        Ok(())
+    }
+
+    /// Whether node `p` lies in a layer.
+    pub(crate) fn inside(&self, grid: &Grid, p: [usize; 3]) -> bool {
+        (0..3).any(|d| {
+            let [lo, hi] = self.cells[d];
+            (lo > 0 && p[d] <= lo) || (hi > 0 && p[d] + hi >= grid.axes[d].cells)
+        })
+    }
+}
+
+/// The CPML coefficients along an axis whose ends hold layers of `cells` (low, high; 0: none):
+/// at its nodes and its cells' centres, for E's whole steps and B's half steps.
+pub(crate) struct Graded {
+    pub(crate) e: [Vec<Cpml>; 2],
+    pub(crate) b: [Vec<Cpml>; 2],
+}
+
+impl Graded {
+    /// The coefficients along `a` for steps of `dt` (s).
+    pub(crate) fn along(a: Axis, cells: [usize; 2], dt: f64) -> Graded {
+        let [lo, hi] = cells.map(|n| n as f64 * a.h);
         let length = a.length();
         // The complex frequency shift at the box's own lowest frequencies.
         let fc = C0 / length;
@@ -78,17 +103,7 @@ impl Absorber {
                 .collect()
         };
         let (whole, half) = (Grading::new(a.h, dt, fc), Grading::new(a.h, 0.5 * dt, fc));
-        self.e[axis] = [profile(&whole, true), profile(&whole, false)];
-        self.b[axis] = [profile(&half, true), profile(&half, false)];
-        Ok(())
-    }
-
-    /// Whether node `p` lies in a layer.
-    pub(crate) fn inside(&self, grid: &Grid, p: [usize; 3]) -> bool {
-        (0..3).any(|d| {
-            let [lo, hi] = self.cells[d];
-            (lo > 0 && p[d] <= lo) || (hi > 0 && p[d] + hi >= grid.axes[d].cells)
-        })
+        Graded { e: [profile(&whole, true), profile(&whole, false)], b: [profile(&half, true), profile(&half, false)] }
     }
 }
 

@@ -89,13 +89,7 @@ pub fn velocity(u: V3) -> V3 {
     scale(u, 1.0 / gamma(u))
 }
 
-/// The step's scheme.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Pusher {
-    #[default]
-    Boris,
-    Vay,
-}
+pub use emcraft_model::particles::Pusher;
 
 /// `u` (m/s) at t − Δt/2 taken to t + Δt/2 by E (V/m) and B (T) at t, for particles of
 /// `species`.

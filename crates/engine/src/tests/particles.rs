@@ -105,6 +105,11 @@ fn sources_are_checked_kept_and_undone() {
     assert!(s.execute("solve.particles", &json!({"time": 1e12, "cell": 1})).is_err());
     assert!(s.execute("solve.particles", &json!({"time": 1, "cell": 1e-9})).is_err());
     assert!(s.execute("solve.particles", &json!({"time": f64::NAN, "cell": 1})).is_err());
+    // Cells finer along z only in a body of revolution: refused when confirmed, as when solved
+    // (a setup once held it and failed only at its solve).
+    let e = s.execute("project.setup", &json!({"kind": "particles", "time": 1, "cell": 1, "fine": 4})).unwrap_err().to_string();
+    assert!(e.contains("body of revolution"), "{e}");
+    assert!(s.execute("project.setup", &json!({"kind": "particles", "time": 1, "cell": 1, "axisymmetric": true, "fine": 17})).is_err());
     s.execute("edit.undo", &json!({})).unwrap();
     assert!(s.model.particles.voltage.is_none());
     s.execute("particles.clear", &json!({})).unwrap();

@@ -17,9 +17,10 @@
 use std::sync::Arc;
 
 use emcraft_fdtd::pic::{self, Axis, Grid, Pic, Population};
-use emcraft_model::particles::{Emission, Emitter, Face, Particles, Plasma, Voltage, Wall, Wave};
+use emcraft_model::particles::{Emission, Emitter, Face, MAX_FINE, Particles, Plasma, Pusher, RunGrid, Voltage, Wall, Wave};
 use emcraft_model::units::C0;
-use emcraft_particles::{ELECTRON, Pusher, V3, gamma};
+use emcraft_model::{ParticleRun, Positive};
+use emcraft_particles::{ELECTRON, V3, gamma};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -101,6 +102,14 @@ pub struct PicResult {
     /// side), cells[0] and cells[1] twice its radial cells, its particles spread round the axis.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub axisymmetric: bool,
+    /// The axis the particles ran along (0–2, [`along`] when the run was made).
+    #[serde(default = "along_z")]
+    pub along: usize,
+}
+
+/// A run read from a file that did not say which axis its particles ran along: z.
+fn along_z() -> usize {
+    2
 }
 
 impl PicResult {
@@ -273,41 +282,23 @@ pub fn clear(s: &mut Session, _: &Params) -> Result<Value> {
     })
 }
 
-/// The most cells along z per cell across in a body of revolution.
-pub const MAX_FINE: usize = 16;
-
-/// A run's settings: its time (s), cell (m) and push; in a body of revolution, its cells `fine`
-/// times finer along z.
-struct Settings {
-    time: f64,
-    cell: f64,
-    pusher: Pusher,
-    axisymmetric: bool,
-    fine: usize,
-}
-
-/// The run's settings, given or confirmed.
-fn settings(s: &Session, p: &Params) -> Result<Settings> {
-    let setup = match s.model.job.setup() {
-        Some(emcraft_model::Setup::Particles { time, cell, vay, axisymmetric, fine }) => Some((time.get(), cell.get(), *vay, *axisymmetric, *fine)),
-        _ => None,
-    };
+/// A run's settings: those given, the rest as confirmed (`confirmed`, project.setup's), checked
+/// once here for both.
+pub(crate) fn settings(p: &Params, confirmed: Option<&ParticleRun>) -> Result<ParticleRun> {
     let hint = "give it (or confirm the settings with project.setup)";
     let time = match p.positive("time").optional()? {
-        Some(ns) => ns * 1e-9,
-        None => setup.map(|x| x.0).ok_or_else(|| p.error("time", hint))?,
+        Some(ns) => Positive::new(ns * 1e-9)?,
+        None => confirmed.map(|c| c.time).ok_or_else(|| p.error("time", hint))?,
     };
-    let cell = p.positive_length("cell").or_maybe(setup.map(|x| x.1)).required_or(hint)?;
-    let vay = p.flag("vay").or(setup.is_some_and(|x| x.2))?;
-    let axisymmetric = p.flag("axisymmetric").or(setup.is_some_and(|x| x.3))?;
-    let fine = p.integer("fine", 1..=MAX_FINE).or(setup.map_or(1, |x| x.4))?;
-    if !(1..=MAX_FINE).contains(&fine) {
-        return Err(p.error("fine", format!("1 to {MAX_FINE} cells along z per cell across")));
-    }
-    if fine != 1 && !axisymmetric {
-        return Err(p.error("fine", "cells finer along z are for a body of revolution (axisymmetric)"));
-    }
-    Ok(Settings { time, cell, pusher: if vay { Pusher::Vay } else { Pusher::Boris }, axisymmetric, fine })
+    let cell = match p.metres("cell").optional()? {
+        Some(c) => c,
+        None => confirmed.map(|c| c.cell).ok_or_else(|| p.error("cell", hint))?,
+    };
+    let vay = p.flag("vay").or(confirmed.is_some_and(|c| c.pusher == Pusher::Vay))?;
+    let axisymmetric = p.flag("axisymmetric").or(confirmed.is_some_and(|c| matches!(c.grid, RunGrid::Revolution { .. })))?;
+    let fine = p.integer("fine", 1..=MAX_FINE).or(confirmed.map_or(1, |c| c.grid.fine()))?;
+    let grid = RunGrid::new(axisymmetric, fine).map_err(|e| p.error("fine", e))?;
+    Ok(ParticleRun { time, cell, pusher: if vay { Pusher::Vay } else { Pusher::Boris }, grid })
 }
 
 /// The steps of `dt` (s) a run of `time` (s) takes, within the solver's bound.
@@ -322,38 +313,61 @@ fn steps_of(p: &Params, time: f64, dt: f64) -> Result<usize> {
 /// What recording a run needs of it, on the Cartesian grid or in a body of revolution.
 trait Run {
     fn advance(&mut self) -> Result<pic::Moved>;
-    /// The energy in the field and in the particles (J).
-    fn energies(&self) -> (f64, f64);
+    fn energy(&self) -> pic::Energy;
+    /// The particles (or rings) it holds.
     fn held(&self) -> usize;
     /// E (V/m, along x, y, z) at a point (m from the grid's corner).
     fn e_at_point(&self, at: [f64; 3]) -> [f64; 3];
     fn now(&self) -> f64;
+    /// At most [`SNAPSHOT`] of its particles, evenly chosen, in the model's coordinates.
+    fn snapshot(&self) -> Vec<Snap>;
 }
 
-impl Run for Pic {
+/// A run on the Cartesian grid whose corner is at `origin` (m).
+struct Cartesian {
+    pic: Pic,
+    origin: [f64; 3],
+}
+
+impl Run for Cartesian {
     fn advance(&mut self) -> Result<pic::Moved> {
-        self.step().map_err(fdtd)
+        self.pic.step().map_err(fdtd)
     }
-    fn energies(&self) -> (f64, f64) {
-        let e = self.energy();
-        (e.field, e.kinetic)
+    fn energy(&self) -> pic::Energy {
+        self.pic.energy()
     }
     fn held(&self) -> usize {
-        self.particles()
+        self.pic.particles()
     }
     fn e_at_point(&self, at: [f64; 3]) -> [f64; 3] {
-        self.e_at(at)
+        self.pic.e_at(at)
     }
     fn now(&self) -> f64 {
-        self.time()
+        self.pic.time()
+    }
+    fn snapshot(&self) -> Vec<Snap> {
+        let stride = self.pic.particles().div_ceil(SNAPSHOT).max(1);
+        self.pic
+            .populations()
+            .iter()
+            .enumerate()
+            .flat_map(|(k, pop)| pop.particles.iter().map(move |p| (k, pop.species, p)))
+            .step_by(stride)
+            .map(|(population, species, p)| Snap {
+                x: std::array::from_fn(|d| p.x[d] + self.origin[d]),
+                u: p.u,
+                energy: species.kinetic(p.u) / EV,
+                population,
+            })
+            .collect()
     }
 }
 
-/// A run's record: its history, each probe's field, the second half's tallies, the particles
-/// dropped and the charge emitted.
+/// A run's record: its history, each probe's E samples, the second half's tallies, the
+/// particles dropped and the charge emitted.
 struct Recording {
     history: Vec<Record>,
-    fields: Vec<Vec<[f64; 3]>>,
+    probe_fields: Vec<Vec<[f64; 3]>>,
     late: pic::Moved,
     lost: usize,
     charge: f64,
@@ -365,38 +379,35 @@ struct Recording {
 fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]]) -> Result<Recording> {
     let (every, probe_every) = (steps.div_ceil(HISTORY), steps.div_ceil(PROBE_SAMPLES));
     let mut history = Vec::new();
-    let mut fields: Vec<Vec<[f64; 3]>> = vec![Vec::new(); probes.len()];
+    let mut probe_fields: Vec<Vec<[f64; 3]>> = vec![Vec::new(); probes.len()];
     let (mut since, mut late) = (pic::Moved::default(), pic::Moved::default());
     let mut lost = 0;
     let mut charge = 0.0;
-    let half = steps / 2;
+    let half = second_half(steps);
     for n in 0..steps {
-        if n % (steps / 200).max(1) == 0 {
+        if n % (steps / PROGRESS_REPORTS).max(1) == 0 {
             crate::progress::report(n, steps, "solve.particles")?;
         }
         let moved = run.advance()?;
         lost += moved.lost;
         charge += moved.emitted;
-        for acc in [&mut since].into_iter().chain((n >= half).then_some(&mut late)) {
-            acc.emitted += moved.emitted;
-            acc.metal += moved.metal;
-            for (a, b) in acc.collected.iter_mut().flatten().zip(moved.collected.iter().flatten()) {
-                *a += b;
-            }
+        since += &moved;
+        if n >= half {
+            late += &moved;
         }
         if (n + 1) % probe_every == 0 {
-            for (f, at) in fields.iter_mut().zip(probes) {
+            for (f, at) in probe_fields.iter_mut().zip(probes) {
                 f.push(run.e_at_point(*at));
             }
         }
         if (n + 1) % every == 0 || n + 1 == steps {
             let span = (n + 1 - history.len() * every).max(1) as f64 * dt;
-            let (field, kinetic) = run.energies();
+            let energy = run.energy();
             let rate = |q: f64| q / span;
             history.push(Record {
                 t: run.now(),
-                field,
-                kinetic,
+                field: energy.field,
+                kinetic: energy.kinetic,
                 particles: run.held(),
                 emitted: rate(since.emitted),
                 collected: since.collected.map(|w| w.map(rate)),
@@ -404,7 +415,25 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]]) -> Res
             since = pic::Moved::default();
         }
     }
-    Ok(Recording { history, fields, late, lost, charge, probe_every })
+    Ok(Recording { history, probe_fields, late, lost, charge, probe_every })
+}
+
+/// How many times a run reports its progress.
+const PROGRESS_REPORTS: usize = 200;
+
+/// The first step of a run's second half, over which its currents, its emission and its
+/// probes' frequencies are taken (a growing oscillation's start, noise, left out).
+fn second_half(steps: usize) -> usize {
+    steps / 2
+}
+
+/// `steps` of `run` (each `dt`, s) recorded, the field at `probes` (m from the grid's corner),
+/// and its result kept: the reply.
+fn run_to_end(s: &mut Session, run: &mut impl Run, frame: Frame, probes: &[[f64; 3]]) -> Result<Value> {
+    let before = run.energy().field;
+    let rec = record(run, frame.steps, frame.dt, probes)?;
+    let end = End { field_energy_before: before, field_energy_after: run.energy().field, snapshot: run.snapshot(), particles: run.held() };
+    finish(s, frame, rec, probes, end)
 }
 
 /// The grid a run's result describes: its corner (m), cells and their sizes (m), time step (s)
@@ -421,18 +450,19 @@ struct Frame {
 /// A run at its end: the field's energy before it and now (J), its particles (at most
 /// [`SNAPSHOT`] of them) and how many it holds.
 struct End {
-    fields: (f64, f64),
+    field_energy_before: f64,
+    field_energy_after: f64,
     snapshot: Vec<Snap>,
     particles: usize,
 }
 
 /// A run's result from its record and its end; kept, and the reply.
 fn finish(s: &mut Session, frame: Frame, rec: Recording, probes: &[[f64; 3]], end: End) -> Result<Value> {
-    let End { fields, snapshot, particles } = end;
+    let End { field_energy_before, field_energy_after, snapshot, particles } = end;
     let m = &s.model.particles;
     let only_bunches = !m.bunches.is_empty() && m.emitters.is_empty() && m.plasmas.is_empty() && m.beams.is_empty();
     let Frame { origin, cells, h, dt, steps, axisymmetric } = frame;
-    let span = (steps - steps / 2) as f64 * dt;
+    let span = (steps - second_half(steps)) as f64 * dt;
     let result = PicResult {
         origin,
         cells,
@@ -443,12 +473,11 @@ fn finish(s: &mut Session, frame: Frame, rec: Recording, probes: &[[f64; 3]], en
         history: rec.history,
         probes: probes
             .iter()
-            .zip(rec.fields)
+            .zip(rec.probe_fields)
             .map(|(at, e)| Probe {
                 at: std::array::from_fn(|d| at[d] + origin[d]),
                 every: rec.probe_every,
-                // Over the run's second half: a growing oscillation's start (noise) left out.
-                frequency: frequency(&e[e.len() / 2..], rec.probe_every as f64 * dt),
+                frequency: frequency(&e[second_half(e.len())..], rec.probe_every as f64 * dt),
                 e,
             })
             .collect(),
@@ -458,15 +487,15 @@ fn finish(s: &mut Session, frame: Frame, rec: Recording, probes: &[[f64; 3]], en
         collected: rec.late.collected.map(|w| w.map(|q| q / span)),
         emitted: rec.late.emitted / span,
         metal: rec.late.metal / span,
-        loss_factor: (only_bunches && rec.charge != 0.0).then(|| (fields.1 - fields.0) / (rec.charge * rec.charge)),
+        loss_factor: (only_bunches && rec.charge != 0.0).then(|| (field_energy_after - field_energy_before) / (rec.charge * rec.charge)),
         axisymmetric,
+        along: along(s),
     };
     let reply = reply(s, &result);
     s.results.particles = Some(Arc::new(result));
     Ok(reply)
 }
 
-/// The grid of the model's box in cells of about `cell`.
 /// The cells of the absorbing layer beyond an open face.
 pub const LAYER: usize = 10;
 
@@ -479,20 +508,40 @@ struct Region {
     origin: [f64; 3],
 }
 
+/// Points looked up in the model are kept this fraction of the box's size inside its faces:
+/// a solid's own faces are not inside it.
+const INSET: f64 = 1e-6;
+
+/// Cells of about `cell` (m) along `length` (m), at least `fewest`: how many, and their size (m).
+fn cells_along(length: f64, cell: f64, fewest: usize) -> (usize, f64) {
+    let cells = (length / cell).round().clamp(fewest as f64, MAX_CELLS_ALONG) as usize;
+    (cells, length / cells as f64)
+}
+
+/// The most cells along an axis before the grid's own bound refuses it.
+const MAX_CELLS_ALONG: f64 = 1e9;
+
+/// Refused: a face open on an axis that is periodic.
+fn open_on_periodic(m: &Particles) -> Result<()> {
+    match m.open.iter().find(|f| m.walls[f.axis.min(2)] != Wall::Conductor) {
+        Some(f) => Err(EngineError::failed(format!("face {} is open but its axis is periodic: open faces are on axes closed by walls", f.name()))),
+        None => Ok(()),
+    }
+}
+
 impl Region {
-    /// A point of the grid (m from its corner) as the model has it: carried back onto the
-    /// geometry's box along an axis it was extended along, so the geometry runs on into the
-    /// absorbing layers as it is at the open faces.
     /// The two coordinates across `axis` (m from the grid's corner) of `at`, else of the
     /// geometry's centre: where a bunch or beam enters.
     fn centre(&self, axis: usize, at: Option<[f64; 3]>) -> [f64; 2] {
         [(axis + 1) % 3, (axis + 2) % 3].map(|d| at.map_or(0.5 * (self.lo[d] + self.hi[d]), |x| x[d]) - self.origin[d])
     }
 
+    /// A point of the grid (m from its corner) as the model has it: carried back onto the
+    /// geometry's box along an axis it was extended along, so the geometry runs on into the
+    /// absorbing layers as it is at the open faces; just inside the box ([`INSET`]).
     fn model_point(&self, x: V3) -> emcraft_model::Point3 {
-        // Just inside the faces: a solid's own faces are not inside it.
         let p: V3 = std::array::from_fn(|d| {
-            let inset = 1e-6 * (self.hi[d] - self.lo[d]);
+            let inset = INSET * (self.hi[d] - self.lo[d]);
             (x[d] + self.origin[d]).clamp(self.lo[d] + inset, self.hi[d] - inset)
         });
         emcraft_model::Point3::new(p[0], p[1], p[2])
@@ -504,22 +553,14 @@ fn grid(s: &Session, cell: f64) -> Result<(Grid, Region)> {
     let b = s.model.bounds().ok_or_else(|| EngineError::failed("no geometry: the box particles run in is its bounds (geometry.solid)"))?;
     let (lo, hi) = ([b.min.x, b.min.y, b.min.z], [b.max.x, b.max.y, b.max.z]);
     let m = &s.model.particles;
-    if let Some(f) = m.open.iter().find(|f| m.walls[f.axis.min(2)] != Wall::Conductor) {
-        return Err(EngineError::failed(format!("face {} is open but its axis is periodic: open faces are on axes closed by walls", f.name())));
-    }
+    open_on_periodic(m)?;
     let opened = |d: usize, high: bool| usize::from(m.open.contains(&Face { axis: d, high }));
     let mut origin = lo;
     let axes: [Axis; 3] = std::array::from_fn(|d| {
-        let length = hi[d] - lo[d];
-        let cells = (length / cell).round().clamp(1.0, 1e9) as usize;
-        let h = length / cells as f64;
+        let (cells, h) = cells_along(hi[d] - lo[d], cell, 1);
         let (below, above) = (opened(d, false) * LAYER, opened(d, true) * LAYER);
         origin[d] = lo[d] - below as f64 * h;
-        let wall = match m.walls[d] {
-            Wall::Periodic => pic::Wall::Periodic,
-            Wall::Conductor => pic::Wall::Conductor,
-        };
-        Axis { cells: cells + below + above, h, wall }
+        Axis { cells: cells + below + above, h, wall: m.walls[d].into() }
     });
     Ok((Grid::new(axes).map_err(fdtd)?, Region { lo, hi, origin }))
 }
@@ -604,22 +645,10 @@ fn build(s: &Session, grid: Grid, region: &Region, dt: f64, pusher: Pusher) -> R
             pic::Emitter { axis: e.face.axis, high: e.face.high, population: emitted, emission, energy: e.energy * EV, per_node: e.per_node };
         run.emit(emitter).map_err(|err| EngineError::failed(format!("the emitter on {}: {err}", e.face.name())))?;
     }
-    for b in &m.bunches {
-        run.inject(bunch(region, b, emitted)).map_err(|err| EngineError::failed(format!("the bunch through {}: {err}", b.face.name())))?;
-    }
-    for b in &m.beams {
-        run.inject(beam(region, b, emitted)).map_err(|err| EngineError::failed(format!("the beam through {}: {err}", b.face.name())))?;
+    for i in injections(m) {
+        run.inject(i.on(region, emitted)).map_err(|err| EngineError::failed(format!("the {} through {}: {err}", i.kind, i.face.name())))?;
     }
     Ok(run)
-}
-
-/// A bunch on the grid: its duration from its length at its speed, its peak five durations in
-/// (or at its delay), its centre the point given or the face's centre.
-fn bunch(region: &Region, b: &emcraft_model::particles::Bunch, population: usize) -> pic::Bunch {
-    let energy = b.energy * EV;
-    let axis = b.face.axis.min(2);
-    let centre = region.centre(axis, b.at);
-    pic::Bunch { axis, high: b.face.high, population, pulse: bunch_pulse(b), centre, radius: b.radius, inner: 0.0, energy, per_step: b.per_step }
 }
 
 /// A bunch's pulse: its duration its length at its speed, its peak five durations in (or at its
@@ -631,19 +660,59 @@ fn bunch_pulse(b: &emcraft_model::particles::Bunch) -> pic::Pulse {
     pic::Pulse::Gaussian { charge: b.charge, t0: b.delay.unwrap_or(5.0 * sigma), sigma }
 }
 
-/// A steady beam on the grid: its centre the point given or the face's centre.
-fn beam(region: &Region, b: &emcraft_model::particles::Beam, population: usize) -> pic::Bunch {
-    let axis = b.face.axis.min(2);
-    pic::Bunch {
-        axis,
-        high: b.face.high,
-        population,
-        pulse: pic::Pulse::Steady { current: b.current, rise: b.rise },
-        centre: region.centre(axis, b.at),
+/// A bunch or a beam as the grids send it in: through `face`, as `pulse` says, over the ring
+/// between `inner` and `radius` (m) about `at` (none: the face's centre), at `energy` (J).
+struct Injected {
+    kind: &'static str,
+    face: Face,
+    pulse: pic::Pulse,
+    inner: f64,
+    radius: f64,
+    at: Option<[f64; 3]>,
+    energy: f64,
+    per_step: usize,
+}
+
+/// The model's bunches, then its beams, as the grids send them in.
+fn injections(m: &Particles) -> impl Iterator<Item = Injected> + '_ {
+    let bunches = m.bunches.iter().map(|b| Injected {
+        kind: "bunch",
+        face: b.face,
+        pulse: bunch_pulse(b),
+        inner: 0.0,
         radius: b.radius,
-        inner: b.inner,
+        at: b.at,
         energy: b.energy * EV,
         per_step: b.per_step,
+    });
+    let beams = m.beams.iter().map(|b| Injected {
+        kind: "beam",
+        face: b.face,
+        pulse: pic::Pulse::Steady { current: b.current, rise: b.rise },
+        inner: b.inner,
+        radius: b.radius,
+        at: b.at,
+        energy: b.energy * EV,
+        per_step: b.per_step,
+    });
+    bunches.chain(beams)
+}
+
+impl Injected {
+    /// On the Cartesian grid: its centre the point given or the face's centre.
+    fn on(&self, region: &Region, population: usize) -> pic::Bunch {
+        let axis = self.face.axis.min(2);
+        pic::Bunch {
+            axis,
+            high: self.face.high,
+            population,
+            pulse: self.pulse,
+            centre: region.centre(axis, self.at),
+            radius: self.radius,
+            inner: self.inner,
+            energy: self.energy,
+            per_step: self.per_step,
+        }
     }
 }
 
@@ -706,38 +775,22 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
     if !s.model.particles.has_sources() {
         return Err(EngineError::failed("nothing puts particles in the box: an emitter (particles.emitter) or a plasma (particles.plasma)"));
     }
-    let set = settings(s, p)?;
-    if set.axisymmetric {
-        return axi::solve(s, p, &set);
+    let confirmed = match s.model.job.setup() {
+        Some(emcraft_model::Setup::Particles(run)) => Some(*run),
+        _ => None,
+    };
+    let set = settings(p, confirmed.as_ref())?;
+    if let RunGrid::Revolution { fine } = set.grid {
+        return axi::solve(s, p, &set, fine.get());
     }
-    let (grid, region) = grid(s, set.cell)?;
+    let (grid, region) = grid(s, set.cell.get())?;
     let origin = region.origin;
     let dt = grid.time_step(COURANT);
-    let steps = steps_of(p, set.time, dt)?;
-    let mut run = build(s, grid, &region, dt, set.pusher)?;
-    let before = run.energy().field;
+    let steps = steps_of(p, set.time.get(), dt)?;
+    let pic = build(s, grid, &region, dt, set.pusher)?;
     let probes: Vec<[f64; 3]> = s.model.particles.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
-    let rec = record(&mut run, steps, dt, &probes)?;
     let frame = Frame { origin, cells: grid.axes.map(|a| a.cells), h: grid.axes.map(|a| a.h), dt, steps, axisymmetric: false };
-    let end = End { fields: (before, run.energy().field), snapshot: snapshot(&run, origin), particles: run.particles() };
-    finish(s, frame, rec, &probes, end)
-}
-
-/// At most [`SNAPSHOT`] of the run's particles, evenly chosen.
-fn snapshot(run: &Pic, origin: [f64; 3]) -> Vec<Snap> {
-    let stride = run.particles().div_ceil(SNAPSHOT).max(1);
-    run.populations()
-        .iter()
-        .enumerate()
-        .flat_map(|(k, pop)| pop.particles.iter().map(move |p| (k, pop.species, p)))
-        .step_by(stride)
-        .map(|(population, species, p)| Snap {
-            x: std::array::from_fn(|d| p.x[d] + origin[d]),
-            u: p.u,
-            energy: species.kinetic(p.u) / EV,
-            population,
-        })
-        .collect()
+    run_to_end(s, &mut Cartesian { pic, origin }, frame, &probes)
 }
 
 /// The axis the particles run along: the first beam's, bunch's or emitter's normal, else a plasma
@@ -789,7 +842,7 @@ pub(crate) fn reply(s: &Session, r: &PicResult) -> Value {
         "fastest_ev": fastest,
         "gamma_max": r.snapshot.iter().map(|p| gamma(p.u)).fold(1.0, f64::max),
         "metal": r.metal,
-        "mid_gamma": mid_gamma(r, along(s)),
+        "mid_gamma": mid_gamma(r, r.along),
         "growth_rate": pic::growth_rate(&r.history.iter().map(|h| h.t).collect::<Vec<_>>(), &r.history.iter().map(|h| h.field).collect::<Vec<_>>()),
         "loss_factor_v_per_pc": r.loss_factor.map(|k| k * 1e-12),
     })

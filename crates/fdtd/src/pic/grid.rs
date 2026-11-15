@@ -13,6 +13,15 @@ pub enum Wall {
     Conductor,
 }
 
+impl From<emcraft_model::particles::Wall> for Wall {
+    fn from(w: emcraft_model::particles::Wall) -> Wall {
+        match w {
+            emcraft_model::particles::Wall::Periodic => Wall::Periodic,
+            emcraft_model::particles::Wall::Conductor => Wall::Conductor,
+        }
+    }
+}
+
 /// One axis of the grid: `cells` of `h` (m), ended by `wall`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Axis {

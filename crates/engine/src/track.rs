@@ -128,11 +128,7 @@ pub fn track(s: &mut Session, p: &Params) -> Result<Value> {
         Some(_) => return Err(p.error("magnetic", "must be [Bx, By, Bz] in teslas, at most 1000 T")),
         None => [0.0; 3],
     };
-    let pusher = match p.string("pusher").or("boris")? {
-        "boris" => Pusher::Boris,
-        "vay" => Pusher::Vay,
-        other => return Err(p.error("pusher", format!("must be `boris` or `vay`, got `{}`", crate::text::clip(other, 32)))),
-    };
+    let pusher = p.pick::<Pusher>("pusher").or(Pusher::Boris)?;
     let per_period = p.integer("steps", 20..=100_000).or(400)?;
     let most_points = p.integer("points", 2..=10_000).or(200)?;
     let span: Vec3 = to - from;
@@ -221,7 +217,7 @@ pub fn track(s: &mut Session, p: &Params) -> Result<Value> {
         "transit": transit,
         "energy": energy,
         "time_step": dt * 1e9,
-        "pusher": match pusher { Pusher::Boris => "boris", Pusher::Vay => "vay" },
+        "pusher": pusher.id(),
         "particles": particles,
     });
     s.views.track = Some(p.value().clone());

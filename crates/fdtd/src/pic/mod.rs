@@ -32,8 +32,8 @@ use emcraft_particles::{Pusher, Species, V3, push, velocity};
 
 use crate::{FdtdError, Result, invalid};
 
-mod absorb;
-mod deposit;
+pub(crate) mod absorb;
+pub(crate) mod deposit;
 pub(crate) mod emit;
 mod fields;
 mod filter;
@@ -135,6 +135,19 @@ pub struct Moved {
     pub kinetic_out: f64,
 }
 
+impl std::ops::AddAssign<&Moved> for Moved {
+    fn add_assign(&mut self, m: &Moved) {
+        self.emitted += m.emitted;
+        for (a, b) in self.collected.iter_mut().flatten().zip(m.collected.iter().flatten()) {
+            *a += b;
+        }
+        self.metal += m.metal;
+        self.lost += m.lost;
+        self.kinetic_in += m.kinetic_in;
+        self.kinetic_out += m.kinetic_out;
+    }
+}
+
 /// The energy on the grid (J): the field's, its electric part, and the particles'.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Energy {
@@ -197,7 +210,8 @@ pub fn growth_rate(t: &[f64], w: &[f64]) -> Option<f64> {
 }
 
 /// `n` zeros, refused when there is no memory for them.
-fn zeros(n: usize) -> Result<Vec<f64>> {
+/// `n` zeros, refused as an error when the memory is not there (a grid's buffer).
+pub(crate) fn zeros(n: usize) -> Result<Vec<f64>> {
     let mut v = Vec::new();
     v.try_reserve_exact(n).map_err(|_| invalid("grid", format!("no memory for {n} values")))?;
     v.resize(n, 0.0);
@@ -544,19 +558,90 @@ impl Pic {
     }
 }
 
-/// What became of a particle in a step.
+/// What became of a particle (or a ring) in a step.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Fate {
+pub(crate) enum Fate {
     Kept,
     /// Its momentum stopped being a number: dropped.
     Lost,
-    /// Absorbed at `at` (m) on a wall (its axis and end) or, none, in a body's metal, carrying
-    /// its kinetic energy (J).
+    /// Absorbed at `at` (m) on a wall (its axis and end: high or low) or, none, in a body's
+    /// metal, carrying its kinetic energy (J, times its weight).
     Absorbed {
         wall: Option<(usize, bool)>,
         at: V3,
         kinetic: f64,
     },
+}
+
+/// A current's addition: its component (0–2), its point on that component's lattice, its value.
+pub(crate) type Addition = (u8, u32, f64);
+
+/// Particles pushed together on the threads (each chunk on one), and those pushed between
+/// replays of their additions (bounding the additions held).
+const CHUNK: usize = 256;
+const WAVE: usize = 64 * CHUNK;
+
+/// `advance`s every one of `items` on the threads, each handing its current's additions (about
+/// `additions` of them) to the list it is given; the additions are then added to `j` one item
+/// after another in their order, as one thread would add them (the same bits on any number of
+/// threads). The items' fates, in order.
+pub(crate) fn advance_on_threads<P: Send>(
+    items: &mut [P],
+    additions: usize,
+    advance: impl Fn(&mut P, &mut Vec<Addition>) -> Fate + Sync,
+    j: [&mut [f64]; 3],
+) -> Vec<Fate> {
+    use rayon::prelude::*;
+    let mut j = j;
+    let mut fates = Vec::with_capacity(items.len());
+    for wave in items.chunks_mut(WAVE) {
+        let batches: Vec<(Vec<Addition>, Vec<Fate>)> = wave
+            .par_chunks_mut(CHUNK)
+            .map(|chunk| {
+                let mut adds = Vec::with_capacity(chunk.len() * additions);
+                let fates = chunk.iter_mut().map(|p| advance(p, &mut adds)).collect();
+                (adds, fates)
+            })
+            .collect();
+        for (adds, batch) in batches {
+            for (a, id, v) in adds {
+                if let Some(x) = j.get_mut(usize::from(a)).and_then(|j| j.get_mut(id as usize)) {
+                    *x += v;
+                }
+            }
+            fates.extend(batch);
+        }
+    }
+    fates
+}
+
+impl Moved {
+    /// Adds what `fates` did, in order, to particles of `charge` (C) weighted `weights`: those
+    /// lost, the charge absorbed on each wall or in the metal and the kinetic energy carried
+    /// off; `absorbed` is told where each absorbed one's charge (C) ended.
+    pub(crate) fn tally(&mut self, charge: f64, weights: impl Iterator<Item = f64>, fates: &[Fate], mut absorbed: impl FnMut(V3, f64)) {
+        for (w, fate) in weights.zip(fates) {
+            match *fate {
+                Fate::Kept => {}
+                Fate::Lost => self.lost += 1,
+                Fate::Absorbed { wall, at, kinetic } => {
+                    let q = charge * w;
+                    match wall {
+                        Some((axis, high)) => self.collected[axis][usize::from(high)] += q,
+                        None => self.metal += q,
+                    }
+                    absorbed(at, q);
+                    self.kinetic_out += kinetic;
+                }
+            }
+        }
+    }
+}
+
+/// `items` with those whose fate was not to be kept taken out.
+pub(crate) fn keep_kept<T>(items: &mut Vec<T>, fates: &[Fate]) {
+    let mut kept = fates.iter().map(|f| *f == Fate::Kept);
+    items.retain(|_| kept.next().unwrap_or(true));
 }
 
 /// Pushes and moves particle `p`, handing its current's additions to `add` (J_a's point, value)
@@ -591,14 +676,9 @@ fn advance(
     Fate::Kept
 }
 
-/// Particles pushed together on the threads (each chunk on one); their currents are then added
-/// one particle after another in their order, as one thread would add them.
-const CHUNK: usize = 256;
-const WAVE: usize = 64 * CHUNK;
-
-/// Advances `pop`'s particles: pushed and moved on the threads, their currents, the charge
-/// they leave on walls and bodies and what they do to `moved` then added in their order
-/// (the same bits on any number of threads), the absorbed and lost taken out.
+/// Advances `pop`'s particles on the threads ([`advance_on_threads`]), the charge they leave on
+/// walls and bodies and what they do to `moved` then added in their order, the absorbed and
+/// lost taken out.
 fn advance_all(
     (grid, media): (&Grid, Option<&media::Media>),
     fields: [&[Vec<f64>; 3]; 2],
@@ -607,48 +687,20 @@ fn advance_all(
     pop: &mut Population,
     moved: &mut Moved,
 ) {
-    use rayon::prelude::*;
     let species = pop.species;
-    let mut fates: Vec<Fate> = Vec::with_capacity(pop.particles.len());
-    for wave in pop.particles.chunks_mut(WAVE) {
-        let batches: Vec<(Vec<(u8, u32, f64)>, Vec<Fate>)> = wave
-            .par_chunks_mut(CHUNK)
-            .map(|chunk| {
-                let mut adds = Vec::with_capacity(chunk.len() * 64);
-                let fates = chunk
-                    .iter_mut()
-                    .map(|p| advance((grid, media), fields, (species, pusher, dt), p, &mut |a, id, v| adds.push((a as u8, id as u32, v))))
-                    .collect();
-                (adds, fates)
-            })
-            .collect();
-        for (adds, batch) in batches {
-            for (a, id, v) in adds {
-                if let Some(x) = j.get_mut(usize::from(a)).and_then(|j| j.get_mut(id as usize)) {
-                    *x += v;
-                }
-            }
-            fates.extend(batch);
-        }
-    }
-    for (p, fate) in pop.particles.iter().zip(&fates) {
-        match *fate {
-            Fate::Kept => {}
-            Fate::Lost => moved.lost += 1,
-            Fate::Absorbed { wall, at, kinetic } => {
-                let q = species.charge * p.w;
-                match wall {
-                    Some((axis, high)) => moved.collected[axis][usize::from(high)] += q,
-                    None => moved.metal += q,
-                }
-                deposit::charge(grid, surface, at, q);
-                moved.kinetic_out += kinetic;
-            }
-        }
-    }
-    let mut kept = fates.iter().map(|f| *f == Fate::Kept);
-    pop.particles.retain(|_| kept.next().unwrap_or(true));
+    let [jx, jy, jz] = j;
+    let fates = advance_on_threads(
+        &mut pop.particles,
+        ADDITIONS,
+        |p, adds| advance((grid, media), fields, (species, pusher, dt), p, &mut |a, id, v| adds.push((a as u8, id as u32, v))),
+        [jx.as_mut_slice(), jy.as_mut_slice(), jz.as_mut_slice()],
+    );
+    moved.tally(species.charge, pop.particles.iter().map(|p| p.w), &fates, |at, q| deposit::charge(grid, surface, at, q));
+    keep_kept(&mut pop.particles, &fates);
 }
+
+/// About how many additions a particle's current makes (Esirkepov's 4 × 4 × 4 window).
+const ADDITIONS: usize = 64;
 
 /// The move from `x0` to `x1` cut where it first meets a conducting wall, and that wall (its
 /// axis, high or low).

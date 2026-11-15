@@ -40,22 +40,21 @@ use std::f64::consts::PI;
 use emcraft_model::units::{C0, EPS0, MU0};
 use emcraft_particles::{Pusher, Species, V3, push, velocity};
 
-use crate::pic::{Moved, Pulse, Wall};
-use crate::yee::{Cpml, Grading};
+use crate::pic::deposit::Window;
+use crate::pic::{Axis, Energy, Fate, Moved, Pulse, Wall, advance_on_threads, keep_kept, zeros};
+use crate::yee::Cpml;
 use crate::{FdtdError, MAX_CELLS, Result, invalid};
 
-/// The most rings a run holds.
-pub const MAX_RINGS: usize = 20_000_000;
+/// The most rings a run holds: as many as the Cartesian grid's particles.
+pub const MAX_RINGS: usize = crate::pic::MAX_PARTICLES;
 
-/// The r–z grid: `nr` cells of `dr` from the axis to a conducting wall, `nz` of `dz` along z
-/// between conducting walls or periodic ends.
+/// The r–z grid: `nr` cells of `dr` (m) from the axis to a conducting wall, and the axis `z`:
+/// its cells between conducting walls or periodic ends.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AxiGrid {
     pub nr: usize,
-    pub nz: usize,
     pub dr: f64,
-    pub dz: f64,
-    pub z_wall: Wall,
+    pub z: Axis,
 }
 
 /// One of the six components' lattices: its points along r and z.
@@ -83,59 +82,42 @@ impl AxiGrid {
     ///
     /// ```
     /// use emcraft_fdtd::axi::AxiGrid;
-    /// use emcraft_fdtd::pic::Wall;
-    /// let g = AxiGrid::new(20, 40, 0.5e-3, 0.5e-3, Wall::Conductor)?;
+    /// use emcraft_fdtd::pic::{Axis, Wall};
+    /// let z = Axis { cells: 40, h: 0.5e-3, wall: Wall::Conductor };
+    /// let g = AxiGrid::new(20, 0.5e-3, z)?;
     /// assert!(g.time_step(0.9) < 0.5e-3 / 299_792_458.0);
-    /// assert!(AxiGrid::new(0, 40, 0.5e-3, 0.5e-3, Wall::Conductor).is_err());
+    /// assert!(AxiGrid::new(0, 0.5e-3, z).is_err());
     /// # Ok::<(), emcraft_fdtd::FdtdError>(())
     /// ```
-    pub fn new(nr: usize, nz: usize, dr: f64, dz: f64, z_wall: Wall) -> Result<AxiGrid> {
+    pub fn new(nr: usize, dr: f64, z: Axis) -> Result<AxiGrid> {
         let ok = |h: f64| h.is_finite() && h > 0.0;
-        if nr == 0 || nz == 0 || !ok(dr) || !ok(dz) {
+        if nr == 0 || z.cells == 0 || !ok(dr) || !ok(z.h) {
             return Err(invalid("axisymmetric grid", "at least a cell of a finite size > 0 along r and z"));
         }
-        let cells = nr.saturating_mul(nz);
+        let cells = nr.saturating_mul(z.cells);
         if cells > MAX_CELLS {
             return Err(FdtdError::TooLarge { cells, limit: MAX_CELLS });
         }
-        Ok(AxiGrid { nr, nz, dr, dz, z_wall })
+        Ok(AxiGrid { nr, dr, z })
     }
 
     /// The largest stable step (s) times `courant`.
     pub fn time_step(&self, courant: f64) -> f64 {
-        courant / (C0 * (1.0 / (self.dr * self.dr) + 1.0 / (self.dz * self.dz)).sqrt())
+        courant / (C0 * (1.0 / (self.dr * self.dr) + 1.0 / (self.z.h * self.z.h)).sqrt())
     }
 
+    /// The radius of its conducting wall (m).
     pub fn radius(&self) -> f64 {
         self.nr as f64 * self.dr
     }
 
+    /// Its length (m).
     pub fn length(&self) -> f64 {
-        self.nz as f64 * self.dz
-    }
-
-    /// Points along z: nodes or centres.
-    fn zs(&self, node: bool) -> usize {
-        if node && self.z_wall == Wall::Conductor { self.nz + 1 } else { self.nz }
+        self.z.length()
     }
 
     fn lat(&self, r_node: bool, z_node: bool) -> Lat {
-        Lat { nr: if r_node { self.nr + 1 } else { self.nr }, nz: self.zs(z_node), r_node, z_node }
-    }
-
-    /// Point `k` along z, wrapped round periodic ends, none past a wall.
-    #[inline]
-    fn wz(&self, k: isize, node: bool) -> Option<usize> {
-        let n = self.zs(node) as isize;
-        match self.z_wall {
-            Wall::Periodic => Some(k.rem_euclid(n) as usize),
-            Wall::Conductor => (0..n).contains(&k).then_some(k as usize),
-        }
-    }
-
-    /// Whether z node `k` is on a conducting end.
-    fn z_end(&self, k: usize) -> bool {
-        self.z_wall == Wall::Conductor && (k == 0 || k == self.nz)
+        Lat { nr: if r_node { self.nr + 1 } else { self.nr }, nz: self.z.points(z_node), r_node, z_node }
     }
 
     /// The area of node ring `i`'s faces normal to z (m²).
@@ -145,7 +127,7 @@ impl AxiGrid {
 
     /// The volume of node `i`'s ring (m³).
     fn volume(&self, i: usize) -> f64 {
-        self.area(i) * self.dz
+        self.area(i) * self.z.h
     }
 }
 
@@ -190,6 +172,19 @@ struct Fields {
     bt: Vec<f64>,
 }
 
+impl Fields {
+    fn of(&mut self, c: Component) -> &mut Vec<f64> {
+        match c {
+            Component::Er => &mut self.er,
+            Component::Etheta => &mut self.et,
+            Component::Ez => &mut self.ez,
+            Component::Br => &mut self.br,
+            Component::Btheta => &mut self.bt,
+            Component::Bz => &mut self.bz,
+        }
+    }
+}
+
 /// The absorbing layers along z: the coefficients at z's nodes and centres for E's steps and B's
 /// half steps, and ψ of each z difference (Er's ∂zBθ, Eθ's ∂zBr, Bθ's ∂zEr, Br's ∂zEθ).
 struct Layers {
@@ -219,19 +214,66 @@ pub struct AxiPic {
     steps: usize,
 }
 
-/// A ring's fate in a step: kept, dropped (its momentum no number), or absorbed by a wall
-/// (`collected[axis][end]`) or the metal (none), with its charge (C) and kinetic energy (J).
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum Fate {
-    Kept,
-    Lost,
-    Absorbed { wall: Option<(usize, usize)>, q: f64, kinetic: f64 },
+/// About how many additions a ring's current makes (its 4 × 4 window and θ's).
+const ADDITIONS: usize = 24;
+
+/// A wall a ring meets: the conductor at r = R, or a conducting end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RingWall {
+    Outer,
+    End { high: bool },
 }
 
-/// The rings pushed between their additions to the current are replayed (bounding the
-/// additions held), and the rings each thread takes at a time.
-const WAVE: usize = 1 << 16;
-const CHUNK: usize = 512;
+impl RingWall {
+    /// Where [`Moved::collected`] counts what it absorbs: the outer wall as the high end of the
+    /// first axis (r), the ends as the third's (z).
+    fn collected(self) -> (usize, bool) {
+        match self {
+            RingWall::Outer => (0, true),
+            RingWall::End { high } => (2, high),
+        }
+    }
+}
+
+/// A component of the m = 0 field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Component {
+    Er,
+    Etheta,
+    Ez,
+    Br,
+    Btheta,
+    Bz,
+}
+
+impl Component {
+    /// Its lattice's place in `lats`.
+    fn lattice(self) -> usize {
+        match self {
+            Component::Er => ER,
+            Component::Ez => EZ,
+            Component::Etheta => ET,
+            Component::Br => BR,
+            Component::Bz => BZ,
+            Component::Btheta => BT,
+        }
+    }
+
+    /// An E tangential to the conductor at r = R (held at zero on its nodes there).
+    fn tangential_to_outer_wall(self) -> bool {
+        matches!(self, Component::Etheta | Component::Ez)
+    }
+
+    /// An E tangential to the conducting ends.
+    fn tangential_to_ends(self) -> bool {
+        matches!(self, Component::Er | Component::Etheta)
+    }
+
+    /// Odd about the axis (zero on it): the radial and azimuthal E and the radial B.
+    fn odd_on_axis(self) -> bool {
+        matches!(self, Component::Er | Component::Etheta | Component::Br)
+    }
+}
 
 /// Lattices' order in `lats`.
 const ER: usize = 0;
@@ -241,21 +283,9 @@ const BR: usize = 3;
 const BZ: usize = 4;
 const BT: usize = 5;
 
-fn zeros(n: usize) -> Result<Vec<f64>> {
-    let mut v = Vec::new();
-    v.try_reserve_exact(n).map_err(|_| invalid("axisymmetric grid", format!("no memory for {n} values")))?;
-    v.resize(n, 0.0);
-    Ok(v)
-}
-
-/// The first-order shape's weight `s` cells away.
-#[inline]
-fn shape(s: f64) -> f64 {
-    (1.0 - s.abs()).max(0.0)
-}
-
-/// The R₃ sequence's steps.
-const R3: [f64; 3] = [0.819_172_513_396_164_4, 0.671_043_606_703_789_3, 0.549_700_477_901_970_4];
+/// The step of the low-discrepancy sequence that places an injection's rings over its annulus
+/// (the first of Roberts's R₃ steps, 1/φ₃).
+const RING_STEP: f64 = 0.819_172_513_396_164_4;
 
 impl AxiPic {
     /// A run with no field and no rings, stepped by `dt` (s) within the grid's limit.
@@ -334,7 +364,7 @@ impl AxiPic {
             if !ok {
                 return Err(invalid("ring", format!("{p:?}")));
             }
-            match self.grid.z_wall {
+            match self.grid.z.wall {
                 Wall::Periodic => p.z = p.z.rem_euclid(l),
                 Wall::Conductor if !(0.0..=l).contains(&p.z) => return Err(invalid("ring", format!("{p:?}: outside"))),
                 Wall::Conductor => {}
@@ -347,7 +377,7 @@ impl AxiPic {
     /// Adds `injection`, through a conducting end.
     pub fn inject(&mut self, injection: Injection) -> Result<()> {
         let ok = |x: f64| x.is_finite() && x >= 0.0;
-        if self.grid.z_wall != Wall::Conductor
+        if self.grid.z.wall != Wall::Conductor
             || injection.population >= self.populations.len()
             || !(ok(injection.inner)
                 && ok(injection.radius)
@@ -370,28 +400,21 @@ impl AxiPic {
         Ok(())
     }
 
-    /// The fields set to `f` of each point's (r, z) (m): E_r, E_θ, E_z (V/m) or B_r, B_θ, B_z (T)
-    /// by `which` (0–2 E, 3–5 B, in that order), off the walls they are tangential to.
-    pub fn set(&mut self, which: usize, f: impl Fn(f64, f64) -> f64) {
-        let (lat, values) = match which {
-            0 => (self.lats[ER], &mut self.f.er),
-            1 => (self.lats[ET], &mut self.f.et),
-            2 => (self.lats[EZ], &mut self.f.ez),
-            3 => (self.lats[BR], &mut self.f.br),
-            4 => (self.lats[BT], &mut self.f.bt),
-            5 => (self.lats[BZ], &mut self.f.bz),
-            _ => return,
-        };
-        let (dr, dz) = (self.grid.dr, self.grid.dz);
+    /// Field `component` set to `f` of each point's (r, z) (m) (V/m for E, T for B), off the
+    /// walls it is tangential to and the axis where it is odd.
+    pub fn set(&mut self, component: Component, f: impl Fn(f64, f64) -> f64) {
+        let lat = self.lats[component.lattice()];
+        let (dr, dz, g) = (self.grid.dr, self.grid.z.h, self.grid);
+        let values = self.f.of(component);
         for k in 0..lat.nz {
             for i in 0..lat.nr {
                 let r = (i as f64 + if lat.r_node { 0.0 } else { 0.5 }) * dr;
                 let z = (k as f64 + if lat.z_node { 0.0 } else { 0.5 }) * dz;
-                let tangential_wall =
-                    which < 3 && ((lat.r_node && i == self.grid.nr && which != 0) || (lat.z_node && self.grid.z_end(k) && which != 2));
-                let axis_zero = matches!(which, 0 | 1 | 3) && lat.r_node && i == 0;
+                let held = (component.tangential_to_outer_wall() && lat.r_node && i == g.nr)
+                    || (component.tangential_to_ends() && lat.z_node && g.z.on_wall(k))
+                    || (component.odd_on_axis() && lat.r_node && i == 0);
                 if let Some(v) = values.get_mut(lat.at(i, k)) {
-                    *v = if tangential_wall || axis_zero { 0.0 } else { f(r, z) };
+                    *v = if held { 0.0 } else { f(r, z) };
                 }
             }
         }
@@ -401,8 +424,10 @@ impl AxiPic {
     /// whether any is.
     pub fn set_metal(&mut self, metal: impl Fn(f64, f64) -> bool) -> bool {
         let g = self.grid;
-        let cells: Vec<bool> =
-            (0..g.nz).flat_map(|k| (0..g.nr).map(move |i| (i, k))).map(|(i, k)| metal((i as f64 + 0.5) * g.dr, (k as f64 + 0.5) * g.dz)).collect();
+        let cells: Vec<bool> = (0..g.z.cells)
+            .flat_map(|k| (0..g.nr).map(move |i| (i, k)))
+            .map(|(i, k)| metal((i as f64 + 0.5) * g.dr, (k as f64 + 0.5) * g.z.h))
+            .collect();
         let any = cells.contains(&true);
         self.metal = any.then_some(cells);
         self.held = [ER, EZ, ET].map(|which| {
@@ -439,7 +464,7 @@ impl AxiPic {
         if i < 0 || i >= g.nr as isize {
             return false;
         }
-        let Some(k) = g.wz(k, false) else { return false };
+        let Some(k) = g.z.wrap(k, false) else { return false };
         m.get(i as usize + g.nr * k).copied().unwrap_or(false)
     }
 
@@ -456,39 +481,26 @@ impl AxiPic {
     /// Opens the conducting end at `high` (or the low one): a CPML of `cells` inside it.
     pub fn absorb(&mut self, high: bool, cells: usize) -> Result<()> {
         let g = self.grid;
-        if g.z_wall != Wall::Conductor || cells == 0 || cells > crate::pic::MAX_LAYER {
+        if g.z.wall != Wall::Conductor || cells == 0 || cells > crate::pic::MAX_LAYER {
             return Err(invalid("absorber", format!("a layer of 1 to {} cells inside a conducting end", crate::pic::MAX_LAYER)));
         }
         let other = self.layers.as_ref().map_or(0, |l| l.cells[usize::from(!high)]);
-        if cells + other >= g.nz {
+        if cells + other >= g.z.cells {
             return Err(invalid("absorber", "the layers longer than the grid"));
         }
         let mut layers = match self.layers.take() {
             Some(l) => l,
             None => Layers {
                 cells: [0; 2],
-                e: [vec![Cpml::NONE; g.nz + 1], vec![Cpml::NONE; g.nz]],
-                b: [vec![Cpml::NONE; g.nz + 1], vec![Cpml::NONE; g.nz]],
+                e: [vec![Cpml::NONE; g.z.cells + 1], vec![Cpml::NONE; g.z.cells]],
+                b: [vec![Cpml::NONE; g.z.cells + 1], vec![Cpml::NONE; g.z.cells]],
                 psi: [zeros(self.lats[ER].len())?, zeros(self.lats[ET].len())?, zeros(self.lats[BT].len())?, zeros(self.lats[BR].len())?],
             },
         };
         layers.cells[usize::from(high)] = cells;
-        let [lo, hi] = layers.cells.map(|n| n as f64 * g.dz);
-        let length = g.length();
-        let fc = C0 / length;
-        let profile = |grading: &Grading, node: bool| -> Vec<Cpml> {
-            (0..g.zs(node))
-                .map(|k| {
-                    let z = (k as f64 + if node { 0.0 } else { 0.5 }) * g.dz;
-                    let low = if lo > 0.0 { (lo - z) / lo } else { 0.0 };
-                    let up = if hi > 0.0 { (z - (length - hi)) / hi } else { 0.0 };
-                    grading.at(low.max(up).max(0.0))
-                })
-                .collect()
-        };
-        let (whole, half) = (Grading::new(g.dz, self.dt, fc), Grading::new(g.dz, 0.5 * self.dt, fc));
-        layers.e = [profile(&whole, true), profile(&whole, false)];
-        layers.b = [profile(&half, true), profile(&half, false)];
+        let graded = crate::pic::absorb::Graded::along(g.z, layers.cells, self.dt);
+        layers.e = graded.e;
+        layers.b = graded.b;
         self.layers = Some(layers);
         Ok(())
     }
@@ -507,16 +519,13 @@ impl AxiPic {
     fn interpolate(&self, lat: Lat, values: &[f64], r: f64, z: f64, odd: bool) -> f64 {
         let g = self.grid;
         let sr = r / g.dr - if lat.r_node { 0.0 } else { 0.5 };
-        let sz = z / g.dz - if lat.z_node { 0.0 } else { 0.5 };
+        let sz = z / g.z.h - if lat.z_node { 0.0 } else { 0.5 };
         let (i0, k0) = (sr.floor(), sz.floor());
         let (fr, fz) = (sr - i0, sz - k0);
         let at = |i: isize, k: isize| -> f64 {
             let (i, sign) = if i < 0 { (-i - if lat.r_node { 0 } else { 1 }, if odd { -1.0 } else { 1.0 }) } else { (i, 1.0) };
             let i = (i as usize).min(lat.nr - 1);
-            let k = match g.z_wall {
-                Wall::Periodic => k.rem_euclid(lat.nz as isize) as usize,
-                Wall::Conductor => k.clamp(0, lat.nz as isize - 1) as usize,
-            };
+            let k = g.z.clamp(k, lat.z_node);
             sign * values.get(lat.at(i, k)).copied().unwrap_or(0.0)
         };
         let (i0, k0) = (i0 as isize, k0 as isize);
@@ -524,7 +533,7 @@ impl AxiPic {
     }
 
     /// The energy in the field and in the rings (J).
-    pub fn energy(&self) -> (f64, f64) {
+    pub fn energy(&self) -> Energy {
         let g = self.grid;
         let sum = |lat: Lat, values: &[f64], coefficient: f64| -> f64 {
             let mut s = 0.0;
@@ -533,19 +542,19 @@ impl AxiPic {
                     let r = (i as f64 + if lat.r_node { 0.0 } else { 0.5 }) * g.dr;
                     let ring = if lat.r_node && i == 0 { PI * 0.25 * g.dr * g.dr } else { 2.0 * PI * r * g.dr };
                     let x = values.get(lat.at(i, k)).copied().unwrap_or(0.0);
-                    s += coefficient * x * x * ring * g.dz;
+                    s += coefficient * x * x * ring * g.z.h;
                 }
             }
             s
         };
-        let field = sum(self.lats[ER], &self.f.er, 0.5 * EPS0)
-            + sum(self.lats[EZ], &self.f.ez, 0.5 * EPS0)
-            + sum(self.lats[ET], &self.f.et, 0.5 * EPS0)
+        let electric =
+            sum(self.lats[ER], &self.f.er, 0.5 * EPS0) + sum(self.lats[EZ], &self.f.ez, 0.5 * EPS0) + sum(self.lats[ET], &self.f.et, 0.5 * EPS0);
+        let field = electric
             + sum(self.lats[BR], &self.f.br, 0.5 / MU0)
             + sum(self.lats[BZ], &self.f.bz, 0.5 / MU0)
             + sum(self.lats[BT], &self.f.bt, 0.5 / MU0);
         let kinetic = self.populations.iter().map(|p| p.rings.iter().map(|q| q.w * p.species.kinetic(q.u)).sum::<f64>()).sum();
-        (field, kinetic)
+        Energy { field, electric, kinetic }
     }
 
     /// ε₀∮E·dA − Q (C) about each node off the walls, the axis' too, the metal and the layers:
@@ -561,18 +570,20 @@ impl AxiPic {
         }
         let mut out = Vec::new();
         for k in 0..nodes.nz {
-            if g.z_end(k) || self.layers.as_ref().is_some_and(|l| (l.cells[0] > 0 && k <= l.cells[0]) || (l.cells[1] > 0 && k + l.cells[1] >= g.nz)) {
+            if g.z.on_wall(k)
+                || self.layers.as_ref().is_some_and(|l| (l.cells[0] > 0 && k <= l.cells[0]) || (l.cells[1] > 0 && k + l.cells[1] >= g.z.cells))
+            {
                 continue;
             }
-            let km = g.wz(k as isize - 1, false);
+            let km = g.z.wrap(k as isize - 1, false);
             for i in 0..g.nr {
                 if (i as isize - 1..=i as isize).any(|a| (k as isize - 1..=k as isize).any(|b| self.metal_cell(a, b))) {
                     continue;
                 }
                 let er = |ii: usize| self.f.er.get(self.lats[ER].at(ii, k)).copied().unwrap_or(0.0);
-                let radial = 2.0 * PI * g.dz * ((i as f64 + 0.5) * g.dr * er(i) - if i > 0 { (i as f64 - 0.5) * g.dr * er(i - 1) } else { 0.0 });
+                let radial = 2.0 * PI * g.z.h * ((i as f64 + 0.5) * g.dr * er(i) - if i > 0 { (i as f64 - 0.5) * g.dr * er(i - 1) } else { 0.0 });
                 let ez = |kk: usize| self.f.ez.get(self.lats[EZ].at(i, kk)).copied().unwrap_or(0.0);
-                let axial = g.area(i) * (ez(k.min(g.nz - 1)) * if k < g.nz { 1.0 } else { 0.0 } - km.map_or(0.0, ez));
+                let axial = g.area(i) * (ez(k.min(g.z.cells - 1)) * if k < g.z.cells { 1.0 } else { 0.0 } - km.map_or(0.0, ez));
                 out.push(EPS0 * (radial + axial) - q[nodes.at(i, k)]);
             }
         }
@@ -582,7 +593,7 @@ impl AxiPic {
     /// Adds `charge` (C) at (r, z) to the nodes' charge `q`.
     fn charge(&self, q: &mut [f64], nodes: Lat, r: f64, z: f64, charge: f64) {
         let g = self.grid;
-        let (sr, sz) = (r / g.dr, z / g.dz);
+        let (sr, sz) = (r / g.dr, z / g.z.h);
         let (i0, k0) = (sr.floor(), sz.floor());
         for (di, wr) in [(0, 1.0 - (sr - i0)), (1, sr - i0)] {
             for (dk, wz) in [(0, 1.0 - (sz - k0)), (1, sz - k0)] {
@@ -590,7 +601,7 @@ impl AxiPic {
                 if i < 0 || i > g.nr as isize {
                     continue;
                 }
-                let Some(k) = g.wz(k0 as isize + dk, true) else { continue };
+                let Some(k) = g.z.wrap(k0 as isize + dk, true) else { continue };
                 if let Some(v) = q.get_mut(nodes.at(i as usize, k)) {
                     *v += charge * wr * wz;
                 }
@@ -605,27 +616,22 @@ impl AxiPic {
         self.jz.fill(0.0);
         self.jt.fill(0.0);
         self.emit(&mut moved)?;
+        let (mut jr, mut jz, mut jt) = (std::mem::take(&mut self.jr), std::mem::take(&mut self.jz), std::mem::take(&mut self.jt));
         for k in 0..self.populations.len() {
             let species = self.populations[k].species;
             let mut rings = std::mem::take(&mut self.populations[k].rings);
-            let fates = self.advance_all(species, &mut rings);
-            for (p, fate) in rings.iter().zip(&fates) {
-                match *fate {
-                    Fate::Kept => {}
-                    Fate::Lost => moved.lost += 1,
-                    Fate::Absorbed { wall, q, kinetic } => {
-                        match wall {
-                            Some((axis, end)) => moved.collected[axis][end] += q,
-                            None => moved.metal += q,
-                        }
-                        moved.kinetic_out += p.w * kinetic;
-                    }
-                }
-            }
-            let mut kept = fates.iter().map(|f| *f == Fate::Kept);
-            rings.retain(|_| kept.next().unwrap_or(true));
+            let this = &*self;
+            let fates = advance_on_threads(
+                &mut rings,
+                ADDITIONS,
+                |p, adds| this.advance(species, p, &mut |w, id, v| adds.push((w, id as u32, v))),
+                [jr.as_mut_slice(), jz.as_mut_slice(), jt.as_mut_slice()],
+            );
+            moved.tally(species.charge, rings.iter().map(|p| p.w), &fates, |_, _| {});
+            keep_kept(&mut rings, &fates);
             self.populations[k].rings = rings;
         }
+        (self.jr, self.jz, self.jt) = (jr, jz, jt);
         self.faraday(0.5 * self.dt);
         self.ampere();
         self.faraday(0.5 * self.dt);
@@ -650,9 +656,9 @@ impl AxiPic {
             let mut new = Vec::with_capacity(inj.per_step);
             for _ in 0..inj.per_step {
                 self.count += 1;
-                let s = (0.5 + self.count as f64 * R3[0]).fract();
+                let s = (0.5 + self.count as f64 * RING_STEP).fract();
                 let r = crate::pic::emit::annulus_radius(inj.inner, inj.radius, s);
-                if self.metal_cell((r / self.grid.dr).floor() as isize, if inj.high { self.grid.nz as isize - 1 } else { 0 }) {
+                if self.metal_cell((r / self.grid.dr).floor() as isize, if inj.high { self.grid.z.cells as isize - 1 } else { 0 }) {
                     continue;
                 }
                 new.push(Ring { r, z, u, w });
@@ -667,39 +673,6 @@ impl AxiPic {
             }
         }
         Ok(())
-    }
-
-    /// Every ring of `rings` pushed and moved, chunk by chunk on the threads, their currents
-    /// added to J in the rings' order (as one thread would, the same bits on any number); their
-    /// fates.
-    fn advance_all(&mut self, species: Species, rings: &mut [Ring]) -> Vec<Fate> {
-        use rayon::prelude::*;
-        let mut fates = Vec::with_capacity(rings.len());
-        for wave in rings.chunks_mut(WAVE) {
-            let this = &*self;
-            let batches: Vec<(Vec<(u8, u32, f64)>, Vec<Fate>)> = wave
-                .par_chunks_mut(CHUNK)
-                .map(|chunk| {
-                    let mut adds = Vec::with_capacity(chunk.len() * 24);
-                    let fates = chunk.iter_mut().map(|p| this.advance(species, p, &mut |w, id, v| adds.push((w, id as u32, v)))).collect();
-                    (adds, fates)
-                })
-                .collect();
-            for (adds, batch) in batches {
-                for (w, id, v) in adds {
-                    let j = match w {
-                        0 => &mut self.jr,
-                        1 => &mut self.jz,
-                        _ => &mut self.jt,
-                    };
-                    if let Some(x) = j.get_mut(id as usize) {
-                        *x += v;
-                    }
-                }
-                fates.extend(batch);
-            }
-        }
-        fates
     }
 
     /// Pushes and moves ring `p`, its current handed to `add(component, id, value)` (0: J_r,
@@ -723,15 +696,15 @@ impl AxiPic {
         let mut f = 1.0f64;
         if r1 > g.radius() {
             f = ((g.radius() - p.r) / (r1 - p.r)).clamp(0.0, 1.0);
-            hit = Some(2);
+            hit = Some(RingWall::Outer);
         }
-        if g.z_wall == Wall::Conductor {
-            for (end, beyond) in [(0usize, z1 < 0.0), (1, z1 > g.length())] {
+        if g.z.wall == Wall::Conductor {
+            for (high, beyond) in [(false, z1 < 0.0), (true, z1 > g.length())] {
                 if beyond {
-                    let wall = if end == 0 { 0.0 } else { g.length() };
+                    let wall = if high { g.length() } else { 0.0 };
                     let fe = ((wall - p.z) / (z1 - p.z)).clamp(0.0, 1.0);
                     if fe < f {
-                        (f, hit) = (fe, Some(end));
+                        (f, hit) = (fe, Some(RingWall::End { high }));
                     }
                 }
             }
@@ -743,17 +716,16 @@ impl AxiPic {
         let q = species.charge * p.w;
         self.deposit((p.r, p.z), (r1, z1), q, add);
         self.deposit_theta(0.5 * (p.r + r1), 0.5 * (p.z + z1), q * v[1], add);
-        let kinetic = species.kinetic(u1);
-        match hit {
-            Some(2) => return Fate::Absorbed { wall: Some((0, 1)), q, kinetic },
-            Some(end) => return Fate::Absorbed { wall: Some((2, end)), q, kinetic },
-            None => {}
+        let kinetic = p.w * species.kinetic(u1);
+        let at = [r1, 0.0, z1];
+        if let Some(wall) = hit {
+            return Fate::Absorbed { wall: Some(wall.collected()), at, kinetic };
         }
-        if self.metal_cell((r1 / g.dr).floor() as isize, (z1 / g.dz).floor() as isize) {
-            return Fate::Absorbed { wall: None, q, kinetic };
+        if self.metal_cell((r1 / g.dr).floor() as isize, (z1 / g.z.h).floor() as isize) {
+            return Fate::Absorbed { wall: None, at, kinetic };
         }
         p.r = r1;
-        p.z = if g.z_wall == Wall::Periodic { z1.rem_euclid(g.length()) } else { z1 };
+        p.z = if g.z.wall == Wall::Periodic { z1.rem_euclid(g.length()) } else { z1 };
         p.u = u1;
         Fate::Kept
     }
@@ -762,19 +734,13 @@ impl AxiPic {
     /// Esirkepov's flux through each node ring's faces, over their areas.
     fn deposit(&self, (r0, z0): (f64, f64), (r1, z1): (f64, f64), q: f64, add: &mut impl FnMut(u8, usize, f64)) {
         let g = self.grid;
-        let window = |x0: f64, x1: f64, h: f64| -> (isize, [f64; 4], [f64; 4]) {
-            let first = (x0 / h).floor() as isize - 1;
-            let at = |x: f64| std::array::from_fn(|m| shape(x / h - (first + m as isize) as f64));
-            (first, at(x0), at(x1))
-        };
-        let (fr, s0r, s1r) = window(r0, r1, g.dr);
-        let (fz, s0z, s1z) = window(z0, z1, g.dz);
-        let dsr: [f64; 4] = std::array::from_fn(|m| s1r[m] - s0r[m]);
-        let dsz: [f64; 4] = std::array::from_fn(|m| s1z[m] - s0z[m]);
+        let (wr, wz) = (Window::of(r0, r1, g.dr), Window::of(z0, z1, g.z.h));
+        let (fr, s0r, dsr) = (wr.first, wr.before, wr.change());
+        let (fz, s0z, dsz) = (wz.first, wz.before, wz.change());
         let (ler, lez) = (self.lats[ER], self.lats[EZ]);
         // I_r through r_{i+½}: the running sum over i.
         for mz in 0..4 {
-            let Some(k) = g.wz(fz + mz as isize, true) else { continue };
+            let Some(k) = g.z.wrap(fz + mz as isize, true) else { continue };
             let across = s0z[mz] + 0.5 * dsz[mz];
             if across == 0.0 {
                 continue;
@@ -786,7 +752,7 @@ impl AxiPic {
                 if i < 0 || i >= g.nr as isize {
                     continue;
                 }
-                let face = 2.0 * PI * (i as f64 + 0.5) * g.dr * g.dz;
+                let face = 2.0 * PI * (i as f64 + 0.5) * g.dr * g.z.h;
                 add(0, ler.at(i as usize, k), flux / face);
             }
         }
@@ -804,7 +770,7 @@ impl AxiPic {
             let mut flux = 0.0;
             for mz in 0..3 {
                 flux -= q * dsz[mz] * across / self.dt;
-                let Some(k) = g.wz(fz + mz as isize, false) else { continue };
+                let Some(k) = g.z.wrap(fz + mz as isize, false) else { continue };
                 add(1, lez.at(i as usize, k), flux / area);
             }
         }
@@ -814,7 +780,7 @@ impl AxiPic {
     fn deposit_theta(&self, r: f64, z: f64, qv: f64, add: &mut impl FnMut(u8, usize, f64)) {
         let g = self.grid;
         let let_ = self.lats[ET];
-        let (sr, sz) = (r / g.dr, z / g.dz);
+        let (sr, sz) = (r / g.dr, z / g.z.h);
         let (i0, k0) = (sr.floor(), sz.floor());
         for (di, wr) in [(0, 1.0 - (sr - i0)), (1, sr - i0)] {
             let i = i0 as isize + di;
@@ -822,7 +788,7 @@ impl AxiPic {
                 continue;
             }
             for (dk, wz) in [(0, 1.0 - (sz - k0)), (1, sz - k0)] {
-                let Some(k) = g.wz(k0 as isize + dk, true) else { continue };
+                let Some(k) = g.z.wrap(k0 as isize + dk, true) else { continue };
                 let volume = g.volume(i as usize);
                 add(2, let_.at(i as usize, k), qv * wr * wz / volume);
             }
@@ -858,9 +824,9 @@ impl AxiPic {
         };
         // B_θ: −(∂z E_r − ∂r E_z).
         by_rows(bt, psi_bt, lbt.nr, |k, row, mut psi| {
-            let Some(kp) = g.wz(k as isize + 1, true) else { return };
+            let Some(kp) = g.z.wrap(k as isize + 1, true) else { return };
             for (i, v) in row.iter_mut().enumerate() {
-                let dz = (er[ler.at(i, kp)] - er[ler.at(i, k)]) / g.dz;
+                let dz = (er[ler.at(i, kp)] - er[ler.at(i, k)]) / g.z.h;
                 let dz = Self::stretch(coefficients, (false, k), psi.as_deref_mut().and_then(|p| p.get_mut(i)), dz);
                 let dr = (ez[lez.at(i + 1, k)] - ez[lez.at(i, k)]) / g.dr;
                 *v -= dt * (dz - dr);
@@ -868,9 +834,9 @@ impl AxiPic {
         });
         // B_r: +∂z E_θ.
         by_rows(br, psi_br, lbr.nr, |k, row, mut psi| {
-            let Some(kp) = g.wz(k as isize + 1, true) else { return };
+            let Some(kp) = g.z.wrap(k as isize + 1, true) else { return };
             for (i, v) in row.iter_mut().enumerate() {
-                let dz = (et[let_.at(i, kp)] - et[let_.at(i, k)]) / g.dz;
+                let dz = (et[let_.at(i, kp)] - et[let_.at(i, k)]) / g.z.h;
                 *v += dt * Self::stretch(coefficients, (false, k), psi.as_deref_mut().and_then(|p| p.get_mut(i)), dz);
             }
         });
@@ -905,13 +871,13 @@ impl AxiPic {
         };
         // E_r: −c² ∂z B_θ − J_r/ε₀, off the conducting ends.
         by_rows(er, psi_er, ler.nr, |k, row, mut psi| {
-            if g.z_end(k) {
+            if g.z.on_wall(k) {
                 return;
             }
-            let Some(km) = g.wz(k as isize - 1, false) else { return };
+            let Some(km) = g.z.wrap(k as isize - 1, false) else { return };
             for (i, v) in row.iter_mut().enumerate() {
                 let id = ler.at(i, k);
-                let dz = (bt[lbt.at(i, k.min(lbt.nz - 1))] - bt[lbt.at(i, km)]) / g.dz;
+                let dz = (bt[lbt.at(i, k.min(lbt.nz - 1))] - bt[lbt.at(i, km)]) / g.z.h;
                 let dz = Self::stretch(coefficients, (true, k), psi.as_deref_mut().and_then(|p| p.get_mut(i)), dz);
                 if !is_held(0, id) {
                     *v += dt * (-c2 * dz - jr[id] / EPS0);
@@ -920,13 +886,13 @@ impl AxiPic {
         });
         // E_θ: c²(∂z B_r − ∂r B_z) − J_θ/ε₀, off the axis, the wall and the ends.
         by_rows(et, psi_et, let_.nr, |k, row, mut psi| {
-            if g.z_end(k) {
+            if g.z.on_wall(k) {
                 return;
             }
-            let Some(km) = g.wz(k as isize - 1, false) else { return };
+            let Some(km) = g.z.wrap(k as isize - 1, false) else { return };
             for (i, v) in row.iter_mut().enumerate().take(g.nr).skip(1) {
                 let id = let_.at(i, k);
-                let dz = (br[lbr.at(i, k.min(lbr.nz - 1))] - br[lbr.at(i, km)]) / g.dz;
+                let dz = (br[lbr.at(i, k.min(lbr.nz - 1))] - br[lbr.at(i, km)]) / g.z.h;
                 let dz = Self::stretch(coefficients, (true, k), psi.as_deref_mut().and_then(|p| p.get_mut(i)), dz);
                 let dr = (bz[lbz.at(i, k)] - bz[lbz.at(i - 1, k)]) / g.dr;
                 if !is_held(2, id) {

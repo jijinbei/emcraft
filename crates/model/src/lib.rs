@@ -62,7 +62,7 @@ pub use edit::MaterialUse;
 pub use element::{Arrangement, LumpedElement, MAX_ELEMENTS};
 pub use error::{ModelError, Result, positive};
 pub use geom::{Aabb, CVec3, Point3, Vec3};
-pub use job::{Job, MAX_MODES, Order, Setup};
+pub use job::{Job, MAX_MODES, Order, ParticleRun, Setup};
 pub use material::{MAX_POLES, Material, Pole, SecondOrder};
 pub use mesh::{Boundary, BoundaryFace, Buckets, Grid, Mesh};
 pub use model::{Issue, MAX_WALL_ROUGHNESS, MAX_WALL_THICKNESS, Model};

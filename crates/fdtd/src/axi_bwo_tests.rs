@@ -69,7 +69,7 @@ impl Cells {
     fn grid(&self, outer: f64, length: f64, wall: Wall) -> AxiGrid {
         let dz = self.h / self.fine as f64;
         let nz = (length / dz).round() as usize;
-        AxiGrid::new((outer / self.h).round() as usize, nz, self.h, length / nz as f64, wall).unwrap()
+        AxiGrid::new((outer / self.h).round() as usize, self.h, Axis { cells: nz, h: length / nz as f64, wall }).unwrap()
     }
 }
 
@@ -81,7 +81,7 @@ fn ringing(s: Structure, cells: Cells, periods: usize, m: usize, shift: f64) -> 
     let mut pic = AxiPic::new(g, g.time_step(0.95), Pusher::Boris).unwrap();
     let k = 2.0 * PI * m as f64 / lz;
     let a = s.narrowest;
-    pic.set(2, |r, z| if r < a { j(0, X01 * r / a) * (k * z + shift).cos() } else { 0.0 });
+    pic.set(Component::Ez, |r, z| if r < a { j(0, X01 * r / a) * (k * z + shift).cos() } else { 0.0 });
     pic.set_metal(|r, z| r > (s.wall)(z));
     pic
 }
@@ -154,7 +154,7 @@ fn cold_band(s: Structure, cells: Cells, periods: usize, modes: std::ops::RangeI
                 for i in 0..lat.nr {
                     let r = (i as f64 + if lat.r_node { 0.0 } else { 0.5 }) * g.dr;
                     let ring = if lat.r_node && i == 0 { PI * 0.25 * g.dr * g.dr } else { 2.0 * PI * r * g.dr };
-                    w += coefficient * p[lat.at(i, kk)].norm_sqr() * ring * g.dz;
+                    w += coefficient * p[lat.at(i, kk)].norm_sqr() * ring * g.z.h;
                 }
             }
         }
@@ -165,7 +165,7 @@ fn cold_band(s: Structure, cells: Cells, periods: usize, modes: std::ops::RangeI
             .iter()
             .map(|rb| {
                 let i = (rb / g.dr).round() as usize;
-                (0..lez.nz).map(|kk| ph[EZ][lez.at(i, kk)] * Z::from_polar(g.dz / lz, -kb * (kk as f64 + 0.5) * g.dz)).sum::<Z>().norm()
+                (0..lez.nz).map(|kk| ph[EZ][lez.at(i, kk)] * Z::from_polar(g.z.h / lz, -kb * (kk as f64 + 0.5) * g.z.h)).sum::<Z>().norm()
             })
             .collect();
         (k * s.period, f, amplitudes, w)
@@ -196,7 +196,7 @@ fn tube(s: Structure, cells: Cells, periods: f64) -> (AxiPic, f64) {
     let (buffer, length) = (0.02f64, periods * s.period);
     let g = cells.grid(s.outer, length + 2.0 * (layer as f64 * dz + buffer), Wall::Conductor);
     let mut pic = AxiPic::new(g, g.time_step(0.95), Pusher::Boris).unwrap();
-    let z0 = layer as f64 * g.dz + buffer;
+    let z0 = layer as f64 * g.z.h + buffer;
     pic.set_metal(|r, z| {
         r > match z {
             z if z <= z0 => s.drift[0],
@@ -239,7 +239,7 @@ struct Oscillation {
 fn bwo(s: Structure, cells: Cells, periods: f64, beam: Beam, time: f64, band: (f64, f64)) -> Oscillation {
     let (mut pic, z0) = tube(s, cells, periods);
     let dt = pic.dt();
-    pic.set(5, |_, _| beam.b);
+    pic.set(Component::Bz, |_, _| beam.b);
     let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
     let pulse = Pulse::Steady { current: beam.current, rise: 1e-9 };
     let energy = beam.energy * -ELECTRON.charge;
@@ -288,7 +288,7 @@ fn reflections(s: Structure, cells: Cells, periods: usize, inset: usize, freqs: 
     let (mut pic, z0) = tube(s, cells, periods as f64);
     let mid = z0 + 0.5 * periods as f64 * s.period;
     let a = s.narrowest;
-    pic.set(2, |r, z| if r < a { j(0, X01 * r / a) * (-((z - mid) / (0.3 * s.period)).powi(2)).exp() } else { 0.0 });
+    pic.set(Component::Ez, |r, z| if r < a { j(0, X01 * r / a) * (-((z - mid) / (0.3 * s.period)).powi(2)).exp() } else { 0.0 });
     let count = 8;
     let ms: Vec<f64> = (inset..inset + count).map(|m| m as f64).collect();
     let z_left = ms.iter().map(|m| z0 + (m + 0.3) * s.period);

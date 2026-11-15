@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::analysis::Analysis;
 use crate::band::Band;
 use crate::error::{Result, invalid};
+use crate::particles::{Pusher, RunGrid};
 use crate::quantity::{Hertz, Metres, Positive};
 
 /// The most eigenmodes a run may ask for.
@@ -78,19 +79,47 @@ pub enum Setup {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         frequency: Option<Hertz>,
     },
-    /// Particles in the box's fields for `time` (s) on a grid of `cell`, pushed by Vay's scheme
-    /// or (`vay` false) Boris's; in a body of revolution about z (`axisymmetric`), its cells
-    /// `fine` times finer along z than across.
-    Particles {
-        time: Positive,
-        cell: Metres,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        vay: bool,
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        axisymmetric: bool,
-        #[serde(default = "one", skip_serializing_if = "is_one")]
-        fine: usize,
-    },
+    /// Particles in the fields.
+    Particles(ParticleRun),
+}
+
+/// A particle run's settings: `time` (s) on cells of `cell`, its push and its grid.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ParticleRunFile", into = "ParticleRunFile")]
+pub struct ParticleRun {
+    pub time: Positive,
+    pub cell: Metres,
+    pub pusher: Pusher,
+    pub grid: RunGrid,
+}
+
+/// [`ParticleRun`] as a project file holds it: Boris's push unless `vay`, the box unless
+/// `axisymmetric`, `fine` cells along z per cell across.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+struct ParticleRunFile {
+    time: Positive,
+    cell: Metres,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    vay: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    axisymmetric: bool,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    fine: usize,
+}
+
+impl TryFrom<ParticleRunFile> for ParticleRun {
+    type Error = String;
+    fn try_from(f: ParticleRunFile) -> std::result::Result<ParticleRun, String> {
+        let pusher = if f.vay { Pusher::Vay } else { Pusher::Boris };
+        Ok(ParticleRun { time: f.time, cell: f.cell, pusher, grid: RunGrid::new(f.axisymmetric, f.fine)? })
+    }
+}
+
+impl From<ParticleRun> for ParticleRunFile {
+    fn from(r: ParticleRun) -> ParticleRunFile {
+        let axisymmetric = matches!(r.grid, RunGrid::Revolution { .. });
+        ParticleRunFile { time: r.time, cell: r.cell, vay: r.pusher == Pusher::Vay, axisymmetric, fine: r.grid.fine() }
+    }
 }
 
 /// A particle run's cells along z per cell across, by default.
@@ -112,7 +141,7 @@ impl Setup {
             Setup::Radiation { .. } => Analysis::Radiation,
             Setup::TimeDomain { .. } => Analysis::TimeDomain,
             Setup::System { .. } => Analysis::System,
-            Setup::Particles { .. } => Analysis::Particles,
+            Setup::Particles(_) => Analysis::Particles,
         }
     }
 
@@ -133,7 +162,7 @@ impl Setup {
         match self {
             Setup::Frequency { band, .. } | Setup::TimeDomain { band, .. } | Setup::System { band, .. } => Some(*band),
             Setup::Eigenmodes { near: f, .. } | Setup::Radiation { frequency: f, .. } => Some(Band { start: *f, stop: *f }),
-            Setup::Particles { .. } => None,
+            Setup::Particles(_) => None,
         }
     }
 }

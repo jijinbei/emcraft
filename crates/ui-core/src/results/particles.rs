@@ -16,11 +16,6 @@ use crate::lang::{args, tr, trf};
 /// The axes' names.
 const AXES: [&str; 3] = ["x", "y", "z"];
 
-/// The axis the particles run along (emcraft_engine::particles::along).
-pub fn along(s: &Session) -> usize {
-    emcraft_engine::particles::along(s)
-}
-
 /// The span of `values` with a little room, never empty.
 fn span(values: impl Iterator<Item = f64>) -> (f64, f64) {
     let (lo, hi) = values.filter(|v| v.is_finite()).fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), v| (a.min(v), b.max(v)));
@@ -134,7 +129,7 @@ pub fn probes(r: &PicResult) -> Option<Chart> {
 /// The page's charts, in order.
 pub fn charts(s: &Session) -> Vec<Chart> {
     let Some(r) = s.results().particles.as_deref() else { return Vec::new() };
-    let axis = along(s);
+    let axis = r.along.min(2);
     std::iter::once(energy(r)).chain(currents(r)).chain(phase_space(s, r, axis)).chain(probes(r)).collect()
 }
 

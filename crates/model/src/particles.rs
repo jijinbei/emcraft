@@ -32,6 +32,62 @@ pub const MAX_MAGNETIC: f64 = 1e4;
 /// The most macro-particles a wall's node emits a step.
 pub const MAX_PER_NODE: usize = 64;
 
+/// The most cells along z per cell across in a body of revolution.
+pub const MAX_FINE: usize = 16;
+
+emcraft_macros::named_enum! {
+    /// How a step turns a particle's momentum in the fields.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub enum Pusher {
+        /// Boris's rotation (J. P. Boris, 1970): the usual one.
+        #[default]
+        Boris = "boris",
+        /// Vay's (Phys. Plasmas 15:056701, 2008): right for relativistic particles whose E and
+        /// v × B cancel.
+        Vay = "vay",
+    }
+}
+
+/// The grid a particle run is on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunGrid {
+    /// The box: the geometry's bounds in cubic cells.
+    #[default]
+    Box,
+    /// A body of revolution about z, its cells `fine` times finer along z than across.
+    Revolution { fine: std::num::NonZeroUsize },
+}
+
+impl RunGrid {
+    /// The grid a run's flags ask for: `fine` (1 to [`MAX_FINE`]) other than 1 only in a body
+    /// of revolution.
+    ///
+    /// ```
+    /// use emcraft_model::particles::RunGrid;
+    /// assert!(matches!(RunGrid::new(true, 4), Ok(RunGrid::Revolution { .. })));
+    /// assert_eq!(RunGrid::new(false, 1).unwrap(), RunGrid::Box);
+    /// assert!(RunGrid::new(false, 4).is_err() && RunGrid::new(true, 0).is_err() && RunGrid::new(true, 17).is_err());
+    /// ```
+    pub fn new(axisymmetric: bool, fine: usize) -> std::result::Result<RunGrid, String> {
+        let fine = std::num::NonZeroUsize::new(fine)
+            .filter(|f| f.get() <= MAX_FINE)
+            .ok_or_else(|| format!("1 to {MAX_FINE} cells along z per cell across"))?;
+        match (axisymmetric, fine.get()) {
+            (true, _) => Ok(RunGrid::Revolution { fine }),
+            (false, 1) => Ok(RunGrid::Box),
+            (false, _) => Err("cells finer along z are for a body of revolution (axisymmetric)".to_owned()),
+        }
+    }
+
+    /// Cells along z per cell across: 1 in the box.
+    pub fn fine(self) -> usize {
+        match self {
+            RunGrid::Box => 1,
+            RunGrid::Revolution { fine } => fine.get(),
+        }
+    }
+}
+
 emcraft_macros::named_enum! {
     /// How the box ends an axis.
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

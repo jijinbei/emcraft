@@ -22,26 +22,36 @@ use std::cell::Cell;
 
 use emcraft_fdtd::axi::{AxiGrid, AxiPic, Injection, Rings};
 use emcraft_fdtd::pic;
-use emcraft_model::particles::Wall;
+use emcraft_model::ParticleRun;
 use emcraft_particles::ELECTRON;
 use serde_json::Value;
 
-use super::{COURANT, EV, End, Frame, LAYER, Run, SNAPSHOT, Settings, Snap, bunch_pulse, fdtd, finish, record, steps_of};
+use super::{COURANT, EV, Frame, INSET, LAYER, Run, SNAPSHOT, Snap, cells_along, fdtd, injections, open_on_periodic, run_to_end, steps_of};
 use crate::{EngineError, Params, Result, Session};
 
-/// A run in a body of revolution and its radius R (m): the grid's corner sits at (−R, −R).
+/// A run in a body of revolution, its radius R (m) and the z of its grid's low end (m): the
+/// grid's corner sits at (−R, −R, z₀).
 struct Axi {
     pic: AxiPic,
     radius: f64,
+    z_origin: f64,
+}
+
+/// A point about the axis: its radius and z (m), and the cosine and sine of its angle.
+struct Polar {
+    r: f64,
+    z: f64,
+    cos: f64,
+    sin: f64,
 }
 
 impl Axi {
-    /// (r, z) of a point (m from the grid's corner), and the cosine and sine of its angle.
-    fn polar(&self, at: [f64; 3]) -> (f64, f64, f64, f64) {
+    /// A point (m from the grid's corner) about the axis.
+    fn polar(&self, at: [f64; 3]) -> Polar {
         let (x, y) = (at[0] - self.radius, at[1] - self.radius);
         let r = x.hypot(y);
-        let (c, s) = if r > 0.0 { (x / r, y / r) } else { (1.0, 0.0) };
-        (r, at[2], c, s)
+        let (cos, sin) = if r > 0.0 { (x / r, y / r) } else { (1.0, 0.0) };
+        Polar { r, z: at[2], cos, sin }
     }
 }
 
@@ -49,19 +59,42 @@ impl Run for Axi {
     fn advance(&mut self) -> Result<pic::Moved> {
         self.pic.step().map_err(fdtd)
     }
-    fn energies(&self) -> (f64, f64) {
+    fn energy(&self) -> pic::Energy {
         self.pic.energy()
     }
     fn held(&self) -> usize {
         self.pic.rings()
     }
     fn e_at_point(&self, at: [f64; 3]) -> [f64; 3] {
-        let (r, z, c, s) = self.polar(at);
+        let Polar { r, z, cos, sin } = self.polar(at);
         let [er, et, ez] = self.pic.field_at(r, z).0;
-        [er * c - et * s, er * s + et * c, ez]
+        [er * cos - et * sin, er * sin + et * cos, ez]
     }
     fn now(&self) -> f64 {
         self.pic.time()
+    }
+    /// The rings, each a particle where its ring passes the golden angle times its index round
+    /// the axis.
+    fn snapshot(&self) -> Vec<Snap> {
+        let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
+        let stride = self.pic.rings().div_ceil(SNAPSHOT).max(1);
+        self.pic
+            .populations()
+            .iter()
+            .enumerate()
+            .flat_map(|(k, pop)| pop.rings.iter().map(move |q| (k, pop.species, q)))
+            .step_by(stride)
+            .enumerate()
+            .map(|(n, (population, species, q))| {
+                let (s, c) = (golden * n as f64).sin_cos();
+                Snap {
+                    x: [q.r * c, q.r * s, self.z_origin + q.z],
+                    u: [q.u[0] * c - q.u[1] * s, q.u[0] * s + q.u[1] * c, q.u[2]],
+                    energy: species.kinetic(q.u) / EV,
+                    population,
+                }
+            })
+            .collect()
     }
 }
 
@@ -87,7 +120,7 @@ fn unsupported(s: &Session) -> Option<String> {
 }
 
 /// The run in a body of revolution.
-pub(super) fn solve(s: &mut Session, p: &Params, set: &Settings) -> Result<Value> {
+pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize) -> Result<Value> {
     if let Some(why) = unsupported(s) {
         return Err(EngineError::failed(why));
     }
@@ -99,24 +132,17 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &Settings) -> Result<Value
         return Err(EngineError::failed("the geometry has no extent about the z axis: a body of revolution turns about x = y = 0"));
     }
     let (z_lo, z_hi) = (b.min.z, b.max.z);
-    let nr = (radius / set.cell).round().clamp(2.0, 1e9) as usize;
-    let dr = radius / nr as f64;
-    let nz = ((z_hi - z_lo) / (set.cell / set.fine as f64)).round().clamp(2.0, 1e9) as usize;
-    let dz = (z_hi - z_lo) / nz as f64;
+    // At least two cells each way: a ring between the axis and the wall, and one between the ends.
+    let (nr, dr) = cells_along(radius, set.cell.get(), 2);
+    let (nz, dz) = cells_along(z_hi - z_lo, set.cell.get() / fine as f64, 2);
+    open_on_periodic(&m)?;
     let opened = |high: bool| m.open.iter().any(|f| f.axis == 2 && f.high == high);
-    let layer = (LAYER * set.fine).min(emcraft_fdtd::pic::MAX_LAYER);
+    let layer = (LAYER * fine).min(emcraft_fdtd::pic::MAX_LAYER);
     let (below, above) = (usize::from(opened(false)) * layer, usize::from(opened(true)) * layer);
-    let wall = match m.walls[2] {
-        Wall::Periodic => pic::Wall::Periodic,
-        Wall::Conductor => pic::Wall::Conductor,
-    };
-    if wall == pic::Wall::Periodic && (below + above > 0) {
-        return Err(EngineError::failed("an open end on a periodic axis: open faces are on axes closed by walls"));
-    }
-    let grid = AxiGrid::new(nr, nz + below + above, dr, dz, wall).map_err(fdtd)?;
+    let grid = AxiGrid::new(nr, dr, pic::Axis { cells: nz + below + above, h: dz, wall: m.walls[2].into() }).map_err(fdtd)?;
     let z_origin = z_lo - below as f64 * dz;
     let dt = grid.time_step(COURANT);
-    let steps = steps_of(p, set.time, dt)?;
+    let steps = steps_of(p, set.time.get(), dt)?;
     let mut run = AxiPic::new(grid, dt, set.pusher).map_err(fdtd)?;
     for high in [false, true].into_iter().filter(|h| opened(*h)) {
         run.absorb(high, layer).map_err(fdtd)?;
@@ -124,7 +150,7 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &Settings) -> Result<Value
     if s.model.domain.solid.is_some() {
         // The half plane θ = 0, just inside the box (a solid's own faces are not inside it).
         let dielectric = Cell::new(None);
-        let inset = 1e-6 * radius;
+        let inset = INSET * radius;
         run.set_metal(|r, z| {
             let point = emcraft_model::Point3::new(r.min(radius - inset), 0.0, (z + z_origin).clamp(z_lo + inset, z_hi - inset));
             match s.model.material_at(point) {
@@ -145,44 +171,16 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &Settings) -> Result<Value
         }
     }
     if m.magnetic[2] != 0.0 {
-        run.set(5, |_, _| m.magnetic[2]);
+        run.set(emcraft_fdtd::axi::Component::Bz, |_, _| m.magnetic[2]);
     }
     let population = run.add(Rings { species: ELECTRON, rings: Vec::new() }).map_err(fdtd)?;
-    let beams = m.beams.iter().map(|b| (b.face, pic::Pulse::Steady { current: b.current, rise: b.rise }, b.inner, b.radius, b.energy, b.per_step));
-    let bunches = m.bunches.iter().map(|b| (b.face, bunch_pulse(b), 0.0, b.radius, b.energy, b.per_step));
-    for (face, pulse, inner, outer, energy, per_step) in beams.chain(bunches) {
-        let injection = Injection { high: face.high, population, pulse, inner, radius: outer, energy: energy * EV, per_step };
-        run.inject(injection).map_err(|e| EngineError::failed(format!("the beam through {}: {e}", face.name())))?;
+    for i in injections(&m) {
+        let injection =
+            Injection { high: i.face.high, population, pulse: i.pulse, inner: i.inner, radius: i.radius, energy: i.energy, per_step: i.per_step };
+        run.inject(injection).map_err(|e| EngineError::failed(format!("the {} through {}: {e}", i.kind, i.face.name())))?;
     }
     let origin = [-radius, -radius, z_origin];
     let probes: Vec<[f64; 3]> = m.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
-    let mut axi = Axi { pic: run, radius };
-    let before = axi.energies().0;
-    let rec = record(&mut axi, steps, dt, &probes)?;
     let frame = Frame { origin, cells: [2 * nr, 2 * nr, nz + below + above], h: [dr, dr, dz], dt, steps, axisymmetric: true };
-    let end = End { fields: (before, axi.energies().0), snapshot: snapshot(&axi.pic, z_origin), particles: axi.pic.rings() };
-    finish(s, frame, rec, &probes, end)
-}
-
-/// At most [`SNAPSHOT`] of the run's rings, evenly chosen, each a particle where its ring passes
-/// the golden angle times its index round the axis; `z0` the grid's z corner (m).
-fn snapshot(run: &AxiPic, z0: f64) -> Vec<Snap> {
-    let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
-    let stride = run.rings().div_ceil(SNAPSHOT).max(1);
-    run.populations()
-        .iter()
-        .enumerate()
-        .flat_map(|(k, pop)| pop.rings.iter().map(move |q| (k, pop.species, q)))
-        .step_by(stride)
-        .enumerate()
-        .map(|(n, (population, species, q))| {
-            let (s, c) = (golden * n as f64).sin_cos();
-            Snap {
-                x: [q.r * c, q.r * s, z0 + q.z],
-                u: [q.u[0] * c - q.u[1] * s, q.u[0] * s + q.u[1] * c, q.u[2]],
-                energy: species.kinetic(q.u) / EV,
-                population,
-            }
-        })
-        .collect()
+    run_to_end(s, &mut Axi { pic: run, radius, z_origin }, frame, &probes)
 }
