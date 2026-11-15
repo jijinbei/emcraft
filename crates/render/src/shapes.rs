@@ -69,6 +69,45 @@ pub enum Shape {
     },
 }
 
+/// The labels' size on the charts and plot frames ([`crate::text`]'s scale).
+pub const LABEL_SCALE: usize = 2;
+
+impl Shape {
+    /// A line from `a` to `b`, `width` pixels wide.
+    pub fn line(a: [f64; 2], b: [f64; 2], width: f64, color: Rgb) -> Shape {
+        Shape::Line { a, b, width, color }
+    }
+
+    /// A label at the charts' size, its start at `at` (top), written left to right.
+    pub fn label(at: [f64; 2], text: impl Into<String>, color: Rgb) -> Shape {
+        Shape::Text { at, text: text.into(), scale: LABEL_SCALE, color, align: Align::Left, up: false }
+    }
+
+    /// The label placed by `align` about its anchor instead (other shapes unchanged).
+    #[must_use]
+    pub fn aligned(self, a: Align) -> Shape {
+        match self {
+            Shape::Text { at, text, scale, color, up, .. } => Shape::Text { at, text, scale, color, align: a, up },
+            other => other,
+        }
+    }
+
+    /// The label written upwards instead (other shapes unchanged).
+    #[must_use]
+    pub fn upwards(self) -> Shape {
+        match self {
+            Shape::Text { at, text, scale, color, align, .. } => Shape::Text { at, text, scale, color, align, up: true },
+            other => other,
+        }
+    }
+}
+
+/// The four sides of the rectangle `[x, y, width, height]` (pixels), `width` wide.
+pub fn outline([x, y, w, h]: [f64; 4], width: f64, color: Rgb) -> [Shape; 4] {
+    [([x, y], [x + w, y]), ([x + w, y], [x + w, y + h]), ([x + w, y + h], [x, y + h]), ([x, y + h], [x, y])]
+        .map(|(a, b)| Shape::line(a, b, width, color))
+}
+
 /// A picture as shapes: its size (pixels), its ground and the shapes in drawing order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Drawing {

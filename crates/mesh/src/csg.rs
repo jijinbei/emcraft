@@ -555,17 +555,6 @@ fn inside(pieces: &[Piece], k: usize, cut: &Cut, other: &Surface, all: &[Point3]
     (0..pieces.len()).map(|i| region_inside.get(&sets.find(i)).copied().unwrap_or(false)).collect()
 }
 
-/// Whether a surface is closed: every edge held once each way.
-fn closed(s: &Surface) -> bool {
-    let mut half: HashMap<[u32; 2], i32> = HashMap::new();
-    for t in &s.triangles {
-        for (i, j) in [(0, 1), (1, 2), (2, 0)] {
-            *half.entry([t[i], t[j]]).or_default() += 1;
-        }
-    }
-    !half.iter().any(|(e, n)| *n != 1 || half.get(&[e[1], e[0]]) != Some(&1))
-}
-
 /// `a op b`; b's tags are offset by `b_tags` in the result.
 pub fn combine(a: &Surface, b: &Surface, op: Op, b_tags: u32) -> Result<Surface> {
     combine_marked(a, b, op, b_tags).map(|(s, _)| s)
@@ -576,7 +565,7 @@ pub fn combine(a: &Surface, b: &Surface, op: Op, b_tags: u32) -> Result<Surface>
 pub fn combine_simplified(a: &Surface, b: &Surface, op: Op, b_tags: u32) -> Result<Surface> {
     let (mut s, crossing) = combine_marked(a, b, op, b_tags)?;
     crate::crease::simplify(&mut s, &crossing);
-    if !closed(&s) {
+    if !crate::shared::closed(&s.triangles) {
         return Err(fail("the combined surface does not close after its creases were simplified"));
     }
     Ok(s)
@@ -610,7 +599,7 @@ fn combine_marked(a: &Surface, b: &Surface, op: Op, b_tags: u32) -> Result<(Surf
             out.tags.push(s.tags[piece.triangle as usize] + if k == 1 { b_tags } else { 0 });
         }
     }
-    if !closed(&out) {
+    if !crate::shared::closed(&out.triangles) {
         return Err(fail("the combined surface does not close (the bodies meet degenerately); move or resize a body slightly"));
     }
     if out.triangles.is_empty() {

@@ -116,6 +116,14 @@ use assembly::Space;
 use losses::WallLoss;
 use media::Media;
 
+/// Iterative refinement's steps (each a residual and a solve with the factor): a field's solve
+/// takes enough to bring its backward error to rounding on the meshes solved; an auxiliary
+/// solve used only through a projection or a sum (a Huygens surface's, the temperatures)
+/// fewer; vectors that only span a basis, whose residual is checked in full, none.
+pub(crate) const FIELD_REFINEMENT: usize = 4;
+pub(crate) const AUXILIARY_REFINEMENT: usize = 2;
+pub(crate) const UNREFINED: usize = 0;
+
 /// The most unknowns a problem factored whole may have.
 pub const MAX_UNKNOWNS: usize = 2_000_000;
 /// The most unknowns a second-order problem solved iteratively may have (its first-order part
@@ -561,7 +569,7 @@ impl Driven {
                 .collect();
             // Unrefined: the vectors only span the basis, whose residual is checked in full.
             last = f
-                .solve_refined_many(&a, &rhs, 0)?
+                .solve_refined_many(&a, &rhs, UNREFINED)?
                 .into_iter()
                 .map(|(mut y, _)| {
                     y.truncate(n);

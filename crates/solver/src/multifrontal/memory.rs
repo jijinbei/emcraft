@@ -17,6 +17,7 @@ use std::cell::Cell;
 use faer::Par;
 
 use super::{Analysis, FactorError, MAX_FRONT, Tree};
+use crate::memory::{ENTRY_BYTES, OutOfMemory};
 
 /// The share of the available memory a factorization plans to use: the rest is left for what
 /// runs beside it (the matrices, the right-hand sides and fields, the allocator's slack).
@@ -32,7 +33,7 @@ const UNKNOWN_FRONT: usize = 20_000;
 /// the factor may go to a scratch file on disk once the memory set for it is full.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Shape {
-    pub update: fn(usize) -> usize,
+    pub update: super::Triangle,
     pub kept: fn(usize, usize) -> usize,
     pub out_of_core: bool,
 }
@@ -46,13 +47,6 @@ pub(crate) struct Plan {
     pub in_memory: u64,
     pub working: u64,
     pub factor: u64,
-}
-
-/// The memory the system reports available (bytes; Linux's `MemAvailable`), `None` elsewhere.
-pub(crate) fn available_memory() -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
-    let line = text.lines().find(|l| l.starts_with("MemAvailable:"))?;
-    line.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kb| kb.saturating_mul(1024))
 }
 
 impl Plan {
@@ -69,7 +63,7 @@ impl Plan {
     pub(crate) fn new(an: &Analysis, shape: Shape, budget: u64, available: Option<u64>, threads: usize) -> Result<Plan, FactorError> {
         check_fronts(an, if available.is_some() { MAX_FRONT } else { UNKNOWN_FRONT })?;
         let tree = Tree::new(an);
-        let factor = 16 * factor_entries(an, shape);
+        let factor = ENTRY_BYTES * factor_entries(an, shape);
         if !shape.out_of_core && factor > budget {
             return Err(FactorError::FactorTooLarge { needs: factor, budget });
         }
@@ -77,14 +71,14 @@ impl Plan {
             return Ok(Plan {
                 threads: threads.max(1),
                 in_memory: budget.min(UNKNOWN_BUDGET),
-                working: 16 * working(an, &tree, shape, threads),
+                working: ENTRY_BYTES * working(an, &tree, shape, threads),
                 factor,
             });
         };
         let usable = (available as f64 * HEADROOM) as u64;
         let mut t = threads.max(1);
         loop {
-            let working = 16 * working(an, &tree, shape, t);
+            let working = ENTRY_BYTES * working(an, &tree, shape, t);
             let left = usable.saturating_sub(working);
             let fits = working <= usable && (shape.out_of_core || factor <= left);
             if fits {
@@ -92,7 +86,7 @@ impl Plan {
             }
             if t == 1 {
                 let needs = if shape.out_of_core { working } else { working.saturating_add(factor) };
-                return Err(FactorError::OutOfMemory { needs, available: usable });
+                return Err(OutOfMemory { what: "the factorization", bytes: needs, available: Some(usable) }.into());
             }
             t = t.div_ceil(2);
         }
@@ -116,7 +110,7 @@ fn factor_entries(an: &Analysis, shape: Shape) -> u64 {
 /// [`Plan::new`]).
 fn working(an: &Analysis, tree: &Tree, shape: Shape, threads: usize) -> u64 {
     let (tasks, top) = tree.split(threads);
-    let update = |s: usize| (shape.update)(an.super_rows[s].len() - an.columns(s).len()) as u64;
+    let update = |s: usize| shape.update.entries(an.super_rows[s].len() - an.columns(s).len()) as u64;
     let mut peaks: Vec<u64> = tasks.iter().map(|&s| sequential(an, tree, shape, tree.first[s]..=s, 0).0).collect();
     peaks.sort_unstable_by(|a, b| b.cmp(a));
     let finished: u64 = tasks.iter().map(|&s| update(s)).sum();
@@ -134,7 +128,7 @@ fn sequential(an: &Analysis, tree: &Tree, shape: Shape, order: impl IntoIterator
     let mut peak = held;
     for s in order {
         let (k, m) = (an.columns(s).len(), an.super_rows[s].len());
-        let update = |c: usize| (shape.update)(an.super_rows[c].len() - an.columns(c).len()) as u64;
+        let update = |c: usize| shape.update.entries(an.super_rows[c].len() - an.columns(c).len()) as u64;
         let incoming: u64 = tree.children[s].iter().map(|&c| update(c)).sum();
         let (front, own, kept) = ((m * m) as u64, update(s), (shape.kept)(k, m) as u64);
         let rest = held.saturating_sub(incoming);
@@ -178,8 +172,8 @@ mod tests {
     use super::*;
     use crate::multifrontal::testing::grid_pattern;
 
-    const LDLT: Shape = Shape { update: |mu| mu * (mu + 1) / 2, kept: |k, m| k * m, out_of_core: true };
-    const LU: Shape = Shape { update: |mu| mu * mu, kept: |k, m| k * m + k * (m - k), out_of_core: false };
+    const LDLT: Shape = Shape { update: super::super::Triangle::Lower, kept: |k, m| k * m, out_of_core: true };
+    const LU: Shape = Shape { update: super::super::Triangle::Full, kept: |k, m| k * m + k * (m - k), out_of_core: false };
 
     fn analysis() -> Analysis {
         let (a, _, xyz) = grid_pattern(12, 10, 9);
@@ -217,12 +211,12 @@ mod tests {
         // Less: refused, saying what it needs.
         assert_eq!(
             Plan::new(&an, LDLT, u64::MAX, Some(one / 2), 8),
-            Err(FactorError::OutOfMemory { needs: one, available: ((one / 2) as f64 * HEADROOM) as u64 })
+            Err(FactorError::Memory(OutOfMemory { what: "the factorization", bytes: one, available: Some(((one / 2) as f64 * HEADROOM) as u64) }))
         );
         // A factor kept in memory must fit beside its fronts.
         let lu = 16 * working(&an, &tree, LU, 1);
         let factor = 16 * factor_entries(&an, LU);
-        assert!(matches!(Plan::new(&an, LU, u64::MAX, room(lu), 1), Err(FactorError::OutOfMemory { .. })));
+        assert!(matches!(Plan::new(&an, LU, u64::MAX, room(lu), 1), Err(FactorError::Memory(OutOfMemory { available: Some(_), .. }))));
         assert_eq!(Plan::new(&an, LU, u64::MAX, room(lu + factor), 1).unwrap().threads, 1);
         // A front beyond the limit: refused before any is made.
         let largest = an.super_rows.iter().map(Vec::len).max().unwrap();

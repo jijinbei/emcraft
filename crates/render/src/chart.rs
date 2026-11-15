@@ -4,7 +4,7 @@
 
 use crate::axes::{self, Axis};
 use crate::palette::{Palette, Pen};
-use crate::shapes::{Align, Drawing, Shape};
+use crate::shapes::{Align, Drawing, Shape, outline};
 use crate::{Canvas, Rgb};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,11 +156,6 @@ pub fn layout_of(chart: &Chart, width: usize, height: usize) -> Layout {
     at
 }
 
-/// A line from `a` to `b`.
-fn line(a: [f64; 2], b: [f64; 2], width: f64, color: Rgb) -> Shape {
-    Shape::Line { a, b, width, color }
-}
-
 /// A diamond marker of half-diagonal `r` about `q`.
 fn diamond(q: [f64; 2], r: f64, color: Rgb) -> [Shape; 2] {
     [
@@ -172,7 +167,7 @@ fn diamond(q: [f64; 2], r: f64, color: Rgb) -> [Shape; 2] {
 /// A diamond's outline of half-diagonal `r` about `q`.
 fn hollow_diamond(q: [f64; 2], r: f64, color: Rgb) -> Vec<Shape> {
     let corners = [[q[0], q[1] - r], [q[0] + r, q[1]], [q[0], q[1] + r], [q[0] - r, q[1]]];
-    (0..4).map(|k| line(corners[k], corners[(k + 1) % 4], (r * 0.35).max(1.0), color)).collect()
+    (0..4).map(|k| Shape::line(corners[k], corners[(k + 1) % 4], (r * 0.35).max(1.0), color)).collect()
 }
 
 /// A dashed polyline through `pts`, the dashes running on across its corners; the dashes with
@@ -195,7 +190,7 @@ fn dashed(pts: &[[f64; 2]], width: f64, color: Rgb, keep: impl Fn([f64; 2]) -> b
             let (on, left) = if phase < DASH[0] { (true, DASH[0] - phase) } else { (false, period - phase) };
             let step = left.min(len - t);
             if on && (keep(at(t)) || keep(at(t + step))) {
-                out.push(line(at(t), at(t + step), width, color));
+                out.push(Shape::line(at(t), at(t + step), width, color));
             }
             t += step;
             phase = (phase + step) % period;
@@ -215,9 +210,9 @@ fn sample(s: &Series, at: [f64; 2], color: Rgb) -> Vec<Shape> {
     let [lx, ly] = at;
     let (a, b, mid) = ([lx, ly + 7.0], [lx + 26.0, ly + 7.0], [lx + 13.0, ly + 7.0]);
     match s.style {
-        Style::Line => vec![line(a, b, s.drawn_width(), color)],
+        Style::Line => vec![Shape::line(a, b, s.drawn_width(), color)],
         Style::Markers => diamond(mid, s.drawn_width(), color).to_vec(),
-        Style::Joined => std::iter::once(line(a, b, 1.0, color)).chain(diamond(mid, s.drawn_width(), color)).collect(),
+        Style::Joined => std::iter::once(Shape::line(a, b, 1.0, color)).chain(diamond(mid, s.drawn_width(), color)).collect(),
         Style::Dashed => dashed(&[a, b], s.drawn_width(), color, |_| true),
         Style::Hollow => hollow_diamond(mid, s.drawn_width(), color),
         Style::Band => vec![band(vec![[lx, ly + 2.0], [lx + 26.0, ly + 2.0], [lx + 26.0, ly + 12.0], [lx, ly + 12.0]], [lx, ly, 26.0, 14.0], color)],
@@ -244,7 +239,7 @@ pub fn drawing(chart: &Chart, width: usize, height: usize, palette: &Palette) ->
     let inside = |q: [f64; 2]| q[0] >= x0 - 1.0 && q[0] <= x0 + pw + 1.0 && q[1] >= y0 - 1.0 && q[1] <= y0 + ph + 1.0;
     // A point a log axis cannot place (zero, negative) is left out.
     let placed = |p: &&[f64; 2]| p[0].is_finite() && p[1].is_finite() && (!layout.log[0] || p[0] > 0.0) && (!layout.log[1] || p[1] > 0.0);
-    let title = Shape::Text { at: [x0, 12.0], text: chart.title.clone(), scale: 2, color: ink, align: Align::Left, up: false };
+    let title = Shape::label([x0, 12.0], chart.title.clone(), ink);
     // The axes over the ranges laid out (an equal chart's widened).
     let (mut ax, mut ay) = (chart.x.clone(), chart.y.clone());
     if chart.look.equal {
@@ -256,20 +251,13 @@ pub fn drawing(chart: &Chart, width: usize, height: usize, palette: &Palette) ->
         axes::frame_shapes([x0, y0, pw, ph], &ax, &ay, ink, chart.look.grid.then_some(palette.grid))
     } else {
         let named = [&ax.label, &ay.label].into_iter().filter(|l| !l.is_empty()).map(String::as_str).collect::<Vec<_>>().join(" · ");
-        vec![Shape::Text { at: [x0 + pw / 2.0, y0 + ph + 30.0], text: named, scale: 2, color: ink, align: Align::Center, up: false }]
+        vec![Shape::label([x0 + pw / 2.0, y0 + ph + axes::X_NAME_BELOW], named, ink).aligned(Align::Center)]
     };
     let marks = chart.marks.iter().filter(|(x, _)| x.is_finite() && *x > xa && *x < xb).flat_map(|(x, label)| {
         let px = to_px([*x, layout.y.0])[0];
         let dashes = std::iter::successors(Some(y0), |y| Some(y + 10.0)).take_while(move |y| *y < y0 + ph);
-        let dashes = dashes.map(move |y| line([px, y], [px, (y + 6.0).min(y0 + ph)], 1.2, palette.mark));
-        dashes.chain(std::iter::once(Shape::Text {
-            at: [px + 4.0, y0 + 4.0],
-            text: label.clone(),
-            scale: 2,
-            color: palette.ink_dim,
-            align: Align::Left,
-            up: false,
-        }))
+        let dashes = dashes.map(move |y| Shape::line([px, y], [px, (y + 6.0).min(y0 + ph)], 1.2, palette.mark));
+        dashes.chain(std::iter::once(Shape::label([px + 4.0, y0 + 4.0], label.clone(), palette.ink_dim)))
     });
     // Bands first, under the curves they go with.
     let bands = chart.series.iter().filter(|s| s.style == Style::Band).filter_map(|s| {
@@ -280,7 +268,7 @@ pub fn drawing(chart: &Chart, width: usize, height: usize, palette: &Palette) ->
         let color = palette.pen(s.pen);
         let width = s.drawn_width();
         let pts: Vec<[f64; 2]> = s.points.iter().filter(placed).map(|p| to_px(*p)).collect();
-        let joining = |w: f64| pts.windows(2).filter(|w| inside(w[0]) || inside(w[1])).map(|p| line(p[0], p[1], w, color)).collect::<Vec<_>>();
+        let joining = |w: f64| pts.windows(2).filter(|w| inside(w[0]) || inside(w[1])).map(|p| Shape::line(p[0], p[1], w, color)).collect::<Vec<_>>();
         let shown = pts.iter().filter(|q| inside(**q));
         match s.style {
             Style::Line => joining(width),
@@ -307,7 +295,7 @@ fn legend(chart: &Chart, area: [f64; 4], width: usize, palette: &Palette) -> Vec
     let named: Vec<&Series> = chart.series.iter().filter(|s| !s.label.is_empty()).collect();
     // The room each label takes however a window sets a mixed line (crate::text).
     let item = |s: &Series| 52.0 + crate::text::width_glyph_by_glyph(&s.label, 2).ceil();
-    let label = |at: [f64; 2], s: &Series| Shape::Text { at, text: s.label.clone(), scale: 2, color: palette.ink, align: Align::Left, up: false };
+    let label = |at: [f64; 2], s: &Series| Shape::label(at, s.label.clone(), palette.ink);
     let row = |s: &Series, at: [f64; 2]| sample(s, at, palette.pen(s.pen)).into_iter().chain(std::iter::once(label([at[0] + 32.0, at[1]], s)));
     match chart.look.legend {
         Legend::None => Vec::new(),
@@ -336,8 +324,7 @@ fn legend(chart: &Chart, area: [f64; 4], width: usize, palette: &Palette) -> Vec
             let bx = if left { x0 + 8.0 } else { x0 + pw - 8.0 - w };
             let by = if top { y0 + 8.0 } else { y0 + ph - 8.0 - h };
             let ground = Shape::Rect { at: [bx, by], size: [w, h], color: palette.ground };
-            let sides = [([bx, by], [bx + w, by]), ([bx + w, by], [bx + w, by + h]), ([bx + w, by + h], [bx, by + h]), ([bx, by + h], [bx, by])]
-                .map(|(a, b)| line(a, b, 1.0, palette.grid));
+            let sides = outline([bx, by, w, h], 1.0, palette.grid);
             let rows = named.iter().enumerate().flat_map(|(i, s)| row(s, [bx + 6.0, by + 5.0 + 20.0 * i as f64]));
             std::iter::once(ground).chain(sides).chain(rows).collect()
         }

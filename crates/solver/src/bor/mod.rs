@@ -226,8 +226,8 @@ fn assemble_with(
         locals.push(l);
     }
     groups.extend(extra.iter().cloned());
-    let pattern = Csr::from_groups(d.count, groups.iter().map(Vec::as_slice))?;
-    let (mut k, mut mm) = (pattern.zeroed()?, pattern.zeroed()?);
+    let pattern = Csr::from_groups(d.count, &groups)?;
+    let [mut k, mut mm] = pattern.zeroed_n()?;
     for (ti, t) in p.triangles.iter().enumerate() {
         let corner = |k: usize| p.points.get(t[k] as usize).copied().ok_or_else(|| invalid("profile", "a triangle's corner is not a point"));
         let q = [corner(0)?, corner(1)?, corner(2)?];
@@ -463,21 +463,11 @@ fn gradient_mass(gradients: &[Vec<(usize, f64)>], mm: &Csr, unknowns: usize, psi
     b.finish()
 }
 
-/// `q` start vectors of `n` entries in (−½, ½), the same every run (xorshift).
+/// `q` start vectors of `n` entries in (−½, ½), the same every run (the subspace iteration's
+/// xorshift sequence).
 fn start_basis(q: usize, n: usize) -> Vec<Vec<f64>> {
-    let mut state = 0x2545_f491_4f6c_dd1du64;
-    (0..q)
-        .map(|_| {
-            (0..n)
-                .map(|_| {
-                    state ^= state << 13;
-                    state ^= state >> 7;
-                    state ^= state << 17;
-                    (state >> 11) as f64 / (1u64 << 53) as f64 - 0.5
-                })
-                .collect()
-        })
-        .collect()
+    let mut next = crate::subspace::uniform(0x2545_f491_4f6c_dd1d);
+    (0..q).map(|_| (0..n).map(|_| next()).collect()).collect()
 }
 
 /// A Rayleigh–Ritz step's eigenvalues k² (nearest the shift first) and its Ritz vectors,

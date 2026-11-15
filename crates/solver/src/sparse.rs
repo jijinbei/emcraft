@@ -50,9 +50,10 @@ pub struct Csr {
 impl Csr {
     /// The pattern of every pair of unknowns that appear together in one of `groups`; refused
     /// when its entries do not fit in memory.
-    pub fn from_groups<'a>(n: usize, groups: impl Iterator<Item = &'a [usize]> + Clone) -> Result<Csr, OutOfMemory> {
-        let mut rows: Vec<Vec<usize>> = vec![Vec::new(); n];
+    pub fn from_groups<G: AsRef<[usize]>>(n: usize, groups: impl IntoIterator<Item = G>) -> Result<Csr, OutOfMemory> {
+        let mut rows: Vec<Vec<usize>> = crate::memory::filled(n, Vec::new(), "a matrix's pattern")?;
         for g in groups {
+            let g = g.as_ref();
             for &i in g {
                 if let Some(r) = rows.get_mut(i) {
                     r.extend(g.iter().copied().filter(|&j| j < n));
@@ -123,6 +124,15 @@ impl Csr {
             out.row(row);
         }
         out.finish()
+    }
+
+    /// `N` matrices of this pattern, all zero.
+    pub fn zeroed_n<const N: usize>(&self) -> Result<[Csr; N], OutOfMemory> {
+        let made: [Result<Csr, OutOfMemory>; N] = std::array::from_fn(|_| self.zeroed());
+        if let Some(Err(e)) = made.iter().find(|m| m.is_err()) {
+            return Err(*e);
+        }
+        Ok(made.map(Result::unwrap_or_default))
     }
 
     /// The same pattern with every value zero; refused when it does not fit in memory.

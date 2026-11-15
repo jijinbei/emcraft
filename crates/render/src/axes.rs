@@ -1,8 +1,13 @@
 //! Axes: ranges, linear or logarithmic, "nice" tick values (1, 2 or 5 times a power of ten) and
 //! tick labels.
 
-use crate::shapes::{Align, Shape};
+use crate::shapes::{Align, Shape, outline};
 use crate::{Canvas, Rgb};
+
+/// How far below the plot's bottom the x axis's name sits, and left of its left edge the y
+/// axis's (pixels): clear of the tick labels.
+pub const X_NAME_BELOW: f64 = 30.0;
+pub const Y_NAME_LEFT: f64 = 62.0;
 
 /// An axis: its label (with unit) and range, in display units, and whether its scale is
 /// logarithmic.
@@ -91,9 +96,17 @@ pub fn format(v: f64) -> String {
         return format!("{v:.2e}");
     }
     let decimals = (3 - a.log10().floor() as i32).clamp(0, 6) as usize;
-    let s = format!("{v:.decimals$}");
+    trimmed(format!("{v:.decimals$}"))
+}
+
+/// A number written with decimals, its trailing zeros (and a point left bare) taken off.
+fn trimmed(s: String) -> String {
     if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_owned() } else { s }
 }
+
+/// The most decimals a tick label takes: as far as an f64's digits mean something at the
+/// ranges a chart spans.
+const MAX_TICK_DECIMALS: f64 = 12.0;
 
 /// Tick values' labels: [`format`]'s, unless two of them read the same (ticks a ten-thousandth
 /// apart on 11.47, one mode's chart) — then each with the decimals the ticks' spacing needs.
@@ -112,14 +125,8 @@ pub fn tick_labels(ticks: &[f64]) -> Vec<String> {
     if !step.is_finite() {
         return plain;
     }
-    let decimals = (-step.log10()).ceil().clamp(0.0, 12.0) as usize;
-    ticks
-        .iter()
-        .map(|t| {
-            let s = format!("{t:.decimals$}");
-            if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_owned() } else { s }
-        })
-        .collect()
+    let decimals = (-step.log10()).ceil().clamp(0.0, MAX_TICK_DECIMALS) as usize;
+    ticks.iter().map(|t| trimmed(format!("{t:.decimals$}"))).collect()
 }
 
 /// Where a chart or a field plot drawn at some size puts its plot area: the picture's size, the
@@ -187,9 +194,8 @@ pub fn frame_shapes(area: [f64; 4], x: &Axis, y: &Axis, ink: Rgb, grid: Option<R
         let (lo, hi) = a.span();
         if a.is_log() { log_ticks(lo, hi, count) } else { ticks(lo, hi, count) }
     };
-    let scale = 2;
-    let line = |a: [f64; 2], b: [f64; 2], width: f64, color: Rgb| Shape::Line { a, b, width, color };
-    let text = |at: [f64; 2], s: String, align: Align, up: bool| Shape::Text { at, text: s, scale, color: ink, align, up };
+    let line = Shape::line;
+    let text = |at: [f64; 2], s: String, align: Align| Shape::label(at, s, ink).aligned(align);
     let labelled = |ts: Vec<f64>| {
         let labels = tick_labels(&ts);
         ts.into_iter().zip(labels).collect::<Vec<_>>()
@@ -197,18 +203,17 @@ pub fn frame_shapes(area: [f64; 4], x: &Axis, y: &Axis, ink: Rgb, grid: Option<R
     let along_x = labelled(marks(x, 6)).into_iter().flat_map(|(t, label)| {
         let p = px(t);
         let ruled = grid.map(|g| line([p, y0], [p, y0 + h], 1.0, g));
-        ruled.into_iter().chain([line([p, y0 + h], [p, y0 + h + 5.0], 1.0, ink), text([p, y0 + h + 9.0], label, Align::Center, false)])
+        ruled.into_iter().chain([line([p, y0 + h], [p, y0 + h + 5.0], 1.0, ink), text([p, y0 + h + 9.0], label, Align::Center)])
     });
     let along_y = labelled(marks(y, 5)).into_iter().flat_map(|(t, label)| {
         let p = py(t);
         let ruled = grid.map(|g| line([x0, p], [x0 + w, p], 1.0, g));
-        ruled.into_iter().chain([line([x0 - 5.0, p], [x0, p], 1.0, ink), text([x0 - 9.0, p - 7.0], label, Align::Right, false)])
+        ruled.into_iter().chain([line([x0 - 5.0, p], [x0, p], 1.0, ink), text([x0 - 9.0, p - 7.0], label, Align::Right)])
     });
-    let sides = [([x0, y0], [x0 + w, y0]), ([x0 + w, y0], [x0 + w, y0 + h]), ([x0 + w, y0 + h], [x0, y0 + h]), ([x0, y0 + h], [x0, y0])]
-        .map(|(a, b)| line(a, b, 1.2, ink));
+    let sides = outline([x0, y0, w, h], 1.2, ink);
     let names = [
-        text([x0 + w / 2.0, y0 + h + 30.0], x.label.clone(), Align::Center, false),
-        text([x0 - 62.0, y0 + h / 2.0], y.label.clone(), Align::Center, true),
+        text([x0 + w / 2.0, y0 + h + X_NAME_BELOW], x.label.clone(), Align::Center),
+        text([x0 - Y_NAME_LEFT, y0 + h / 2.0], y.label.clone(), Align::Center).upwards(),
     ];
     along_x.chain(along_y).chain(sides).chain(names).collect()
 }

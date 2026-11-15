@@ -26,12 +26,36 @@
 //! # Ok::<(), OutOfMemory>(())
 //! ```
 
-/// Memory the system would not give: what it was for and how many bytes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("not enough memory for {what}: {:.2} GB could not be allocated (coarsen the mesh or lower the order)", *bytes as f64 / 1e9)]
+/// Memory the system would not give: what it was for, how many bytes, and (when a plan weighed
+/// it beforehand) how many bytes could be used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutOfMemory {
     pub what: &'static str,
     pub bytes: u64,
+    pub available: Option<u64>,
+}
+
+impl std::fmt::Display for OutOfMemory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let gb = |b: u64| b as f64 / 1e9;
+        match self.available {
+            Some(free) => write!(f, "{} needs {:.1} GB of memory, {:.1} GB can be used", self.what, gb(self.bytes), gb(free))?,
+            None => write!(f, "not enough memory for {}: {:.2} GB could not be allocated", self.what, gb(self.bytes))?,
+        }
+        write!(f, " (coarsen the mesh or lower the order)")
+    }
+}
+
+impl std::error::Error for OutOfMemory {}
+
+/// The bytes of one entry of a matrix the solver factors (a complex number).
+pub const ENTRY_BYTES: u64 = std::mem::size_of::<num_complex::Complex64>() as u64;
+
+/// The memory the system reports available (bytes; Linux's `MemAvailable`), `None` elsewhere.
+pub fn available_memory() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = text.lines().find(|l| l.starts_with("MemAvailable:"))?;
+    line.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kb| kb.saturating_mul(1024))
 }
 
 /// The size (bytes) from which a buffer is weighed against the available memory first.
@@ -45,16 +69,16 @@ fn bytes<T>(n: usize) -> u64 {
 /// An empty vector with room for `n` values of `T`, for `what`.
 pub fn with_capacity<T>(n: usize, what: &'static str) -> Result<Vec<T>, OutOfMemory> {
     let size = bytes::<T>(n);
-    within(size, what, if size >= LARGE { crate::multifrontal::available_memory() } else { None })?;
+    within(size, what, if size >= LARGE { available_memory() } else { None })?;
     let mut v = Vec::new();
-    v.try_reserve_exact(n).map_err(|_| OutOfMemory { what, bytes: size })?;
+    v.try_reserve_exact(n).map_err(|_| OutOfMemory { what, bytes: size, available: None })?;
     Ok(v)
 }
 
 /// Refuses `size` bytes for `what` past the `available` memory (bytes; `None`: not known).
 fn within(size: u64, what: &'static str, available: Option<u64>) -> Result<(), OutOfMemory> {
     match available {
-        Some(free) if size > free => Err(OutOfMemory { what, bytes: size }),
+        Some(free) if size > free => Err(OutOfMemory { what, bytes: size, available: None }),
         _ => Ok(()),
     }
 }
@@ -86,9 +110,9 @@ mod tests {
     /// for; one that fits is made whole.
     #[test]
     fn sizes_past_the_memory_are_refused() {
-        assert_eq!(zeros::<u64>(usize::MAX, "x"), Err(OutOfMemory { what: "x", bytes: u64::MAX }));
+        assert_eq!(zeros::<u64>(usize::MAX, "x"), Err(OutOfMemory { what: "x", bytes: u64::MAX, available: None }));
         let e = with_capacity::<[u8; 16]>(usize::MAX / 32, "a front").map(|v| v.capacity());
-        assert!(matches!(e, Err(OutOfMemory { what: "a front", bytes }) if bytes > 1 << 60), "{e:?}");
+        assert!(matches!(e, Err(OutOfMemory { what: "a front", bytes, .. }) if bytes > 1 << 60), "{e:?}");
         assert_eq!(filled(3, 7u8, "x").map(|v| v.len()), Ok(3));
     }
 
@@ -98,7 +122,7 @@ mod tests {
     #[test]
     fn a_buffer_past_the_available_memory_is_refused_first() {
         let gb = 1u64 << 30;
-        assert_eq!(within(2 * gb, "a front", Some(gb)), Err(OutOfMemory { what: "a front", bytes: 2 * gb }));
+        assert_eq!(within(2 * gb, "a front", Some(gb)), Err(OutOfMemory { what: "a front", bytes: 2 * gb, available: None }));
         assert_eq!(within(gb, "a front", Some(2 * gb)), Ok(()));
         assert_eq!(within(u64::MAX, "a front", None), Ok(()));
     }

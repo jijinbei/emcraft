@@ -82,7 +82,7 @@ impl Driven {
             }
         }
         let groups: Vec<Vec<usize>> = mesh.tets.iter().map(|t| t.iter().filter_map(|v| place.get(v).copied()).collect()).collect();
-        let mut a = crate::sparse::Csr::from_groups(n, groups.iter().map(Vec::as_slice))?;
+        let mut a = crate::sparse::Csr::from_groups(n, &groups)?;
         let mut f = vec![C::new(0.0, 0.0); n];
         let rule = rule_points(self.order);
         let in_pml = self.pml_tets();
@@ -128,7 +128,7 @@ impl Driven {
             }
         }
         let factored = Ldlt::factor(&a, &points)?;
-        let (solution, _) = factored.solve_refined(&a, &f, 2)?;
+        let (solution, _) = factored.solve_refined(&a, &f, super::AUXILIARY_REFINEMENT)?;
         let mut rise: Vec<Option<f64>> = vec![None; mesh.nodes.len()];
         for tet in &mesh.tets {
             for &v in tet {

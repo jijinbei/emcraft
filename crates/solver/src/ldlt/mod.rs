@@ -33,7 +33,9 @@ use std::sync::Arc;
 use emcraft_model::Point3;
 use num_complex::Complex64 as C;
 
-use crate::multifrontal::{Counts, Eliminated, Front, FrontKernel, Plan, Shape, Update, available_memory, check, factor_tree, fill, threads};
+use crate::multifrontal::{
+    Counts, Eliminated, Front, FrontKernel, Plan, Shape, Triangle, Update, available_memory, check, factor_tree, fill, threads,
+};
 use crate::sparse::Csr;
 
 mod front;
@@ -98,7 +100,7 @@ struct Kernel {
 
 /// The LDLᵀ's fronts: each update the lower triangle of m − k rows (by column), the factor the
 /// front's first k columns, which may go to disk.
-const SHAPE: Shape = Shape { update: |mu| mu * (mu + 1) / 2, kept: |k, m| k * m, out_of_core: true };
+const SHAPE: Shape = Shape { update: Triangle::Lower, kept: |k, m| k * m, out_of_core: true };
 
 impl FrontKernel for Kernel {
     type Node = Supernode;
@@ -146,17 +148,7 @@ impl FrontKernel for Kernel {
             None => factor_front(&mut f, m, k, &mut rows, self.tau)?,
         };
         // The update matrix U = F₂₂ − L₂₁ D L₂₁ᵀ (lower) for the parent: the trailing block.
-        let mu = m - k;
-        let update = match mu {
-            0 => None,
-            _ => {
-                let mut u = crate::memory::with_capacity(mu * (mu + 1) / 2, "an update matrix")?;
-                for j in 0..mu {
-                    u.extend_from_slice(&f[(k + j) * m + k + j..(k + j + 1) * m]);
-                }
-                Some(Update { rows: rows[k..].to_vec(), values: u })
-            }
-        };
+        let update = Update::trailing(&f, &rows, k, Triangle::Lower)?;
         // Keep the k factored columns only, in an allocation of their own (the front's m × m is
         // freed).
         let l = crate::memory::copied(&f[..k * m], "the factor's columns")?;
@@ -354,7 +346,7 @@ mod tests {
         // coupled densely, all in one front.
         let n = 6;
         let groups = [(0..n).collect::<Vec<_>>()];
-        let mut a = Csr::from_groups(n, groups.iter().map(std::vec::Vec::as_slice)).unwrap();
+        let mut a = Csr::from_groups(n, &groups).unwrap();
         let mut rng = Rng(7);
         for i in 0..n {
             for j in i + 1..n {
@@ -461,7 +453,7 @@ mod tests {
         // entry, √ε‖A‖ would replace every pivot of the small one; equilibrated, none.
         let n = 40;
         let groups: Vec<Vec<usize>> = (0..n - 1).map(|i| vec![i, i + 1]).collect();
-        let mut a = Csr::from_groups(n, groups.iter().map(std::vec::Vec::as_slice)).unwrap();
+        let mut a = Csr::from_groups(n, &groups).unwrap();
         for i in 0..n {
             let s = if i < n / 2 { 1e12 } else { 1.0 };
             a.add(i, i, C::new(4.0 * s, 0.3));
@@ -484,7 +476,7 @@ mod tests {
     #[test]
     fn hostile_matrices_are_refused() {
         let groups = [vec![0, 1]];
-        let mut a = Csr::from_groups(2, groups.iter().map(std::vec::Vec::as_slice)).unwrap();
+        let mut a = Csr::from_groups(2, &groups).unwrap();
         let xyz = [Point3::ORIGIN, Point3::new(1.0, 0.0, 0.0)];
         assert_eq!(Ldlt::factor(&a, &xyz).unwrap_err(), FactorError::Zero);
         a.add(0, 0, C::new(f64::NAN, 0.0));

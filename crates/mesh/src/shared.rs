@@ -36,6 +36,18 @@ pub(crate) fn corners(positions: &[Point3], t: &[u32; 3]) -> Option<[Point3; 3]>
     Some([*positions.get(t[0] as usize)?, *positions.get(t[1] as usize)?, *positions.get(t[2] as usize)?])
 }
 
+/// Whether `triangles` close a surface: every edge held once each way (so the surface is also
+/// oriented throughout). No triangles close nothing, and that is closed.
+pub(crate) fn closed(triangles: &[[u32; 3]]) -> bool {
+    let mut half: std::collections::BTreeMap<[u32; 2], i32> = std::collections::BTreeMap::new();
+    for t in triangles {
+        for (i, j) in [(0, 1), (1, 2), (2, 0)] {
+            *half.entry([t[i], t[j]]).or_default() += 1;
+        }
+    }
+    !half.iter().any(|(e, n)| *n != 1 || half.get(&[e[1], e[0]]) != Some(&1))
+}
+
 /// The winding number about `p` of the closed surface made of `triangles` (the solid angles
 /// they subtend, summed in their order, over 4π — A. Van Oosterom, J. Strackee, IEEE Trans.
 /// Biomed. Eng. 30(2), 1983). A triangle with a missing corner is skipped.

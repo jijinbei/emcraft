@@ -508,6 +508,25 @@ pub enum Seek {
     Lowest,
 }
 
+impl Seek {
+    /// How far mode `m` is from what is sought: the nearest or the lowest come first.
+    fn distance(self, m: &Mode) -> f64 {
+        match self {
+            Seek::Near(near) => from_shift(m, near),
+            Seek::Lowest => m.frequency,
+        }
+    }
+}
+
+/// Modes sought beyond the count asked for: a degenerate set the last one asked for is in
+/// completes from them (a pair split by the mesh).
+const SPARE_MODES: usize = 2;
+
+/// The frequency (Hz) the materials' refractive index is read at when the lowest mode's shift is
+/// first guessed: within a microwave band, where a dispersive material's index is what the
+/// guess wants.
+const INDEX_FREQUENCY: f64 = 1e9;
+
 /// Two modes closer than this share of their frequency are one degenerate set (a round
 /// cavity's TE111 pair, split by its mesh by a few tenths of a per cent): a count that ends
 /// inside one takes the rest of it too, never half of it.
@@ -547,7 +566,7 @@ fn below_the_lowest(model: &Model) -> Result<f64> {
         hi - lo
     };
     let side = span(|p| p.x).max(span(|p| p.y)).max(span(|p| p.z));
-    let index = model.materials.iter().map(|m| m.index_at(1e9)).filter(|n| n.is_finite()).fold(1.0, f64::max);
+    let index = model.materials.iter().map(|m| m.index_at(INDEX_FREQUENCY)).filter(|n| n.is_finite()).fold(1.0, f64::max);
     let f = C0 / (2.0 * side * index) / 2.0;
     if f.is_finite() && f > 0.0 { Ok(f) } else { Err(invalid("eigenmodes", "the mesh has no extent")) }
 }
@@ -557,17 +576,17 @@ fn below_the_lowest(model: &Model) -> Result<f64> {
 /// every mode below the shift would be nearer it than the farthest found, so none is left out.
 fn lowest(model: &Model, order: Order, count: usize) -> Result<Eigen> {
     let mut shift = below_the_lowest(model)?;
-    let mut eigen = nearest(model, order, count + 2, shift)?;
+    let mut eigen = nearest(model, order, count + SPARE_MODES, shift)?;
     for _ in 0..MAX_LOWERINGS {
         match eigen.modes.first() {
             Some(m) if m.frequency < std::f64::consts::SQRT_2 * shift => {
                 shift = m.frequency / 2.0;
-                eigen = nearest(model, order, count + 2, shift)?;
+                eigen = nearest(model, order, count + SPARE_MODES, shift)?;
             }
             _ => break,
         }
     }
-    let modes = kept(std::mem::take(&mut eigen.modes), count, |m| m.frequency);
+    let modes = kept(std::mem::take(&mut eigen.modes), count, |m| Seek::Lowest.distance(m));
     Ok(Eigen { modes, ..eigen })
 }
 
@@ -580,8 +599,8 @@ pub fn eigenmodes_seek(model: &Model, order: Order, count: usize, seek: Seek) ->
     match seek {
         Seek::Lowest => lowest(model, order, count),
         Seek::Near(near) => {
-            let mut eigen = nearest(model, order, count + 2, near)?;
-            eigen.modes = kept(std::mem::take(&mut eigen.modes), count, |m| from_shift(m, near));
+            let mut eigen = nearest(model, order, count + SPARE_MODES, near)?;
+            eigen.modes = kept(std::mem::take(&mut eigen.modes), count, |m| seek.distance(m));
             Ok(eigen)
         }
     }
@@ -594,10 +613,10 @@ pub fn eigenmodes(model: &Model, order: Order, count: usize, near: f64) -> Resul
 }
 
 /// The `count` modes nearest `near` (Hz) as the iteration finds them (no degenerate set
-/// completed): at most [`MAX_MODES`] and two.
+/// completed): at most [`MAX_MODES`] and the [`SPARE_MODES`].
 fn nearest(model: &Model, order: Order, count: usize, near: f64) -> Result<Eigen> {
-    if count == 0 || count > MAX_MODES + 2 {
-        return Err(invalid("mode count", format!("must be 1 to {MAX_MODES}")));
+    if count == 0 || count > MAX_MODES + SPARE_MODES {
+        return Err(invalid("mode count", format!("must be 1 to {}", MAX_MODES + SPARE_MODES)));
     }
     check_frequency(near)?;
     if model.domain.rotation.is_some() {
@@ -654,10 +673,7 @@ pub fn eigenmodes_every_wall(model: &Model, order: Order, count: usize, seek: Se
         all.extend(e.modes.into_iter().map(|m| Mode { family: k, ..m }));
         systems.push(e.driven);
     }
-    let all = match seek {
-        Seek::Near(near) => kept(all, count, |m| from_shift(m, near)),
-        Seek::Lowest => kept(all, count, |m| m.frequency),
-    };
+    let all = kept(all, count, |m| seek.distance(m));
     let mut systems = systems.into_iter();
     let driven = systems.next().ok_or_else(|| SolveError::NotReady("no wall combination".into()))?;
     Ok(Eigen { driven, modes: all, iterations, families: systems.collect() })

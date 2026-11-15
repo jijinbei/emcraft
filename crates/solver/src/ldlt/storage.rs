@@ -9,6 +9,10 @@ use num_complex::Complex64 as C;
 
 use crate::multifrontal::FactorError;
 
+/// The bytes of an entry in the scratch file: its real part, then its imaginary part, each a
+/// little-endian f64.
+const ON_DISK: usize = 16;
+
 /// Where a supernode's factored columns are kept.
 #[derive(Clone, Debug)]
 pub(super) enum Columns {
@@ -85,7 +89,7 @@ impl Scratch {
 
     fn write(&mut self, v: &[C]) -> Result<Columns, FactorError> {
         use std::io::{Seek, SeekFrom, Write};
-        let mut bytes = crate::memory::with_capacity(v.len().saturating_mul(16), "a factor's columns on their way to disk")?;
+        let mut bytes = crate::memory::with_capacity(v.len().saturating_mul(ON_DISK), "a factor's columns on their way to disk")?;
         for z in v {
             bytes.extend_from_slice(&z.re.to_le_bytes());
             bytes.extend_from_slice(&z.im.to_le_bytes());
@@ -99,11 +103,11 @@ impl Scratch {
 
     fn read(&self, offset: u64, len: usize) -> Result<Vec<C>, FactorError> {
         use std::io::{Read, Seek, SeekFrom};
-        let mut bytes: Vec<u8> = crate::memory::zeros(len.saturating_mul(16), "a factor's columns read back")?;
+        let mut bytes: Vec<u8> = crate::memory::zeros(len.saturating_mul(ON_DISK), "a factor's columns read back")?;
         let mut f = self.file.lock().map_err(poisoned)?;
         f.seek(SeekFrom::Start(offset)).and_then(|_| f.read_exact(&mut bytes)).map_err(|e| FactorError::Scratch(e.to_string()))?;
         let mut out = crate::memory::with_capacity(len, "a factor's columns read back")?;
-        out.extend(bytes.as_chunks::<16>().0.iter().map(|c| {
+        out.extend(bytes.as_chunks::<ON_DISK>().0.iter().map(|c| {
             let mut re = [0u8; 8];
             let mut im = [0u8; 8];
             re.copy_from_slice(&c[..8]);

@@ -119,9 +119,8 @@ impl<'a> Space<'a> {
     /// The matrices' pattern: the element couplings and the `extra` groups of unknowns (the
     /// lumped ports' dense blocks).
     pub(super) fn pattern(&self, extra: impl Iterator<Item = Vec<usize>>) -> Result<Csr> {
-        let mut groups: Vec<Vec<usize>> = (0..self.mesh.tets.len()).map(|t| self.dofs.of_tet(self.topo, t).filter_map(Slot::get).collect()).collect();
-        groups.extend(extra);
-        Ok(Csr::from_groups(self.dofs.unknowns, groups.iter().map(std::vec::Vec::as_slice))?)
+        let elements = (0..self.mesh.tets.len()).map(|t| self.dofs.of_tet(self.topo, t).filter_map(Slot::get).collect::<Vec<usize>>());
+        Ok(Csr::from_groups(self.dofs.unknowns, elements.chain(extra))?)
     }
 
     /// K, M and each dispersive material's M_d over the tetrahedra `keep` admits (those of the
@@ -130,8 +129,7 @@ impl<'a> Space<'a> {
         let mut kk = pattern.zeroed()?;
         let mut mm = pattern.zeroed()?;
         let mut md: Vec<Csr> = media.dispersive_materials().iter().map(|_| pattern.zeroed()).collect::<std::result::Result<_, _>>()?;
-        let three = || -> std::result::Result<[Csr; 3], crate::memory::OutOfMemory> { Ok([pattern.zeroed()?, pattern.zeroed()?, pattern.zeroed()?]) };
-        let mut kf: Vec<[Csr; 3]> = media.ferrites().iter().map(|_| three()).collect::<std::result::Result<_, _>>()?;
+        let mut kf: Vec<[Csr; 3]> = media.ferrites().iter().map(|_| pattern.zeroed_n::<3>()).collect::<std::result::Result<_, _>>()?;
         let mut cache = ElementCache::default();
         for t in (0..self.mesh.tets.len()).filter(|t| keep(*t)) {
             let (s, m) = cache.matrices(self, t)?;

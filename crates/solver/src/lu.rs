@@ -34,8 +34,8 @@ use faer::{Accum, MatMut, MatRef};
 use num_complex::Complex64 as C;
 
 use crate::multifrontal::{
-    Analysis, Counts, Eliminated, FactorError, Front, FrontKernel, Plan, Shape, Update, available_memory, check, factor_tree, products, refine,
-    refine_many, threads,
+    Analysis, Counts, Eliminated, FactorError, Front, FrontKernel, Plan, Shape, Triangle, Update, available_memory, check, factor_tree, products,
+    refine, refine_many, threads,
 };
 use crate::sparse::Csr;
 
@@ -229,7 +229,7 @@ fn by_position(a: &Csr, inv: &[usize], row_scale: &[f64], col_scale: &[f64]) -> 
 
 /// The LU's fronts: each update full (m − k rows square), the factor both triangles of the
 /// front's first k rows and columns, kept in memory.
-const SHAPE: Shape = Shape { update: |mu| mu * mu, kept: |k, m| k * m + k * (m - k), out_of_core: false };
+const SHAPE: Shape = Shape { update: Triangle::Full, kept: |k, m| k * m + k * (m - k), out_of_core: false };
 
 /// The LU's fronts: R A C by position and the static-pivot threshold.
 struct Kernel {
@@ -272,16 +272,7 @@ impl FrontKernel for Kernel {
         let mut eqs: Vec<usize> = rows[..k].to_vec();
         let perturbed = factor_front(&mut f, m, k, &mut eqs, self.tau)?;
         let mu = m - k;
-        let update = match mu {
-            0 => None,
-            _ => {
-                let mut u = crate::memory::with_capacity(mu * mu, "an update matrix")?;
-                for j in 0..mu {
-                    u.extend_from_slice(&f[(k + j) * m + k..(k + j + 1) * m]);
-                }
-                Some(Update { rows: rows[k..].to_vec(), values: u })
-            }
-        };
+        let update = Update::trailing(&f, &rows, k, Triangle::Full)?;
         let mut upart = crate::memory::with_capacity(k * mu, "the factor's rows")?;
         for j in 0..mu {
             upart.extend_from_slice(&f[(k + j) * m..(k + j) * m + k]);
@@ -429,7 +420,7 @@ mod tests {
         // A zero diagonal with the large entries off it: [[0, 5], [3, 0]] blocks in one front.
         let n = 6;
         let groups = [(0..n).collect::<Vec<_>>()];
-        let mut a = Csr::from_groups(n, groups.iter().map(std::vec::Vec::as_slice)).unwrap();
+        let mut a = Csr::from_groups(n, &groups).unwrap();
         let mut rng = Rng(11);
         for i in 0..n {
             for j in 0..n {

@@ -122,7 +122,7 @@ pub(super) fn solve_each(f: &impl Factor, a: &Csr, rhs: &[Vec<C>], keep: usize, 
     let started = Instant::now();
     let mut fields = Vec::with_capacity(rhs.len());
     let mut worst: f64 = 0.0;
-    for (mut x, e) in f.solve_refined_many(a, rhs, 4)? {
+    for (mut x, e) in f.solve_refined_many(a, rhs, super::FIELD_REFINEMENT)? {
         x.truncate(keep);
         worst = worst.max(e);
         fields.push(x);

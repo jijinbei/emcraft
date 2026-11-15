@@ -30,9 +30,10 @@ use crate::sparse::Csr;
 mod analysis;
 mod memory;
 
+pub(crate) use crate::memory::available_memory;
 pub use analysis::Analysis;
 pub(crate) use analysis::fill;
-pub(crate) use memory::{Plan, Shape, available_memory, products};
+pub(crate) use memory::{Plan, Shape, products};
 
 /// The largest frontal matrix (rows) a factorization may form: m² complex entries (40 GB at the
 /// limit; the [`Plan`] refuses before that what the memory cannot hold).
@@ -52,12 +53,6 @@ pub enum FactorError {
     Scratch(String),
     #[error("the device failed: {0}")]
     Device(String),
-    #[error(
-        "the factorization needs {:.1} GB of memory, {:.1} GB can be used: coarsen the mesh or lower the order",
-        *needs as f64 / 1e9,
-        *available as f64 / 1e9
-    )]
-    OutOfMemory { needs: u64, available: u64 },
     #[error("the factor needs {:.1} GB, beyond the {:.1} GB budget (an unsymmetric factor is kept in memory)", *needs as f64 / 1e9, *budget as f64 / 1e9)]
     FactorTooLarge { needs: u64, budget: u64 },
     #[error("the factorization's threads: {0}")]
@@ -97,6 +92,46 @@ impl Front {
 pub(crate) struct Update {
     pub rows: Vec<usize>,
     pub values: Vec<C>,
+}
+
+/// What of a front's trailing block its parent is handed: all of it (an LU's), or its lower
+/// triangle with the diagonal (a symmetric factorization's).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Triangle {
+    Full,
+    Lower,
+}
+
+impl Triangle {
+    /// The entries of an update of `mu` rows.
+    pub(crate) const fn entries(self, mu: usize) -> usize {
+        match self {
+            Triangle::Full => mu * mu,
+            Triangle::Lower => mu * (mu + 1) / 2,
+        }
+    }
+}
+
+impl Update {
+    /// The update the eliminated front `f` (m × m column-major over `rows`, its first `k`
+    /// factored) hands its parent: its trailing block, column by column as `triangle` keeps it;
+    /// none when all its rows were factored.
+    pub(crate) fn trailing(f: &[C], rows: &[usize], k: usize, triangle: Triangle) -> Result<Option<Update>, crate::memory::OutOfMemory> {
+        let m = rows.len();
+        let mu = m - k;
+        if mu == 0 {
+            return Ok(None);
+        }
+        let mut u = crate::memory::with_capacity(triangle.entries(mu), "an update matrix")?;
+        for j in 0..mu {
+            let first = match triangle {
+                Triangle::Full => k,
+                Triangle::Lower => k + j,
+            };
+            u.extend_from_slice(&f[(k + j) * m + first..(k + j + 1) * m]);
+        }
+        Ok(Some(Update { rows: rows[k..].to_vec(), values: u }))
+    }
 }
 
 /// What a factorization counts.
@@ -439,7 +474,7 @@ pub(crate) mod testing {
                 }
             }
         }
-        let a = Csr::from_groups(n, edges.iter().map(<[usize; 2]>::as_slice)).unwrap();
+        let a = Csr::from_groups(n, &edges).unwrap();
         (a, edges, xyz)
     }
 }

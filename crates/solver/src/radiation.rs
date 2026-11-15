@@ -322,7 +322,7 @@ impl Driven {
                 b[i] += f * ci;
             }
         }
-        let (mut field, backward_error) = f.solve_refined(&a, &b, 4)?;
+        let (mut field, backward_error) = f.solve_refined(&a, &b, crate::driven::FIELD_REFINEMENT)?;
         field.truncate(n);
         let ports = self
             .lumped
@@ -449,7 +449,7 @@ impl Driven {
             );
         }
         let nb = points.len();
-        let mut m = crate::sparse::Csr::from_groups(nb, groups.iter().map(std::vec::Vec::as_slice))?;
+        let mut m = crate::sparse::Csr::from_groups(nb, &groups)?;
         let mut r = vec![C::new(0.0, 0.0); nb];
         for (&(t, lf), group) in faces.iter().zip(&groups) {
             let el = self.element_of(t)?;
@@ -469,7 +469,7 @@ impl Driven {
             }
         }
         let f = Ldlt::factor(&m, &points)?;
-        let (g, _) = f.solve_refined(&m, &r, 2)?;
+        let (g, _) = f.solve_refined(&m, &r, crate::driven::AUXILIARY_REFINEMENT)?;
         Ok(Trace { index, g })
     }
 
