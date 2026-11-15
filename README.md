@@ -10,7 +10,14 @@
   checked against exact solutions or published benchmarks.
 </p>
 
-![The desktop app: the high-pass filter's field in the 3D view](docs/media/app-results-3d.png)
+<p align="center">
+  <img src="docs/media/demo.gif" alt="A waveguide resonator drawn in SolidCraft — a WR-90 guide and two metal posts — imported into EMCraft, its ports placed, solved from 8 to 12 GHz, its passband near 9.8 GHz clicked for the field there, which then plays" />
+</p>
+<p align="center"><em>
+  Drawn in SolidCraft, solved in EMCraft: a WR-90 guide with two 3 mm posts passes near 9.8 GHz
+  (twice as fast; the solve sped up). <a href="docs/media/demo.mp4">The full walk-through with
+  captions (MP4)</a>.
+</em></p>
 
 ## Quick start
 
@@ -82,8 +89,8 @@ Samples (the start page's templates, their dimensions variables):
 
 | | |
 |---|---|
-| ![The S-parameter view of the solved high-pass filter](docs/media/app-sparameters.png) | ![The four-layer example board in 3D with its differential pair's coupling](docs/media/app-pcb-board.png) |
-| S-parameters of the high-pass filter | The four-layer example board, its pair's coupling |
+| ![The S-parameter view of the two-post resonator](docs/media/app-sparameters.png) | ![The four-layer example board in 3D with its differential pair's coupling](docs/media/app-pcb-board.png) |
+| S-parameters of the two-post resonator above | The four-layer example board, its pair's coupling |
 
 ## Verified
 
