@@ -11,11 +11,11 @@
 </p>
 
 <p align="center">
-  <img src="docs/media/demo.gif" alt="A waveguide resonator drawn in SolidCraft — a WR-90 guide and two metal posts — imported into EMCraft, its ports placed, solved from 8 to 12 GHz, its passband near 9.8 GHz clicked for the field there, which then plays" />
+  <img src="docs/media/walkthrough.gif" alt="A waveguide resonator drawn in SolidCraft — a WR-90 guide and two metal posts — imported into EMCraft, its ports placed, solved from 8 to 12 GHz, its passband near 9.8 GHz clicked for the field there, which then plays" />
 </p>
 <p align="center"><em>
   Drawn in SolidCraft, solved in EMCraft: a WR-90 guide with two 3 mm posts passes near 9.8 GHz
-  (twice as fast; the solve sped up). <a href="docs/media/demo.mp4">The full walk-through with
+  (twice as fast; the solve sped up). <a href="docs/media/walkthrough.mp4">The full walk-through with
   English captions (MP4)</a>.
 </em></p>
 
