@@ -22,6 +22,7 @@ use std::cell::Cell;
 
 use emcraft_fdtd::axi::{AxiGrid, AxiPic, Injection, Rings};
 use emcraft_fdtd::pic;
+use emcraft_gpu::{AxiDevice, Gpu};
 use emcraft_model::ParticleRun;
 use emcraft_particles::ELECTRON;
 use serde_json::Value;
@@ -59,8 +60,8 @@ impl Run for Axi {
     fn advance(&mut self) -> Result<pic::Moved> {
         self.pic.step().map_err(fdtd)
     }
-    fn energy(&self) -> pic::Energy {
-        self.pic.energy()
+    fn energy(&mut self) -> Result<pic::Energy> {
+        Ok(self.pic.energy())
     }
     fn held(&self) -> usize {
         self.pic.rings()
@@ -98,6 +99,75 @@ impl Run for Axi {
     }
 }
 
+/// A run in a body of revolution on a device (`emcraft_gpu::AxiDevice`): its clock and
+/// injections on the host, its fields and rings on the device until [`Run::end`] brings them
+/// back; E at the probes (in the half plane θ = 0 at each one's r and z) recorded there each
+/// step.
+struct OnDevice {
+    axi: Axi,
+    device: Option<AxiDevice>,
+    probes: Vec<Polar>,
+}
+
+impl OnDevice {
+    /// `axi` moved onto `gpu`, E watched at `probes` (m from the grid's corner).
+    fn new(mut axi: Axi, gpu: Gpu, probes: &[[f64; 3]]) -> Result<OnDevice> {
+        let probes: Vec<Polar> = probes.iter().map(|at| axi.polar(*at)).collect();
+        let points: Vec<[f64; 2]> = probes.iter().map(|q| [q.r, q.z]).collect();
+        let device = gpu.axi(&mut axi.pic, &points).map_err(fdtd)?;
+        Ok(OnDevice { axi, device: Some(device), probes })
+    }
+}
+
+impl Run for OnDevice {
+    fn advance(&mut self) -> Result<pic::Moved> {
+        Ok(self.span(1, &[], &|_| false)?.into_iter().next().map_or_else(pic::Moved::default, |s| s.0))
+    }
+    fn energy(&mut self) -> Result<pic::Energy> {
+        match self.device.as_mut() {
+            Some(d) => d.energy(&mut self.axi.pic).map_err(fdtd),
+            None => self.axi.energy(),
+        }
+    }
+    fn held(&self) -> usize {
+        self.device.as_ref().map_or_else(|| self.axi.held(), AxiDevice::held)
+    }
+    /// The field as the host last read it back (the device's own is recorded at the probes).
+    fn e_at_point(&self, at: [f64; 3]) -> [f64; 3] {
+        self.axi.e_at_point(at)
+    }
+    fn now(&self) -> f64 {
+        self.axi.now()
+    }
+    fn snapshot(&self) -> Vec<Snap> {
+        self.axi.snapshot()
+    }
+    /// The steps on the device, E at the probes (the ones it was made with) turned from the
+    /// half plane θ = 0 to x and y.
+    fn span(&mut self, steps: usize, _: &[[f64; 3]], sampled: &dyn Fn(usize) -> bool) -> Result<Vec<super::Stepped>> {
+        let Some(device) = self.device.as_mut() else {
+            return (0..steps).map(|_| Ok((self.axi.advance()?, None))).collect();
+        };
+        let done = device.advance(&mut self.axi.pic, steps).map_err(fdtd)?;
+        Ok(done
+            .into_iter()
+            .enumerate()
+            .map(|(b, step)| {
+                let probes = sampled(b).then(|| {
+                    step.probes.iter().zip(&self.probes).map(|([er, et, ez], q)| [er * q.cos - et * q.sin, er * q.sin + et * q.cos, *ez]).collect()
+                });
+                (step.moved, probes)
+            })
+            .collect())
+    }
+    fn end(&mut self) -> Result<()> {
+        match self.device.take() {
+            Some(d) => d.finish(&mut self.axi.pic).map_err(fdtd),
+            None => Ok(()),
+        }
+    }
+}
+
 /// What a body of revolution cannot run yet, if the model asks for it.
 fn unsupported(s: &Session) -> Option<String> {
     let m = &s.model.particles;
@@ -119,8 +189,8 @@ fn unsupported(s: &Session) -> Option<String> {
     Some(format!("not supported yet in a body of revolution: {what} (beams and bunches through z− or z+ on the axis, and a magnetic field along z)"))
 }
 
-/// The run in a body of revolution.
-pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize) -> Result<Value> {
+/// The run in a body of revolution, on `gpu` if given (else the CPU's threads).
+pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize, gpu: Option<Gpu>) -> Result<Value> {
     if let Some(why) = unsupported(s) {
         return Err(EngineError::failed(why));
     }
@@ -182,5 +252,9 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize)
     let origin = [-radius, -radius, z_origin];
     let probes: Vec<[f64; 3]> = m.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
     let frame = Frame { origin, cells: [2 * nr, 2 * nr, nz + below + above], h: [dr, dr, dz], dt, steps, axisymmetric: true };
-    run_to_end(s, &mut Axi { pic: run, radius, z_origin }, frame, &probes)
+    let mut axi = Axi { pic: run, radius, z_origin };
+    match gpu {
+        Some(gpu) => run_to_end(s, &mut OnDevice::new(axi, gpu, &probes)?, frame, &probes),
+        None => run_to_end(s, &mut axi, frame, &probes),
+    }
 }

@@ -204,25 +204,14 @@ pub(crate) fn project<F: Real>(ey: &[F], weights: &[F], record: &mut [F], plane:
     let u = UNIT_POS as usize;
     // The cube's width as a run-time value (the comptime one sizes the shared memory).
     let units = CUBE_DIM as usize;
-    let mut sums = Shared::<[F]>::new_slice(width);
     let mut acc = F::new(0.0_f32);
     let mut m = u;
     while m < plane {
         acc += ey[m + plane * k] * weights[m + plane * cube];
         m += units;
     }
-    sums[u] = acc;
-    sync_cube();
-    let mut half = units / 2;
-    while half > 0 {
-        if u < half {
-            let other = sums[u + half];
-            sums[u] += other;
-        }
-        sync_cube();
-        half /= 2;
-    }
+    let total = crate::kernels::fold::<F>(acc, width);
     if u == 0 {
-        record[2 * (slot as usize) + cube] = sums[0];
+        record[2 * (slot as usize) + cube] = total;
     }
 }

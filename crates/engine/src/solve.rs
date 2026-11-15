@@ -281,6 +281,18 @@ pub fn device(s: &mut Session, p: &Params) -> Result<Value> {
     )
 }
 
+/// The device a time-stepping solve runs on (`device`, `precision`; default solve.device's) and
+/// the GPU crate's stepper for it (none on the CPU's threads).
+pub(crate) fn device_of(s: &Session, p: &Params) -> Result<(Device, Option<Gpu>)> {
+    let device = p.pick("device").or(Device::of(s.compute.backend))?;
+    let backend = device.backend();
+    let precision = p.pick("precision").or(s.compute.precision)?;
+    if backend.is_none() && p.has("precision") && precision == Precision::Single {
+        return Err(p.error("precision", "the CPU's threads run in double precision (single needs a GPU device)"));
+    }
+    Ok((device, backend.map(|backend| Gpu { backend, precision })))
+}
+
 pub fn time_domain(s: &mut Session, p: &Params) -> Result<Value> {
     if s.model.domain.periodic.is_some() {
         return Err(crate::EngineError::failed(
@@ -289,13 +301,7 @@ pub fn time_domain(s: &mut Session, p: &Params) -> Result<Value> {
     }
     let freqs = frequencies(s, p)?;
     let cell = p.positive_length("cell").or(Length::Millimetre.to_si(1.0))?;
-    let device = p.pick("device").or(Device::of(s.compute.backend))?;
-    let backend = device.backend();
-    let precision = p.pick("precision").or(s.compute.precision)?;
-    if backend.is_none() && p.has("precision") && precision == Precision::Single {
-        return Err(p.error("precision", "the CPU's threads run in double precision (single needs a GPU device)"));
-    }
-    let gpu = backend.map(|backend| Gpu { backend, precision });
+    let (device, gpu) = device_of(s, p)?;
     if s.model.domain.open.is_some() {
         let mut reply = crate::open::solve_time_domain_open(s, &freqs, cell, gpu.as_ref().map(|g| g as &dyn emcraft_fdtd::OpenStepper))?;
         // A plane wave's split runs on the CPU's threads.

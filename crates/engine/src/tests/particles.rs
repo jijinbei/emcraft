@@ -333,3 +333,40 @@ fn a_body_of_revolution_refuses_what_it_cannot_run_yet() {
         assert!(s.execute("solve.particles", &p).is_err(), "{p}");
     }
 }
+
+#[test]
+fn a_body_of_revolution_runs_on_the_gpu_kernels_as_on_the_threads() {
+    // A ring beam into a cylinder along a steady field, on the CPU's threads and on the GPU's
+    // kernels (CubeCL's CPU runtime, double precision): the same rings at the end, the same
+    // history and probe to rounding (the device sums the current in fixed point, emcraft_gpu).
+    let solved = |device: &str| {
+        let mut s = Session::new();
+        run(
+            &mut s,
+            &[
+                ("geometry.solid", json!({"shape": "cylinder", "radius": 5, "length": 10})),
+                ("project.analysis", json!({"kind": "particles"})),
+                ("particles.magnetic", json!({"b": [0, 0, 0.5]})),
+                ("particles.beam", json!({"face": "z-", "current": 10, "energy": 1e5, "radius": 3, "inner": 1, "rise": 0})),
+                ("particles.probe", json!({"at": [2, 1, 5]})),
+            ],
+        );
+        let r = s.execute("solve.particles", &json!({"time": 0.2, "cell": 0.5, "axisymmetric": true, "device": device, "precision": "double"}));
+        (r.unwrap(), s.results.particles.clone().unwrap())
+    };
+    let (cpu, a) = solved("cpu");
+    let (gpu, b) = solved("cubecl-cpu");
+    assert_eq!((cpu["device"].as_str(), gpu["device"].as_str(), gpu["precision"].as_str()), (Some("cpu"), Some("cubecl-cpu"), Some("double")));
+    assert!(a.particles > 50 && a.particles == b.particles, "{} against {}", a.particles, b.particles);
+    let close = |x: f64, y: f64| (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1e-300);
+    for (p, q) in a.history.iter().zip(&b.history) {
+        assert!(close(p.field, q.field) && close(p.kinetic, q.kinetic) && p.particles == q.particles, "{p:?} against {q:?}");
+    }
+    let top = a.probes[0].e.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
+    let worst = a.probes[0].e.iter().flatten().zip(b.probes[0].e.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
+    assert!(top > 0.0 && worst <= 1e-9 * top, "{worst:e} of {top:e}");
+    // A Cartesian run says it ran on the CPU's threads.
+    let mut s = plasma();
+    let r = s.execute("solve.particles", &json!({"time": 0.05, "device": "cubecl-cpu"})).unwrap();
+    assert_eq!(r["device"], json!("cpu"));
+}

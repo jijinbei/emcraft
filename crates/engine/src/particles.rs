@@ -314,10 +314,11 @@ fn steps_of(p: &Params, time: f64, dt: f64) -> Result<usize> {
     Ok(steps as usize)
 }
 
-/// What recording a run needs of it, on the Cartesian grid or in a body of revolution.
+/// What recording a run needs of it, on the Cartesian grid or in a body of revolution, on the
+/// CPU's threads or a device.
 trait Run {
     fn advance(&mut self) -> Result<pic::Moved>;
-    fn energy(&self) -> pic::Energy;
+    fn energy(&mut self) -> Result<pic::Energy>;
     /// The particles (or rings) it holds.
     fn held(&self) -> usize;
     /// E (V/m, along x, y, z) at a point (m from the grid's corner).
@@ -325,7 +326,25 @@ trait Run {
     fn now(&self) -> f64;
     /// At most [`SNAPSHOT`] of its particles, evenly chosen, in the model's coordinates.
     fn snapshot(&self) -> Vec<Snap>;
+
+    /// `steps` steps, what each did and, where `sampled(its index)`, E at `probes` after it.
+    fn span(&mut self, steps: usize, probes: &[[f64; 3]], sampled: &dyn Fn(usize) -> bool) -> Result<Vec<Stepped>> {
+        (0..steps)
+            .map(|b| {
+                let moved = self.advance()?;
+                Ok((moved, sampled(b).then(|| probes.iter().map(|at| self.e_at_point(*at)).collect())))
+            })
+            .collect()
+    }
+
+    /// The run's state brought home at its end (a device's back into the run).
+    fn end(&mut self) -> Result<()> {
+        Ok(())
+    }
 }
+
+/// What a step did, and E at the probes after it when they were sampled.
+type Stepped = (pic::Moved, Option<Vec<[f64; 3]>>);
 
 /// A run on the Cartesian grid whose corner is at `origin` (m).
 struct Cartesian {
@@ -337,8 +356,8 @@ impl Run for Cartesian {
     fn advance(&mut self) -> Result<pic::Moved> {
         self.pic.step().map_err(fdtd)
     }
-    fn energy(&self) -> pic::Energy {
-        self.pic.energy()
+    fn energy(&mut self) -> Result<pic::Energy> {
+        Ok(self.pic.energy())
     }
     fn held(&self) -> usize {
         self.pic.particles()
@@ -388,35 +407,39 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]]) -> Res
     let mut lost = 0;
     let mut charge = 0.0;
     let half = second_half(steps);
-    for n in 0..steps {
-        if n % (steps / PROGRESS_REPORTS).max(1) == 0 {
-            crate::progress::report(n, steps, "solve.particles")?;
-        }
-        let moved = run.advance()?;
-        lost += moved.lost;
-        charge += moved.emitted;
-        since += &moved;
-        if n >= half {
-            late += &moved;
-        }
-        if (n + 1) % probe_every == 0 {
-            for (f, at) in probe_fields.iter_mut().zip(probes) {
-                f.push(run.e_at_point(*at));
+    let mut n = 0;
+    // Spans to each record of the history, the run's energy read at their ends.
+    while n < steps {
+        let first = n;
+        let stop = ((n / every + 1) * every).min(steps);
+        for (moved, sample) in run.span(stop - n, probes, &|b| (first + b + 1) % probe_every == 0)? {
+            if n % (steps / PROGRESS_REPORTS).max(1) == 0 {
+                crate::progress::report(n, steps, "solve.particles")?;
             }
-        }
-        if (n + 1) % every == 0 || n + 1 == steps {
-            let span = (n + 1 - history.len() * every).max(1) as f64 * dt;
-            let energy = run.energy();
-            let rate = |q: f64| q / span;
-            history.push(Record {
-                t: run.now(),
-                field: energy.field,
-                kinetic: energy.kinetic,
-                particles: run.held(),
-                emitted: rate(since.emitted),
-                collected: since.collected.map(|w| w.map(rate)),
-            });
-            since = pic::Moved::default();
+            lost += moved.lost;
+            charge += moved.emitted;
+            since += &moved;
+            if n >= half {
+                late += &moved;
+            }
+            for (f, e) in probe_fields.iter_mut().zip(sample.into_iter().flatten()) {
+                f.push(e);
+            }
+            if (n + 1) % every == 0 || n + 1 == steps {
+                let span = (n + 1 - history.len() * every).max(1) as f64 * dt;
+                let energy = run.energy()?;
+                let rate = |q: f64| q / span;
+                history.push(Record {
+                    t: run.now(),
+                    field: energy.field,
+                    kinetic: energy.kinetic,
+                    particles: run.held(),
+                    emitted: rate(since.emitted),
+                    collected: since.collected.map(|w| w.map(rate)),
+                });
+                since = pic::Moved::default();
+            }
+            n += 1;
         }
     }
     Ok(Recording { history, probe_fields, late, lost, charge, probe_every })
@@ -434,9 +457,10 @@ fn second_half(steps: usize) -> usize {
 /// `steps` of `run` (each `dt`, s) recorded, the field at `probes` (m from the grid's corner),
 /// and its result kept: the reply.
 fn run_to_end(s: &mut Session, run: &mut impl Run, frame: Frame, probes: &[[f64; 3]]) -> Result<Value> {
-    let before = run.energy().field;
+    let before = run.energy()?.field;
     let rec = record(run, frame.steps, frame.dt, probes)?;
-    let end = End { field_energy_before: before, field_energy_after: run.energy().field, snapshot: run.snapshot(), particles: run.held() };
+    run.end()?;
+    let end = End { field_energy_before: before, field_energy_after: run.energy()?.field, snapshot: run.snapshot(), particles: run.held() };
     finish(s, frame, rec, probes, end)
 }
 
@@ -783,8 +807,10 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
         _ => None,
     };
     let set = settings(p, confirmed.as_ref())?;
+    let (device, gpu) = crate::solve::device_of(s, p)?;
     if let RunGrid::Revolution { fine } = set.grid {
-        return axi::solve(s, p, &set, fine.get());
+        let reply = axi::solve(s, p, &set, fine.get(), gpu)?;
+        return Ok(ran_on(reply, device, gpu));
     }
     let (grid, region) = grid(s, set.cell.get())?;
     let origin = region.origin;
@@ -793,7 +819,17 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
     let pic = build(s, grid, &region, dt, set.pusher)?;
     let probes: Vec<[f64; 3]> = s.model.particles.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
     let frame = Frame { origin, cells: grid.axes.map(|a| a.cells), h: grid.axes.map(|a| a.h), dt, steps, axisymmetric: false };
-    run_to_end(s, &mut Cartesian { pic, origin }, frame, &probes)
+    // The Cartesian grid runs on the CPU's threads.
+    let reply = run_to_end(s, &mut Cartesian { pic, origin }, frame, &probes)?;
+    Ok(ran_on(reply, crate::solve::Device::Cpu, None))
+}
+
+/// `reply` with where the run ran: the device and the fields' precision.
+fn ran_on(mut reply: Value, device: crate::solve::Device, gpu: Option<emcraft_gpu::Gpu>) -> Value {
+    let device = if gpu.is_some() { device } else { crate::solve::Device::Cpu };
+    reply["device"] = json!(device.id());
+    reply["precision"] = json!(gpu.map_or("double", |g| g.precision.id()));
+    reply
 }
 
 /// The axis the particles run along: the first beam's, bunch's or emitter's normal, else a plasma

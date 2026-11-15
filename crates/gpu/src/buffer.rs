@@ -94,8 +94,43 @@ impl Ints {
         Ints { handle: client.create_from_slice(u32::as_bytes(xs)), len: xs.len() }
     }
 
+    pub(crate) fn zeros(client: &Client, len: usize) -> Ints {
+        Ints::new(client, &vec![0; len])
+    }
+
     pub(crate) fn arg(&self) -> BufferArg {
         TensorHandle::new_contiguous([self.len], self.handle.clone(), cubecl::ir::ElemType::UInt(cubecl::ir::UIntKind::U32))
+            .binding()
+            .into_buffer_arg()
+    }
+
+    /// The first `len` indices.
+    pub(crate) fn read(&self, client: &Client, len: usize) -> Result<Vec<u32>> {
+        if len > self.len {
+            return Err(FdtdError::Invalid { what: "read".into(), why: "outside the array".into() });
+        }
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let handle = self.handle.clone().offset_end(((self.len - len) * std::mem::size_of::<u32>()) as u64);
+        let bytes = client.read_one(handle).map_err(|e| FdtdError::Device(format!("{e:?}")))?;
+        Ok(u32::from_bytes(&bytes).to_vec())
+    }
+}
+
+/// An array of 64-bit words on the device, zeroed: fixed-point sums.
+pub(crate) struct Words {
+    handle: Handle,
+    len: usize,
+}
+
+impl Words {
+    pub(crate) fn zeros(client: &Client, len: usize) -> Words {
+        Words { handle: client.create_from_slice(u64::as_bytes(&vec![0u64; len])), len }
+    }
+
+    pub(crate) fn arg(&self) -> BufferArg {
+        TensorHandle::new_contiguous([self.len], self.handle.clone(), cubecl::ir::ElemType::UInt(cubecl::ir::UIntKind::U64))
             .binding()
             .into_buffer_arg()
     }

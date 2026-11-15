@@ -641,7 +641,19 @@ impl AxiPic {
 
     /// The injections' rings for this step, on their ends.
     fn emit(&mut self, moved: &mut Moved) -> Result<()> {
+        for (population, new) in self.births(self.rings(), moved)? {
+            if let Some(pop) = self.populations.get_mut(population) {
+                pop.rings.extend(new);
+            }
+        }
+        Ok(())
+    }
+
+    /// The injections' rings for this step, each batch with the population it joins, the run
+    /// holding `held` rings before them; their charge and kinetic energy added to `moved`.
+    fn births(&mut self, mut held: usize, moved: &mut Moved) -> Result<Vec<(usize, Vec<Ring>)>> {
         let t = self.time();
+        let mut born = Vec::new();
         for inj in self.injections.clone() {
             let Some(pop) = self.populations.get(inj.population) else { continue };
             let species = pop.species;
@@ -663,16 +675,15 @@ impl AxiPic {
                 }
                 new.push(Ring { r, z, u, w });
             }
-            if self.rings().saturating_add(new.len()) > MAX_RINGS {
+            if held.saturating_add(new.len()) > MAX_RINGS {
                 return Err(invalid("rings", format!("the injection would hold more than {MAX_RINGS}")));
             }
             moved.emitted += new.iter().map(|p| species.charge * p.w).sum::<f64>();
             moved.kinetic_in += new.iter().map(|p| p.w * species.kinetic(p.u)).sum::<f64>();
-            if let Some(pop) = self.populations.get_mut(inj.population) {
-                pop.rings.extend(new);
-            }
+            held += new.len();
+            born.push((inj.population, new));
         }
-        Ok(())
+        Ok(born)
     }
 
     /// Pushes and moves ring `p`, its current handed to `add(component, id, value)` (0: J_r,
@@ -930,6 +941,9 @@ fn by_rows(values: &mut [f64], psi: Option<&mut Vec<f64>>, nr: usize, row: impl 
         _ => values.par_chunks_mut(nr).enumerate().for_each(|(k, v)| row(k, v, None)),
     }
 }
+
+#[path = "axi_device.rs"]
+pub mod device;
 
 #[cfg(test)]
 #[path = "axi_tests.rs"]

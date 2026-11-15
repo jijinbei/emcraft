@@ -57,3 +57,18 @@ Stage A reuses the solved fields as they are and is verified against closed form
 and B, E×B drift, an electron in a plane wave — Landau & Lifshitz, *The Classical Theory of
 Fields*, §48 — and Vay's crossed fields) and against the pillbox's energy gain eV₀T cos φ. PIC
 grows from the time-domain solver without disturbing the frequency domain.
+
+## On a GPU (2026-11-16)
+
+The r–z run goes to a GPU through CubeCL (`emcraft_gpu::AxiDevice`; never wgpu, which draws
+the 3D view only), chosen by `device` on `solve.particles` as the time domain's is. The fields,
+the layers' ψ and the rings stay on the device for the whole run; the host makes the injections'
+rings (the CPU's quasi-random places) a batch ahead and reads back what left the run and the
+probes. Determinism is kept without ordering the threads: the current, the one write many
+units contend for, is summed as 64-bit fixed-point integers (Le Grand, Götz & Walker,
+Comput. Phys. Commun. 184:374, 2013), whose sum does not depend on the order of the additions;
+the rings that left are sorted by step and index before they are tallied, so a step's tallies
+are summed in the CPU's order. Floating-point atomics (as PIConGPU's, Burau et al., IEEE Trans.
+Plasma Sci. 38:2831, 2010) were not taken: they repeat only to rounding. A strong steady
+magnetic field is held apart from the field's changes, so that single precision keeps its
+digits for them. The Cartesian grid stays on the CPU's threads for now.

@@ -21,6 +21,7 @@ use std::ops::ControlFlow;
 
 use emcraft_fdtd::{OpenBatch, OpenPlan, OpenStepper, Plan, Result, Stepper};
 
+mod axi;
 mod buffer;
 mod device;
 mod front;
@@ -30,6 +31,7 @@ mod lattice;
 mod open;
 mod slots;
 
+pub use axi::{AxiDevice, AxiStep};
 pub use device::{Available, Backend, Precision, available};
 pub use front::{Fronts, MAX_ROWS, MIN_ROWS};
 

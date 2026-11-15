@@ -22,6 +22,7 @@ cubecl-cpu = ["cubecl/cpu"]
 emcraft-macros = { workspace = true }
 serde = { workspace = true }
 emcraft-fdtd = { workspace = true }
+emcraft-model = { workspace = true }
 emcraft-solver = { workspace = true }
 cubecl = { workspace = true }
 num-complex = { workspace = true, features = ["bytemuck"] }

@@ -801,3 +801,13 @@ overlap tests).
   walls lower its line (the heavy test in `emcraft-fdtd::axi`; template `relativistic-bwo`).
 - M. Roberts, *The unreasonable effectiveness of quasirandom sequences*, 2018 — the R₂ sequence
   that spreads emitted particles across a wall's nodes, the same every run.
+- S. Le Grand, A. W. Götz, R. C. Walker, *SPFP: Speed without compromise — a mixed precision
+  model for GPU accelerated molecular dynamics simulations*, Comput. Phys. Commun.
+  184:374–380, 2013 — forces summed on a GPU as 64-bit fixed-point integers, added atomically in
+  any order to the same bits: the r–z run's current on a device (`emcraft-gpu::axi`), each
+  addition J × scale rounded to an integer, the scale chosen so no point's sum overflows.
+- H. Burau, R. Widera, W. Hönig, G. Juckeland, A. Debus, T. Kluge, U. Schramm, T. E. Cowan,
+  R. Sauerbrey, M. Bussmann, *PIConGPU: a fully relativistic particle-in-cell code for a GPU
+  cluster*, IEEE Trans. Plasma Sci. 38(10):2831–2839, 2010 — particle-in-cell on GPUs: a unit a
+  particle for the push, a unit a cell for the fields, the particles' current the step's
+  contended write (there in floating-point atomics, which repeat only to rounding).

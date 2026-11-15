@@ -10,6 +10,7 @@ use cubecl::prelude::*;
 
 use crate::buffer::{Buf, Real};
 
+pub(crate) mod axi;
 pub(crate) mod front;
 pub(crate) mod guide;
 pub(crate) mod open;
@@ -137,6 +138,27 @@ pub(crate) fn follow<F: Real>(poles: &mut Poles<F>, axis: u32, id: usize, delta:
 #[cube]
 pub(crate) fn at(d0: usize, d1: usize, i: usize, j: usize, k: usize) -> usize {
     i + d0 * (j + d1 * k)
+}
+
+/// The sum of each unit's `acc` over the cube (of `width` units at most), folded pairwise in a
+/// fixed tree: the same bits every run. Unit 0 holds it.
+#[cube]
+pub(crate) fn fold<F: Real>(acc: F, #[comptime] width: usize) -> F {
+    let u = UNIT_POS as usize;
+    let units = CUBE_DIM as usize;
+    let mut sums = Shared::<[F]>::new_slice(width);
+    sums[u] = acc;
+    sync_cube();
+    let mut half = units / 2;
+    while half > 0 {
+        if u < half {
+            let other = sums[u + half];
+            sums[u] += other;
+        }
+        sync_cube();
+        half /= 2;
+    }
+    sums[0]
 }
 
 /// out[0] = 2 × 1.5, to see whether a device runs `F` at all.
