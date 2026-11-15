@@ -857,26 +857,8 @@ fn misfit(omega: &[f64], s11: &[C], s21: &[C], b: [f64; 2], order: usize, zeros:
     (sum / omega.len().max(1) as f64).sqrt()
 }
 
-/// The minimum of `g` over [lo, hi] by golden-section search, `steps` narrowings.
-fn golden(mut lo: f64, mut hi: f64, steps: usize, g: impl Fn(f64) -> f64) -> f64 {
-    let r = 0.5 * (5f64.sqrt() - 1.0);
-    let (mut x1, mut x2) = (hi - r * (hi - lo), lo + r * (hi - lo));
-    let (mut g1, mut g2) = (g(x1), g(x2));
-    for _ in 0..steps {
-        if g1 <= g2 {
-            hi = x2;
-            (x2, g2) = (x1, g1);
-            x1 = hi - r * (hi - lo);
-            g1 = g(x1);
-        } else {
-            lo = x1;
-            (x1, g1) = (x2, g2);
-            x2 = lo + r * (hi - lo);
-            g2 = g(x2);
-        }
-    }
-    if g1 <= g2 { x1 } else { x2 }
-}
+/// The golden-section narrowings each slope's refinement makes: its bracket to a 10⁻⁸ of itself.
+const SLOPE_STEPS: usize = 40;
 
 /// The characteristic fitted to a filter's S11, S21 and S22 with each port's phase loading
 /// removed: the slopes first read from the stop bands' phase (S11's and S22's), then each
@@ -916,7 +898,7 @@ pub fn fit_loaded(omega: &[f64], s11: &[C], s21: &[C], s22: &[C], order: usize, 
                 t[k] = x;
                 misfit(omega, s11, s21, t, order, zeros)
             };
-            b[k] = golden(b[k] - width, b[k] + width, 40, at);
+            b[k] = emcraft_theory::search::golden(b[k] - width, b[k] + width, SLOPE_STEPS, at, |a, b| a <= b).at;
         }
         width *= 0.25;
     }

@@ -40,6 +40,7 @@
 use std::f64::consts::{LN_2, PI};
 
 use emcraft_solver::Complex64 as C;
+use emcraft_theory::search::{Golden, golden};
 
 use crate::{EngineError, Result};
 
@@ -562,23 +563,9 @@ pub fn predict(dt: f64, incident: &[f64], freqs: &[f64], mag: &[f64], phase: &[f
 /// The most passes each golden-section search of [`optimize`] makes.
 const SEARCH_STEPS: usize = 24;
 
-/// The golden-section search for the largest of `f` on [a, b] (a unimodal guess), bounded.
-fn golden(mut a: f64, mut b: f64, f: impl Fn(f64) -> f64) -> (f64, f64) {
-    let g = 0.5 * (5f64.sqrt() - 1.0);
-    let (mut c, mut d) = (b - g * (b - a), a + g * (b - a));
-    let (mut fc, mut fd) = (f(c), f(d));
-    for _ in 0..SEARCH_STEPS {
-        if fc > fd {
-            (b, d, fd) = (d, c, fc);
-            c = b - g * (b - a);
-            fc = f(c);
-        } else {
-            (a, c, fc) = (c, d, fd);
-            d = a + g * (b - a);
-            fd = f(d);
-        }
-    }
-    if fc > fd { (c, fc) } else { (d, fd) }
+/// The larger of two peaks found by a search is the better (ties to the upper point).
+fn higher(a: f64, b: f64) -> bool {
+    a > b
 }
 
 /// The input of carrier `f0` and width `width` that the line compresses most: the better of the
@@ -593,8 +580,9 @@ pub fn optimize(freqs: &[f64], mag: &[f64], phase: &[f64], f0: f64, width: f64) 
     let reach = room / width;
     let (_, d) = line.delay_at(f0);
     let towards = if d > 0.0 { -1.0 } else { 1.0 };
-    let (rate, linear) = golden(0.0, reach, |r| peak(Input { f0, width, law: Law::Linear { rate: towards * r } }));
-    let (scale, matched) = golden(0.2, 2.0, |s| peak(Input { f0, width, law: Law::Matched { scale: s } }));
+    let Golden { at: rate, value: linear } =
+        golden(0.0, reach, SEARCH_STEPS, |r| peak(Input { f0, width, law: Law::Linear { rate: towards * r } }), higher);
+    let Golden { at: scale, value: matched } = golden(0.2, 2.0, SEARCH_STEPS, |s| peak(Input { f0, width, law: Law::Matched { scale: s } }), higher);
     let best = if matched > linear {
         Input { f0, width, law: Law::Matched { scale } }
     } else {

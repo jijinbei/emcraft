@@ -24,63 +24,16 @@ use std::f64::consts::PI;
 
 use emcraft_model::units::C0;
 
-use crate::bessel::j;
+use crate::bessel::{Radial, radial};
 
 /// The trapezoid points over a period.
 const POINTS: usize = 128;
 
+/// How finely a mode's frequency is found: a part in 10¹², far below the expansion's own error.
+const ROOT_TOLERANCE: f64 = 1e-12;
+
 /// The most space harmonics each way.
 pub const MAX_HARMONICS: usize = 12;
-
-/// J₀(√s) and J₁(√s)/√s for real s (s < 0: I₀(√−s) and I₁(√−s)/√−s), by their power series
-/// where those are exact (s ≤ 4, or below zero: all terms positive), else J₀, J₁ themselves.
-fn bessels(s: f64) -> (f64, f64) {
-    if s > 4.0 {
-        let x = s.sqrt();
-        return (j(0, x), j(1, x) / x);
-    }
-    let q = -0.25 * s;
-    let (mut t0, mut t1) = (1.0, 0.5);
-    let (mut f0, mut f1) = (1.0, 0.5);
-    for k in 1..400 {
-        let k = k as f64;
-        t0 *= q / (k * k);
-        t1 *= q / (k * (k + 1.0));
-        f0 += t0;
-        f1 += t1;
-        if t0.abs() < 1e-17 * f0.abs() && t1.abs() < 1e-17 * f1.abs() {
-            break;
-        }
-    }
-    (f0, f1)
-}
-
-/// The determinant of a square matrix (row-major, `n` × `n`) by elimination with partial
-/// pivoting.
-fn det(mut a: Vec<f64>, n: usize) -> f64 {
-    let mut d = 1.0;
-    for c in 0..n {
-        let Some(p) = (c..n).max_by(|x, y| a[x * n + c].abs().total_cmp(&a[y * n + c].abs())) else { return 0.0 };
-        if a[p * n + c] == 0.0 {
-            return 0.0;
-        }
-        if p != c {
-            for k in 0..n {
-                a.swap(p * n + k, c * n + k);
-            }
-            d = -d;
-        }
-        let pivot = a[c * n + c];
-        d *= pivot;
-        for r in c + 1..n {
-            let f = a[r * n + c] / pivot;
-            for k in c..n {
-                a[r * n + k] -= f * a[c * n + k];
-            }
-        }
-    }
-    d
-}
 
 /// The rippled guide: its mean radius r₀, ripple amplitude h and period d (m).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -120,7 +73,7 @@ impl RippledGuide {
             let values: Vec<(f64, f64, f64)> = wall
                 .iter()
                 .map(|&(z, r, slope)| {
-                    let (f0, f1) = bessels(p2 * r * r);
+                    let Radial { j0: f0, j1_over_x: f1 } = radial(p2 * r * r);
                     (z, f0, r * slope * f1)
                 })
                 .collect();
@@ -138,7 +91,7 @@ impl RippledGuide {
                 m[row * size + col] = (a + kn * b) / (POINTS as f64 * scale);
             }
         }
-        det(m, size)
+        crate::linalg::det(m, size)
     }
 
     /// The TM0 modes' frequencies (Hz) at phase `psi` per period (rad), from `low` to `high`
@@ -169,31 +122,8 @@ impl RippledGuide {
             return None;
         }
         let at = |f: f64| self.mismatch(2.0 * PI * f, psi, harmonics);
-        let grid: Vec<(f64, f64)> = (0..=steps).map(|i| low + (high - low) * i as f64 / steps as f64).map(|f| (f, at(f))).collect();
-        let roots = grid
-            .windows(2)
-            .filter(|w| w[0].1 == 0.0 || w[0].1.signum() != w[1].1.signum())
-            .map(|w| {
-                let ((mut a, mut fa), mut b) = (w[0], w[1].0);
-                for _ in 0..200 {
-                    if (b - a) <= 1e-12 * b {
-                        break;
-                    }
-                    let mid = 0.5 * (a + b);
-                    let fm = at(mid);
-                    if fm == 0.0 {
-                        return mid;
-                    }
-                    if fm.signum() == fa.signum() {
-                        (a, fa) = (mid, fm);
-                    } else {
-                        b = mid;
-                    }
-                }
-                0.5 * (a + b)
-            })
-            .collect();
-        Some(roots)
+        let grid = (0..=steps).map(|i| low + (high - low) * i as f64 / steps as f64);
+        Some(crate::roots::roots_on_grid(at, grid, ROOT_TOLERANCE))
     }
 }
 
@@ -205,10 +135,10 @@ mod tests {
     fn the_series_are_the_bessel_functions() {
         // J₀(2) = 0.2238907791, J₁(2) = 0.5767248078; I₀(3) = 4.8807925859, I₁(3) = 3.9533702174
         // (Abramowitz & Stegun, Tables 9.1 and 9.8).
-        let (j0, j1) = bessels(4.0);
+        let Radial { j0, j1_over_x: j1 } = radial(4.0);
         approx::assert_abs_diff_eq!(j0, 0.223_890_779_1, epsilon = 1e-10);
         approx::assert_abs_diff_eq!(j1, 0.576_724_807_8 / 2.0, epsilon = 1e-10);
-        let (i0, i1) = bessels(-9.0);
+        let Radial { j0: i0, j1_over_x: i1 } = radial(-9.0);
         approx::assert_abs_diff_eq!(i0, 4.880_792_585_9, epsilon = 1e-9);
         approx::assert_abs_diff_eq!(i1, 3.953_370_217_4 / 3.0, epsilon = 1e-9);
     }

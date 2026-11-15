@@ -41,7 +41,7 @@ use num_complex::Complex64 as C;
 
 use crate::TheoryError;
 
-/// Iteration cap of the arithmetic–geometric mean and of the bisections.
+/// Iteration cap of the arithmetic–geometric mean.
 const MAX_STEPS: usize = 200;
 
 /// The arithmetic–geometric mean of a, b > 0.
@@ -257,28 +257,6 @@ impl CoupledFilter {
     }
 }
 
-/// The x in [`lo`, `hi`] where `g` crosses zero, by bisection (`g(lo)` and `g(hi)` of opposite
-/// signs), or `None`.
-pub fn crossing(g: impl Fn(f64) -> f64, mut lo: f64, mut hi: f64) -> Option<f64> {
-    let (mut glo, ghi) = (g(lo), g(hi));
-    if !(glo * ghi <= 0.0) {
-        return None;
-    }
-    for _ in 0..MAX_STEPS {
-        let mid = 0.5 * (lo + hi);
-        if mid <= lo || mid >= hi {
-            break;
-        }
-        let gm = g(mid);
-        if (gm <= 0.0) == (glo <= 0.0) {
-            (lo, glo) = (mid, gm);
-        } else {
-            hi = mid;
-        }
-    }
-    Some(0.5 * (lo + hi))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,7 +351,7 @@ mod tests {
         // Lossless: |S11|² + |S21|² = 1.
         let (s11, s21) = filter.s(1.07 * f0, 0.0);
         approx::assert_abs_diff_eq!(s11.norm_sqr() + s21.norm_sqr(), 1.0, epsilon = 1e-12);
-        let edge = crossing(|f| filter.s(f, 0.0).1.norm_sqr() - 0.5, f0, 1.3 * f0).unwrap();
+        let edge = crate::roots::bisect(|f| filter.s(f, 0.0).1.norm_sqr() - 0.5, f0, 1.3 * f0, 0.0).unwrap();
         assert!(edge > 1.04 * f0 && edge < 1.1 * f0, "{edge}");
     }
 
@@ -426,7 +404,7 @@ mod tests {
         for (a, d) in filter.sections.iter().zip(&design.sections) {
             assert!((a.z0e / d.z0e - 1.0).abs() < 1e-4 && (a.z0o / d.z0o - 1.0).abs() < 1e-4 && (a.length / d.length - 1.0).abs() < 1e-5);
         }
-        let edge = |lo: f64, hi: f64| crossing(|f| filter.s(f, 0.0).1.norm() - 0.5f64.sqrt(), lo, hi).unwrap();
+        let edge = |lo: f64, hi: f64| crate::roots::bisect(|f| filter.s(f, 0.0).1.norm() - 0.5f64.sqrt(), lo, hi, 0.0).unwrap();
         assert!((edge(4e9, 5e9) - 4655558405.811216).abs() < 1e3 && (edge(5e9, 6e9) - 5344466478.938534).abs() < 1e3);
         let db = |f: f64| 20.0 * filter.s(f, 0.0).1.norm().log10();
         approx::assert_abs_diff_eq!(filter.s(5e9, 0.0).1.norm(), 0.9999999986744627, epsilon = 1e-9);

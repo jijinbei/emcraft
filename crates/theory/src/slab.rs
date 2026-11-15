@@ -92,39 +92,15 @@ pub fn slab_loaded_modes(guide: &SlabGuide, search: ModeSearch) -> Vec<f64> {
     roots
 }
 
-/// The roots of `f` in (lo, hi) by sign changes on a fine grid, each refined by bisection.
+/// The steps of the grid a band's roots are bracketed on: fine enough that no two of its modes
+/// share a step.
+const GRID: usize = 20_000;
+
+/// The roots of `f` in (lo, hi), from the top down: sign changes on a grid of [`GRID`] steps,
+/// each refined to rounding. (At the top, k_y1 = 0: a root there only when εr = 1, the empty
+/// guide's TE_m0.)
 fn brackets(f: &dyn Fn(f64) -> f64, lo: f64, hi: f64) -> Vec<f64> {
-    let n = 20_000;
-    let x = |i: usize| hi - (hi - lo) * i as f64 / n as f64;
-    let mut out = Vec::new();
-    // (At the top, k_y1 = 0: a root there only when εr = 1, the empty guide's TE_m0.)
-    let (mut xa, mut fa) = (x(0), f(x(0)));
-    for i in 1..=n {
-        let (xb, fb) = (x(i), f(x(i)));
-        if fa == 0.0 {
-            out.push(xa);
-        } else if fa * fb < 0.0 {
-            let (mut p, mut q, mut fp) = (xa, xb, fa);
-            for _ in 0..200 {
-                let mid = 0.5 * (p + q);
-                let fm = f(mid);
-                if fm == 0.0 || (q - p).abs() <= 1e-15 * mid.abs().max(1.0) {
-                    p = mid;
-                    q = mid;
-                    break;
-                }
-                if fp * fm < 0.0 {
-                    q = mid;
-                } else {
-                    p = mid;
-                    fp = fm;
-                }
-            }
-            out.push(0.5 * (p + q));
-        }
-        (xa, fa) = (xb, fb);
-    }
-    out
+    crate::roots::roots_on_grid(f, (0..=GRID).map(|i| hi - (hi - lo) * i as f64 / GRID as f64), 0.0)
 }
 
 /// cos(√s x) for complex s (even in √s: either root).

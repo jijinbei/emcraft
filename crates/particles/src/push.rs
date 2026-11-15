@@ -37,51 +37,7 @@ pub(crate) fn cross(a: V3, b: V3) -> V3 {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
-/// A kind of particle: its charge (C) and rest mass (kg).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Species {
-    pub charge: f64,
-    pub mass: f64,
-}
-
-/// The electron (CODATA 2018: the elementary charge exact, mₑ).
-pub const ELECTRON: Species = Species { charge: -1.602_176_634e-19, mass: 9.109_383_701_5e-31 };
-
-impl Species {
-    /// Its rest energy mc² (J).
-    pub fn rest_energy(self) -> f64 {
-        self.mass * C0 * C0
-    }
-
-    /// The momentum u = γv (m/s) of kinetic energy `kinetic` (J) along unit vector `along`.
-    ///
-    /// ```
-    /// use emcraft_particles::{ELECTRON, gamma};
-    /// let mev = 1e6 * 1.602_176_634e-19;
-    /// let u = ELECTRON.momentum(mev, [0.0, 0.0, 1.0]);
-    /// // γ = 1 + T/(mc²): 1 MeV on 0.511 MeV of rest energy.
-    /// assert!((gamma(u) - (1.0 + mev / ELECTRON.rest_energy())).abs() < 1e-12);
-    /// ```
-    pub fn momentum(self, kinetic: f64, along: V3) -> V3 {
-        let g = 1.0 + kinetic / self.rest_energy();
-        let speed = C0 * (g * g - 1.0).max(0.0).sqrt();
-        let n = dot(along, along).sqrt();
-        if n > 0.0 { scale(along, speed / n) } else { [0.0; 3] }
-    }
-
-    /// The kinetic energy (γ − 1)mc² (J) of momentum `u` (m/s), accurate for small speeds too.
-    pub fn kinetic(self, u: V3) -> f64 {
-        let u2 = dot(u, u) / (C0 * C0);
-        // γ − 1 = u²/(γ + 1): no cancellation at small u.
-        self.rest_energy() * u2 / (gamma(u) + 1.0)
-    }
-}
-
-/// γ of momentum `u` = γv (m/s).
-#[inline]
-pub fn gamma(u: V3) -> f64 {
-    (1.0 + dot(u, u) / (C0 * C0)).sqrt()
-}
+pub use emcraft_model::particles::{ELECTRON, Species, gamma};
 
 /// The velocity (m/s) of momentum `u`.
 #[inline]

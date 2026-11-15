@@ -72,7 +72,7 @@ fn a_cold_plasma_oscillates_at_the_plasma_frequency() {
     // Electrons on a neutralising background, their velocities perturbed as sin(kx): E_x rings at
     // ω_p (Birdsall & Langdon 1991, §4-2), whatever k — here ω_pΔt = 0.05, kh = 2π/32.
     let density = 1e16;
-    let wp = plasma_frequency(density, ELECTRON.charge, ELECTRON.mass);
+    let wp = plasma_frequency(density, ELECTRON);
     let dt = 0.05 / wp;
     let h = 1.05 * C0 * dt * 3f64.sqrt();
     let n = 32;
@@ -136,7 +136,7 @@ fn a_planar_diode_draws_the_space_charge_limited_current() {
     // Child's at 100 kV across 1 cm), approached as h^{2/3}: the density near a cathode
     // emitting at rest grows as z^{−2/3}. At 40 and 80 cells it is 5.9 % and 3.7 % high, and
     // the two extrapolated to h → 0 at that order are within 0.1 %.
-    let want = child_langmuir_relativistic(1e5, 1e-2, ELECTRON.charge, ELECTRON.mass).unwrap();
+    let want = child_langmuir_relativistic(1e5, 1e-2, ELECTRON).unwrap();
     let (coarse, fine) = (diode(40, 2000, 500) / want, diode(80, 3500, 1000) / want);
     let r = 2f64.powf(2.0 / 3.0);
     let limit = (r * fine - coarse) / (r - 1.0);
@@ -305,7 +305,7 @@ fn a_ring_beam_in_a_drift_tube_sinks_by_its_space_charge() {
     // I₀(γ₀^{2/3} − 1)^{3/2}/(2 ln(R/r_b)) = 1.07 kA it all passes and γ_b = 1.1616 (1.3 % off
     // here; above the limit, oracle pic-limiting-current). At γ₀ = 1.25 the beam (β = 0.6) is slower than the
     // grid's shortest waves: no numerical Cherenkov drag.
-    let beam = emcraft_theory::plasma::AnnularBeam { gamma0: 1.25, ratio: 5.0 / 3.0, charge: ELECTRON.charge, mass: ELECTRON.mass };
+    let beam = emcraft_theory::plasma::AnnularBeam { gamma0: 1.25, ratio: 5.0 / 3.0, species: ELECTRON };
     let limit = beam.limiting().unwrap();
     let want = beam.depressed(0.7 * limit).unwrap();
     let (g, passed) = drift_tube(0.7 * limit);
@@ -348,14 +348,14 @@ fn two_streams_grow_at_the_cold_dispersions_rate() {
     // imaginary root of 1 = Σ ω_s²/(ω − k v_s)² (Birdsall & Langdon §5-6; emcraft_theory::plasma).
     // β = 0.1 (its relativistic shift below 1 %): 2.7 % and 0.5 % here.
     let (n, v0) = (1e16, 3e7);
-    let wb = plasma_frequency(n, ELECTRON.charge, ELECTRON.mass);
+    let wb = plasma_frequency(n, ELECTRON);
     let k = 3f64.sqrt() / 2.0 * wb / v0;
     let want = emcraft_theory::plasma::two_stream_growth(wb, v0, wb, -v0, k).unwrap();
     let got = growth(k, &[(n, v0, 1e-3 * v0), (n, -v0, 0.0)], 16, 16.0 / want);
     assert!((got / want - 1.0).abs() < 0.04, "{got:e} against {want:e}");
     // The weak beam at k v_b = ω_p.
     let vb = wb / k;
-    let weak = plasma_frequency(0.01 * n, ELECTRON.charge, ELECTRON.mass);
+    let weak = plasma_frequency(0.01 * n, ELECTRON);
     let want = emcraft_theory::plasma::two_stream_growth(wb, 0.0, weak, vb, k).unwrap();
     let got = growth(k, &[(n, 0.0, 0.0), (0.01 * n, vb, 1e-4 * vb)], 16, 22.0 / want);
     assert!((got / want - 1.0).abs() < 0.03, "{got:e} against {want:e}");

@@ -129,7 +129,7 @@ fn a_ring_beam_sinks_by_its_space_charge_and_stops_at_the_limit() {
     // (γ₀ ≳ 1.5) drive the grid's numerical Cherenkov instability on these square cells (cells
     // finer along z: the next test).
     use emcraft_theory::plasma::AnnularBeam;
-    let beam = AnnularBeam { gamma0: 1.25, ratio: 10.0 / 6.0, charge: ELECTRON.charge, mass: ELECTRON.mass };
+    let beam = AnnularBeam { gamma0: 1.25, ratio: 10.0 / 6.0, species: ELECTRON };
     let il = beam.limiting().unwrap();
     let want = beam.depressed(0.7 * il).unwrap();
     let (g, passed) = ring_beam(1.25, 0.7 * il, 0.08, 0.5e-3, 1, 2e-9);
@@ -151,7 +151,7 @@ fn a_relativistic_ring_beam_keeps_its_depression_on_cells_fine_along_z() {
     // alike, and steady for 20 ns; on square cells 6–19 % deeper).
     use emcraft_theory::plasma::AnnularBeam;
     let gamma0 = 3.0;
-    let beam = AnnularBeam { gamma0, ratio: 10.0 / 6.0, charge: ELECTRON.charge, mass: ELECTRON.mass };
+    let beam = AnnularBeam { gamma0, ratio: 10.0 / 6.0, species: ELECTRON };
     let current = 0.7 * beam.limiting().unwrap();
     let want = gamma0 - beam.depressed(current).unwrap();
     let depression = |fine: usize| (gamma0 - ring_beam(gamma0, current, 0.05, 1e-3, fine, 1.2e-9).0) / want;

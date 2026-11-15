@@ -121,7 +121,7 @@ pub struct Start {
 /// ```
 /// use emcraft_particles::{ELECTRON, End, Line, Pusher, Sample, Settings, Start, track};
 /// // A 1 MeV electron through 10 cm of free space: it goes through, its energy kept.
-/// let mev = 1e6 * 1.602_176_634e-19;
+/// let mev = 1e6 * -ELECTRON.charge;
 /// let u = ELECTRON.momentum(mev, [0.0, 0.0, 1.0]);
 /// let line = Line { origin: [0.0; 3], axis: [0.0, 0.0, 1.0], length: 0.1 };
 /// let settings = Settings { pusher: Pusher::Boris, dt: 1e-12, max_steps: 10_000, every: 10 };

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Result, invalid};
 use crate::model::Model;
+use crate::units::C0;
 
 /// The most emitters, plasmas and probes a run holds.
 pub const MAX_EMITTERS: usize = 6;
@@ -28,6 +29,57 @@ pub const MAX_VOLTAGE: f64 = 1e10;
 pub const MAX_CURRENT_DENSITY: f64 = 1e14;
 pub const MAX_SPEED: f64 = 3e10;
 pub const MAX_MAGNETIC: f64 = 1e4;
+
+/// A kind of particle: its charge (C) and rest mass (kg).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Species {
+    pub charge: f64,
+    pub mass: f64,
+}
+
+/// The electron (CODATA 2018: the elementary charge exact, mₑ).
+pub const ELECTRON: Species = Species { charge: -1.602_176_634e-19, mass: 9.109_383_701_5e-31 };
+
+/// u·u for a vector u.
+fn norm2(u: [f64; 3]) -> f64 {
+    u[0] * u[0] + u[1] * u[1] + u[2] * u[2]
+}
+
+impl Species {
+    /// Its rest energy mc² (J).
+    pub fn rest_energy(self) -> f64 {
+        self.mass * C0 * C0
+    }
+
+    /// The momentum u = γv (m/s) of kinetic energy `kinetic` (J) along unit vector `along`.
+    ///
+    /// ```
+    /// use emcraft_model::particles::{ELECTRON, gamma};
+    /// let mev = 1e6 * -ELECTRON.charge;
+    /// let u = ELECTRON.momentum(mev, [0.0, 0.0, 1.0]);
+    /// // γ = 1 + T/(mc²): 1 MeV on 0.511 MeV of rest energy.
+    /// assert!((gamma(u) - (1.0 + mev / ELECTRON.rest_energy())).abs() < 1e-12);
+    /// ```
+    pub fn momentum(self, kinetic: f64, along: [f64; 3]) -> [f64; 3] {
+        let g = 1.0 + kinetic / self.rest_energy();
+        let speed = C0 * (g * g - 1.0).max(0.0).sqrt();
+        let n = norm2(along).sqrt();
+        if n > 0.0 { along.map(|c| c * (speed / n)) } else { [0.0; 3] }
+    }
+
+    /// The kinetic energy (γ − 1)mc² (J) of momentum `u` (m/s), accurate for small speeds too.
+    pub fn kinetic(self, u: [f64; 3]) -> f64 {
+        let u2 = norm2(u) / (C0 * C0);
+        // γ − 1 = u²/(γ + 1): no cancellation at small u.
+        self.rest_energy() * u2 / (gamma(u) + 1.0)
+    }
+}
+
+/// γ of momentum `u` = γv (m/s).
+#[inline]
+pub fn gamma(u: [f64; 3]) -> f64 {
+    (1.0 + norm2(u) / (C0 * C0)).sqrt()
+}
 
 /// The most macro-particles a wall's node emits a step.
 pub const MAX_PER_NODE: usize = 64;

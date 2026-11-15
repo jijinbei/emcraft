@@ -11,6 +11,36 @@ use emcraft_model::units::C0;
 
 pub use emcraft_fem::bessel::{j, jp, zeros};
 
+/// J₀(√s) and J₁(√s)/√s, the radial factors of a TM0 space harmonic (s = p²r²).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Radial {
+    pub j0: f64,
+    pub j1_over_x: f64,
+}
+
+/// J₀(√s) and J₁(√s)/√s for real s (s < 0: I₀(√−s) and I₁(√−s)/√−s), by their power series
+/// where those are exact (s ≤ 4, or below zero: all terms positive), else J₀, J₁ themselves.
+pub fn radial(s: f64) -> Radial {
+    if s > 4.0 {
+        let x = s.sqrt();
+        return Radial { j0: j(0, x), j1_over_x: j(1, x) / x };
+    }
+    let q = -0.25 * s;
+    let (mut t0, mut t1) = (1.0, 0.5);
+    let (mut f0, mut f1) = (1.0, 0.5);
+    for k in 1..400 {
+        let k = k as f64;
+        t0 *= q / (k * k);
+        t1 *= q / (k * (k + 1.0));
+        f0 += t0;
+        f1 += t1;
+        if t0.abs() < 1e-17 * f0.abs() && t1.abs() < 1e-17 * f1.abs() {
+            break;
+        }
+    }
+    Radial { j0: f0, j1_over_x: f1 }
+}
+
 /// Trapezoid panels of the modified Bessel functions' integrals: their integrands are smooth
 /// (periodic for I₀, decaying doubly exponentially for K₀), so the rule converges geometrically
 /// and is exact to rounding far below this.

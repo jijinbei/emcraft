@@ -61,7 +61,7 @@ fn a_planar_diode_draws_the_space_charge_limited_current() {
     let r = s.execute("solve.particles", &json!({"time": 1, "cell": 0.25})).unwrap();
     // Jory & Trivelpiece's current at 100 kV across 1 cm, 7.23e5 A/m², 5.9 % high at 40 cells
     // (emcraft_fdtd::pic's convergence test); electrons arriving: a negative current.
-    let want = emcraft_theory::plasma::child_langmuir_relativistic(1e5, 1e-2, 1.602_176_634e-19, 9.109_383_701_5e-31).unwrap();
+    let want = emcraft_theory::plasma::child_langmuir_relativistic(1e5, 1e-2, emcraft_particles::ELECTRON).unwrap();
     let j = -r["walls"]["z+"]["density"].as_f64().unwrap();
     assert!((j / want - 1.059).abs() < 0.01, "{j} A/m²");
     assert!(r["walls"]["z-"]["current"].as_f64() == Some(0.0) && r["walls"].get("x+").is_none(), "{r}");
@@ -265,7 +265,7 @@ fn a_relativistic_ring_beam_in_a_body_of_revolution_sinks_to_its_closed_form() {
     // depression is the closed form's to 3.5 % (on square cells the grid's numerical Cherenkov
     // instability deepens it by a quarter, emcraft_fdtd::axi).
     use emcraft_theory::plasma::AnnularBeam;
-    let beam = AnnularBeam { gamma0: 3.0, ratio: 10.0 / 6.0, charge: -1.602_176_634e-19, mass: 9.109_383_701_5e-31 };
+    let beam = AnnularBeam { gamma0: 3.0, ratio: 10.0 / 6.0, species: emcraft_particles::ELECTRON };
     let current = 0.7 * beam.limiting().unwrap();
     let mut s = Session::new();
     run(

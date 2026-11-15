@@ -142,6 +142,10 @@ pub fn bloch_cos(a: f64, sections: &[(f64, f64, f64)], frequency: f64) -> f64 {
     0.5 * (total[0] + total[3]).re
 }
 
+/// The grid Bloch frequencies are bracketed on (f_max over this), and how finely each is found.
+const BLOCH_STEPS: usize = 4000;
+const BLOCH_TOLERANCE: f64 = 1e-13;
+
 /// The frequencies (Hz, ascending) up to `f_max` at which TE₁₀ Bloch waves of phase `psi`
 /// (0 < ψ < π) per period exist in the periodically loaded guide of [`bloch_cos`]: the roots of
 /// (A + D)/2 = cos ψ, bracketed on a grid of `f_max`/4000 and bisected to 1e-13 relative.
@@ -151,31 +155,9 @@ pub fn bloch_frequencies(a: f64, sections: &[(f64, f64, f64)], psi: f64, f_max: 
     }
     let target = psi.cos();
     let g = |f: f64| bloch_cos(a, sections, f) - target;
-    let steps = 4000;
-    let mut out = Vec::new();
-    let mut prev = (f_max * 1e-6, g(f_max * 1e-6));
-    for i in 1..=steps {
-        let f = f_max * i as f64 / steps as f64;
-        let v = g(f);
-        if prev.1.signum() != v.signum() {
-            let (mut lo, mut hi) = (prev.0, f);
-            let s_lo = prev.1.signum();
-            for _ in 0..200 {
-                let mid = 0.5 * (lo + hi);
-                if g(mid).signum() == s_lo {
-                    lo = mid;
-                } else {
-                    hi = mid;
-                }
-                if hi - lo <= 1e-13 * hi {
-                    break;
-                }
-            }
-            out.push(0.5 * (lo + hi));
-        }
-        prev = (f, v);
-    }
-    out
+    // From just above zero (where the cascade is singular) to f_max.
+    let grid = std::iter::once(f_max * 1e-6).chain((1..=BLOCH_STEPS).map(|i| f_max * i as f64 / BLOCH_STEPS as f64));
+    crate::roots::roots_on_grid(g, grid, BLOCH_TOLERANCE)
 }
 
 /// An empty rectangular guide a × b (m) of `eps_r`, periodic along z with `period` (m).

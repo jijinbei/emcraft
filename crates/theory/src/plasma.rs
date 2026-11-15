@@ -20,52 +20,56 @@
 //! which tends to Child's law as qV/(mc²) → 0. The integral is taken with φ = V s⁴, which makes
 //! its integrand smooth, by Simpson's rule.
 
+use emcraft_model::particles::Species;
 use emcraft_model::units::{C0, EPS0};
 
 /// Simpson panels of the relativistic diode's integral: its integrand is smooth after the
 /// substitution, so the rule's error is far below 1e-12.
 const PANELS: usize = 2000;
 
-/// The plasma frequency ω_p (rad/s) of `density` (m⁻³) particles of `charge` (C) and `mass`
-/// (kg).
+/// The plasma frequency ω_p (rad/s) of `density` (m⁻³) particles of `species`.
 ///
 /// ```
+/// use emcraft_model::particles::ELECTRON;
 /// use emcraft_theory::plasma::plasma_frequency;
 /// // 10¹⁶ electrons per m³: f_p = ω_p/2π ≈ 0.898 GHz.
-/// let w = plasma_frequency(1e16, -1.602_176_634e-19, 9.109_383_701_5e-31);
+/// let w = plasma_frequency(1e16, ELECTRON);
 /// assert!((w / (2.0 * std::f64::consts::PI) / 0.8979e9 - 1.0).abs() < 1e-3);
 /// ```
-pub fn plasma_frequency(density: f64, charge: f64, mass: f64) -> f64 {
+pub fn plasma_frequency(density: f64, species: Species) -> f64 {
+    let Species { charge, mass } = species;
     (density * charge * charge / (EPS0 * mass)).sqrt()
 }
 
-/// Child's space-charge-limited current density (A/m²) of particles of `charge` (C, its size)
-/// and `mass` (kg) across `gap` (m) at `voltage` (V), slow particles.
+/// Child's space-charge-limited current density (A/m²) of particles of `species` (its charge's
+/// size) across `gap` (m) at `voltage` (V), slow particles.
 ///
 /// ```
+/// use emcraft_model::particles::ELECTRON;
 /// use emcraft_theory::plasma::child_langmuir;
 /// // Electrons: the perveance 2.334 µA/V^{3/2} on a 1 m² cathode 1 m away.
-/// let j = child_langmuir(1.0, 1.0, 1.602_176_634e-19, 9.109_383_701_5e-31);
+/// let j = child_langmuir(1.0, 1.0, ELECTRON);
 /// assert!((j / 2.334e-6 - 1.0).abs() < 1e-3);
 /// ```
-pub fn child_langmuir(voltage: f64, gap: f64, charge: f64, mass: f64) -> f64 {
-    4.0 * EPS0 / 9.0 * (2.0 * charge.abs() / mass).sqrt() * voltage.powf(1.5) / (gap * gap)
+pub fn child_langmuir(voltage: f64, gap: f64, species: Species) -> f64 {
+    4.0 * EPS0 / 9.0 * (2.0 * species.charge.abs() / species.mass).sqrt() * voltage.powf(1.5) / (gap * gap)
 }
 
 /// The space-charge-limited current density (A/m²) at any speed (Jory & Trivelpiece 1969), as
-/// [`child_langmuir`]; `None` for a voltage, gap, charge or mass that is not a finite number > 0.
+/// [`child_langmuir`]; `None` for a voltage, gap, charge or mass that is not a finite number > 0
+/// (the charge its size).
 ///
 /// ```
+/// use emcraft_model::particles::ELECTRON;
 /// use emcraft_theory::plasma::{child_langmuir, child_langmuir_relativistic};
-/// let (q, m) = (1.602_176_634e-19, 9.109_383_701_5e-31);
 /// // At 10 V Child's law holds; at 100 kV the electrons carry 0.98 of what it says, at 1 MV 0.85.
-/// let ratio = |v: f64| child_langmuir_relativistic(v, 1e-2, q, m).unwrap() / child_langmuir(v, 1e-2, q, m);
+/// let ratio = |v: f64| child_langmuir_relativistic(v, 1e-2, ELECTRON).unwrap() / child_langmuir(v, 1e-2, ELECTRON);
 /// assert!((ratio(10.0) - 1.0).abs() < 1e-4);
 /// assert!((ratio(1e5) - 0.9799).abs() < 1e-4 && (ratio(1e6) - 0.8506).abs() < 1e-4);
-/// assert!(child_langmuir_relativistic(-1.0, 1e-2, q, m).is_none());
+/// assert!(child_langmuir_relativistic(-1.0, 1e-2, ELECTRON).is_none());
 /// ```
-pub fn child_langmuir_relativistic(voltage: f64, gap: f64, charge: f64, mass: f64) -> Option<f64> {
-    let q = charge.abs();
+pub fn child_langmuir_relativistic(voltage: f64, gap: f64, species: Species) -> Option<f64> {
+    let (q, mass) = (species.charge.abs(), species.mass);
     let ok = |x: f64| x.is_finite() && x > 0.0;
     if !(ok(voltage) && ok(gap) && ok(q) && ok(mass)) {
         return None;
@@ -85,8 +89,7 @@ pub fn child_langmuir_relativistic(voltage: f64, gap: f64, charge: f64, mass: f6
 mod tests {
     use super::*;
 
-    const Q: f64 = 1.602_176_634e-19;
-    const M: f64 = 9.109_383_701_5e-31;
+    use emcraft_model::particles::ELECTRON;
 
     #[test]
     fn a_weak_beam_grows_as_the_cube_root_of_its_density() {
@@ -104,25 +107,26 @@ mod tests {
     #[test]
     fn the_relativistic_diode_tends_to_childs_law_and_falls_below_it() {
         // Below Child's law, the more so the faster the particles.
-        let ratio = |v: f64| child_langmuir_relativistic(v, 1e-2, Q, M).unwrap_or(0.0) / child_langmuir(v, 1e-2, Q, M);
+        let ratio = |v: f64| child_langmuir_relativistic(v, 1e-2, ELECTRON).unwrap_or(0.0) / child_langmuir(v, 1e-2, ELECTRON);
         assert!((ratio(1.0) - 1.0).abs() < 1e-6);
         assert!(ratio(1e4) < 1.0 && ratio(1e5) < ratio(1e4) && ratio(1e6) < ratio(1e5));
         // Far above mc², the particles at c: J → 2ε₀cV/d², growing as V, not V^{3/2}.
-        let high = |v: f64| child_langmuir_relativistic(v, 1e-2, Q, M).unwrap_or(0.0);
+        let high = |v: f64| child_langmuir_relativistic(v, 1e-2, ELECTRON).unwrap_or(0.0);
         assert!((high(2e8) / high(1e8) - 2.0).abs() < 0.1);
         assert!((high(1e9) / (2.0 * EPS0 * C0 * 1e9 / 1e-4) - 1.0).abs() < 0.1);
     }
 }
 
-/// I₀ = 4πε₀mc³/|q| (A): the current scale of relativistic beams of particles of `charge` (C) and
-/// `mass` (kg), 17.045 kA for electrons.
+/// I₀ = 4πε₀mc³/|q| (A): the current scale of relativistic beams of particles of `species`,
+/// 17.045 kA for electrons.
 ///
 /// ```
+/// use emcraft_model::particles::ELECTRON;
 /// use emcraft_theory::plasma::current_scale;
-/// assert!((current_scale(1.602_176_634e-19, 9.109_383_701_5e-31) / 17_045.0 - 1.0).abs() < 1e-4);
+/// assert!((current_scale(ELECTRON) / 17_045.0 - 1.0).abs() < 1e-4);
 /// ```
-pub fn current_scale(charge: f64, mass: f64) -> f64 {
-    4.0 * std::f64::consts::PI * EPS0 * mass * C0.powi(3) / charge.abs()
+pub fn current_scale(species: Species) -> f64 {
+    4.0 * std::f64::consts::PI * EPS0 * species.mass * C0.powi(3) / species.charge.abs()
 }
 
 /// A thin annular beam of radius r_b in a grounded pipe of radius R, held on its lines by an
@@ -137,13 +141,12 @@ pub struct AnnularBeam {
     pub gamma0: f64,
     /// R/r_b.
     pub ratio: f64,
-    pub charge: f64,
-    pub mass: f64,
+    pub species: Species,
 }
 
 impl AnnularBeam {
     fn scale(&self) -> f64 {
-        current_scale(self.charge, self.mass) / (2.0 * self.ratio.ln())
+        current_scale(self.species) / (2.0 * self.ratio.ln())
     }
 
     /// The current (A) at the beam's γ_b.
@@ -154,9 +157,10 @@ impl AnnularBeam {
     /// The limiting current (A); none for γ₀ ≤ 1 or R ≤ r_b.
     ///
     /// ```
+    /// use emcraft_model::particles::ELECTRON;
     /// use emcraft_theory::plasma::AnnularBeam;
     /// // γ₀ = 3 in a pipe 10/6 of the beam's radius: 18.7 kA.
-    /// let b = AnnularBeam { gamma0: 3.0, ratio: 10.0 / 6.0, charge: 1.602_176_634e-19, mass: 9.109_383_701_5e-31 };
+    /// let b = AnnularBeam { gamma0: 3.0, ratio: 10.0 / 6.0, species: ELECTRON };
     /// assert!((b.limiting().unwrap() / 18.72e3 - 1.0).abs() < 1e-3);
     /// ```
     pub fn limiting(&self) -> Option<f64> {
@@ -167,8 +171,9 @@ impl AnnularBeam {
     /// solutions, which a beam rising from nothing takes; none at or above the limit.
     ///
     /// ```
+    /// use emcraft_model::particles::ELECTRON;
     /// use emcraft_theory::plasma::AnnularBeam;
-    /// let b = AnnularBeam { gamma0: 3.0, ratio: 10.0 / 6.0, charge: 1.602_176_634e-19, mass: 9.109_383_701_5e-31 };
+    /// let b = AnnularBeam { gamma0: 3.0, ratio: 10.0 / 6.0, species: ELECTRON };
     /// let il = b.limiting().unwrap();
     /// let g = b.depressed(0.5 * il).unwrap();
     /// assert!(g < 3.0 && g > 3f64.cbrt());
@@ -179,19 +184,14 @@ impl AnnularBeam {
         if !(current.is_finite() && current >= 0.0 && current < limit) {
             return None;
         }
-        // current_at falls from the limit at γ₀^{1/3} to 0 at γ₀: bisection.
-        let (mut lo, mut hi) = (self.gamma0.cbrt(), self.gamma0);
-        for _ in 0..200 {
-            let mid = 0.5 * (lo + hi);
-            if self.current_at(mid) > current {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
-        }
-        Some(0.5 * (lo + hi))
+        // current_at falls from the limit at γ₀^{1/3} to 0 at γ₀: a sign change between them.
+        crate::roots::bisect(|g| self.current_at(g) - current, self.gamma0.cbrt(), self.gamma0, 0.0)
     }
 }
+
+/// The two-stream quartic's roots: their seeds' spacing (rad) and the most sweeps.
+const QUARTIC_SPREAD: f64 = 1.3;
+const QUARTIC_SWEEPS: usize = 2000;
 
 /// The growth rate (1/s) of a longitudinal wave of wavenumber `k` (1/m) on two cold streams of
 /// plasma frequencies `wa`, `wb` (rad/s) moving at `va`, `vb` (m/s), slow particles: the largest
@@ -221,39 +221,15 @@ pub fn two_stream_growth(wa: f64, va: f64, wb: f64, vb: f64, k: f64) -> Option<f
     }
     let (a, b) = (k * va, k * vb);
     // (ω − a)²(ω − b)² − ω_a²(ω − b)² − ω_b²(ω − a)², a monic quartic: its coefficients, low first.
-    let mul = |p: &[f64], q: &[f64]| -> Vec<f64> {
-        let mut r = vec![0.0; p.len() + q.len() - 1];
-        for (i, x) in p.iter().enumerate() {
-            for (j, y) in q.iter().enumerate() {
-                r[i + j] += x * y;
-            }
-        }
-        r
-    };
-    let sq = |c: f64| mul(&[-c, 1.0], &[-c, 1.0]);
+    let sq = |c: f64| crate::poly::product(&[-c, 1.0], &[-c, 1.0]);
     let (pa, pb) = (sq(a), sq(b));
-    let mut poly = mul(&pa, &pb);
+    let mut poly = crate::poly::product(&pa, &pb);
     for (i, (x, y)) in pb.iter().zip(&pa).enumerate() {
         poly[i] -= wa * wa * x + wb * wb * y;
     }
     let eval = |z: Z| poly.iter().rev().fold(Z::new(0.0, 0.0), |acc, c| acc * z + c);
     let scale = a.abs().max(b.abs()).max(wa).max(wb).max(1.0);
-    let mut roots: Vec<Z> = (0..4).map(|i| Z::from_polar(scale, 0.4 + 1.3 * i as f64)).collect();
-    for _ in 0..2000 {
-        let mut moved = 0.0f64;
-        for i in 0..4 {
-            let denom = (0..4).filter(|j| *j != i).fold(Z::new(1.0, 0.0), |acc, j| acc * (roots[i] - roots[j]));
-            if denom.norm() == 0.0 {
-                continue;
-            }
-            let step = eval(roots[i]) / denom;
-            roots[i] -= step;
-            moved = moved.max(step.norm() / scale);
-        }
-        if moved < 1e-15 {
-            break;
-        }
-    }
+    let roots: [Z; 4] = crate::poly::roots(eval, crate::poly::Seeds { scale, spread: QUARTIC_SPREAD }, QUARTIC_SWEEPS);
     let g = roots.iter().map(|z| z.im).fold(0.0f64, f64::max);
     // Round-off of a real root is not growth.
     Some(if g < 1e-9 * scale { 0.0 } else { g })

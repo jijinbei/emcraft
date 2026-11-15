@@ -29,6 +29,7 @@
 //! *Plasma frequency reduction factors in electron beams*, IRE Trans. Electron Devices ED-2:3–11,
 //! 1955, here for a thin ring and relativistic κ).
 
+use emcraft_model::particles::Species;
 use emcraft_model::units::{C0, EPS0};
 use num_complex::Complex64 as Z;
 
@@ -41,28 +42,16 @@ pub struct Start {
     pub b: f64,
 }
 
-/// The roots of (δ² + 4QC)(δ + jb) − j by the Durand–Kerner iteration, bounded.
+/// The cubic's roots: their seeds' spacing (rad, about 2π/3) and the most sweeps.
+const CUBIC_SPREAD: f64 = 2.1;
+const CUBIC_SWEEPS: usize = 500;
+
+/// The roots of (δ² + 4QC)(δ + jb) − j ([`crate::poly::roots`]).
 fn roots(b: f64, qc: f64) -> [Z; 3] {
     let jb = Z::new(0.0, b);
     let p = |z: Z| (z * z + 4.0 * qc) * (z + jb) - Z::new(0.0, 1.0);
     let scale = 1.0 + b.abs() + qc.abs().sqrt();
-    let mut r: [Z; 3] = std::array::from_fn(|i| Z::from_polar(scale, 0.4 + 2.1 * i as f64));
-    for _ in 0..500 {
-        let mut moved = 0.0f64;
-        for i in 0..3 {
-            let denom = (0..3).filter(|j| *j != i).fold(Z::new(1.0, 0.0), |acc, j| acc * (r[i] - r[j]));
-            if denom.norm() == 0.0 {
-                continue;
-            }
-            let step = p(r[i]) / denom;
-            r[i] -= step;
-            moved = moved.max(step.norm() / scale);
-        }
-        if moved < 1e-15 {
-            break;
-        }
-    }
-    r
+    crate::poly::roots(p, crate::poly::Seeds { scale, spread: CUBIC_SPREAD }, CUBIC_SWEEPS)
 }
 
 /// The boundary conditions' determinant at (CN, b) over the roots' differences, `echo` the collector end's backward wave per
@@ -76,6 +65,31 @@ fn determinant(cn: f64, b: f64, qc: f64, echo: Z) -> Z {
     let apart = (d[0] - d[1]) * (d[1] - d[2]) * (d[2] - d[0]);
     (rows[0][0] * m(1, 2) - rows[0][1] * m(0, 2) + rows[0][2] * m(0, 1)) / apart
 }
+
+/// Newton's step for f(x, y) = 0, f complex (its real and imaginary parts two equations), from
+/// `(x, y)` where f is `here`: the Jacobian by forward differences of `h`, the 2 × 2 system by
+/// Cramer's rule. None where f has no value or the Jacobian is singular.
+fn newton_step(f: impl Fn(f64, f64) -> Option<Z>, (x, y): (f64, f64), here: Z, h: f64) -> Option<[f64; 2]> {
+    let dx = (f(x + h, y)? - here) / h;
+    let dy = (f(x, y + h)? - here) / h;
+    let det = dx.re * dy.im - dy.re * dx.im;
+    if det == 0.0 || !det.is_finite() {
+        return None;
+    }
+    Some([(here.re * dy.im - here.im * dy.re) / det, (dx.re * here.im - dx.im * here.re) / det])
+}
+
+/// The most Newton steps a root takes.
+const MAX_NEWTON: usize = 100;
+
+/// Johnson's start: Newton's first guess (CN, b) near his matched values; the space charge
+/// raised from none in steps of this QC, each step's root the next one's guess; the forward
+/// differences' step (well above the determinant's rounding, below its curvature) and the
+/// determinant's size at which a root is settled.
+const JOHNSON_GUESS: (f64, f64) = (0.3, 1.5);
+const SPACE_CHARGE_STEP: f64 = 0.05;
+const JOHNSON_H: f64 = 1e-7;
+const JOHNSON_SETTLED: f64 = 1e-13;
 
 /// Johnson's start of oscillation of a lossless BWO at space-charge parameter `qc` (0 to 1):
 /// CN = 0.314, b = 1.522 without space charge. None if Newton's method does not settle.
@@ -92,26 +106,21 @@ pub fn johnson_start(qc: f64) -> Option<Start> {
     if !(qc.is_finite() && (0.0..=1.0).contains(&qc)) {
         return None;
     }
-    let (mut cn, mut b) = (0.3, 1.5);
-    let h = 1e-7;
+    let (mut cn, mut b) = JOHNSON_GUESS;
     // From no space charge to qc in steps, each Newton's start the last step's root.
-    let stages = (qc / 0.05).ceil().max(1.0) as usize;
+    let stages = (qc / SPACE_CHARGE_STEP).ceil().max(1.0) as usize;
     for stage in 1..=stages {
         let q = qc * stage as f64 / stages as f64;
+        let det = |cn: f64, b: f64| Some(determinant(cn, b, q, Z::new(0.0, 0.0)));
         let mut settled = false;
-        for _ in 0..100 {
+        for _ in 0..MAX_NEWTON {
             let f = determinant(cn, b, q, Z::new(0.0, 0.0));
-            if f.norm() < 1e-13 {
+            if f.norm() < JOHNSON_SETTLED {
                 settled = true;
                 break;
             }
-            let (fa, fb) = ((determinant(cn + h, b, q, Z::new(0.0, 0.0)) - f) / h, (determinant(cn, b + h, q, Z::new(0.0, 0.0)) - f) / h);
-            let det = fa.re * fb.im - fb.re * fa.im;
-            if det == 0.0 || !det.is_finite() {
-                return None;
-            }
-            cn -= (f.re * fb.im - f.im * fb.re) / det;
-            b -= (fa.re * f.im - fa.im * f.re) / det;
+            let [dcn, db] = newton_step(det, (cn, b), f, JOHNSON_H)?;
+            (cn, b) = (cn - dcn, b - db);
         }
         if !settled {
             return None;
@@ -129,51 +138,69 @@ pub struct Ring {
     pub tube: f64,
 }
 
+/// The beam: injected at `gamma0`, of particles of `species`, its space charge counted if it is
+/// a `ring`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Beam {
+    pub gamma0: f64,
+    pub species: Species,
+    pub ring: Option<Ring>,
+}
+
+impl Beam {
+    /// Its numbers finite, γ₀ > 1, a charge and a mass > 0, a ring inside its tube.
+    fn valid(&self) -> bool {
+        let ring = self
+            .ring
+            .is_none_or(|r| [r.radius, r.thickness, r.tube].iter().all(|x| x.is_finite() && *x > 0.0) && r.radius + 0.5 * r.thickness < r.tube);
+        let Species { charge, mass } = self.species;
+        [self.gamma0, charge, mass].iter().all(|x| x.is_finite()) && self.gamma0 > 1.0 && charge != 0.0 && mass > 0.0 && ring
+    }
+
+    /// Its speed v₀ (m/s).
+    fn speed(&self) -> f64 {
+        C0 * (1.0 - 1.0 / (self.gamma0 * self.gamma0)).sqrt()
+    }
+}
+
 /// A backward-wave oscillator: the coupling impedance on the beam (Ω), the length (m) and the
-/// frequency (Hz); the beam at `gamma0`, of particles of `charge` (C) and `mass` (kg), its space
-/// charge counted if it is a `ring`.
+/// frequency (Hz), and its beam.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Oscillator {
     pub impedance: f64,
     pub length: f64,
     pub frequency: f64,
-    pub gamma0: f64,
-    pub charge: f64,
-    pub mass: f64,
-    pub ring: Option<Ring>,
+    pub beam: Beam,
 }
 
 impl Oscillator {
     fn valid(&self) -> bool {
-        let ring = self
-            .ring
-            .is_none_or(|r| [r.radius, r.thickness, r.tube].iter().all(|x| x.is_finite() && *x > 0.0) && r.radius + 0.5 * r.thickness < r.tube);
-        [self.impedance, self.length, self.frequency, self.gamma0, self.charge, self.mass].iter().all(|x| x.is_finite())
+        [self.impedance, self.length, self.frequency].iter().all(|x| x.is_finite())
             && self.impedance > 0.0
             && self.length > 0.0
             && self.frequency > 0.0
-            && self.gamma0 > 1.0
-            && self.charge != 0.0
-            && self.mass > 0.0
-            && ring
+            && self.beam.valid()
     }
 
     fn speed(&self) -> f64 {
-        C0 * (1.0 - 1.0 / (self.gamma0 * self.gamma0)).sqrt()
+        self.beam.speed()
     }
 
     /// 2γ³mv₀²/(qK): the current (A) at C = 1.
     fn scale(&self) -> f64 {
         let v0 = self.speed();
-        2.0 * self.gamma0.powi(3) * self.mass * v0 * v0 / (self.charge.abs() * self.impedance)
+        let Beam { gamma0, species, .. } = self.beam;
+        2.0 * gamma0.powi(3) * species.mass * v0 * v0 / (species.charge.abs() * self.impedance)
     }
 
     /// Pierce's QC at `current` (A); 0 without a ring.
     ///
     /// ```
-    /// use emcraft_theory::bwo::{Oscillator, Ring};
+    /// use emcraft_model::particles::ELECTRON;
+    /// use emcraft_theory::bwo::{Beam, Oscillator, Ring};
     /// let ring = Ring { radius: 8e-3, thickness: 1e-3, tube: 10e-3 };
-    /// let o = Oscillator { impedance: 0.6, length: 0.24, frequency: 11.8e9, gamma0: 1.0 + 1e5 / 510_998.95, charge: -1.602_176_634e-19, mass: 9.109_383_701_5e-31, ring: Some(ring) };
+    /// let beam = Beam { gamma0: 1.0 + 1e5 / 510_998.95, species: ELECTRON, ring: Some(ring) };
+    /// let o = Oscillator { impedance: 0.6, length: 0.24, frequency: 11.8e9, beam };
     /// let qc = o.space_charge(5.0).unwrap();
     /// assert!(qc > 0.05 && qc < 0.3);
     /// // QC grows as the cube root of the current.
@@ -183,16 +210,17 @@ impl Oscillator {
         if !(self.valid() && current.is_finite() && current > 0.0) {
             return None;
         }
-        let Some(ring) = self.ring else { return Some(0.0) };
+        let Beam { gamma0, species: Species { charge, mass }, ring } = self.beam;
+        let Some(ring) = ring else { return Some(0.0) };
         let v0 = self.speed();
         let w = 2.0 * std::f64::consts::PI * self.frequency;
         let beta = w / v0;
-        let kappa = beta / self.gamma0;
+        let kappa = beta / gamma0;
         let (ib, ia) = (i0(kappa * ring.radius)?, i0(kappa * ring.tube)?);
         let g = ib * (k0(kappa * ring.radius)? - k0(kappa * ring.tube)? * ib / ia);
-        let r2 = beta * beta * ring.thickness * ring.radius * g / (self.gamma0 * self.gamma0);
-        let density = current / (self.charge.abs() * v0 * 2.0 * std::f64::consts::PI * ring.radius * ring.thickness);
-        let wq2 = r2 * density * self.charge * self.charge / (EPS0 * self.mass) / self.gamma0.powi(3);
+        let r2 = beta * beta * ring.thickness * ring.radius * g / (gamma0 * gamma0);
+        let density = current / (charge.abs() * v0 * 2.0 * std::f64::consts::PI * ring.radius * ring.thickness);
+        let wq2 = r2 * density * charge * charge / (EPS0 * mass) / gamma0.powi(3);
         let c = (current / self.scale()).cbrt();
         Some(wq2 / (w * c).powi(2) / 4.0)
     }
@@ -201,16 +229,18 @@ impl Oscillator {
     /// that current (a fixed point, bounded). None for hostile input.
     ///
     /// ```
-    /// use emcraft_theory::bwo::{Oscillator, Ring};
+    /// use emcraft_model::particles::ELECTRON;
+    /// use emcraft_theory::bwo::{Beam, Oscillator, Ring};
     /// // 100 kV electrons (γ₀ = 1.1957, β₀ = 0.5482), 1 Ω, 12 GHz, 120 mm: N = 8.762, 24.18 A.
-    /// let mut o = Oscillator { impedance: 1.0, length: 0.12, frequency: 12e9, gamma0: 1.0 + 1e5 / 510_998.95, charge: -1.602_176_634e-19, mass: 9.109_383_701_5e-31, ring: None };
+    /// let beam = Beam { gamma0: 1.0 + 1e5 / 510_998.95, species: ELECTRON, ring: None };
+    /// let mut o = Oscillator { impedance: 1.0, length: 0.12, frequency: 12e9, beam };
     /// let i = o.start_current().unwrap();
     /// assert!((i / 24.18 - 1.0).abs() < 2e-3);
     /// // Twice as long: an eighth of it (Johnson's L⁻³).
     /// o.length = 0.24;
     /// assert!((i / o.start_current().unwrap() - 8.0).abs() < 1e-9);
     /// // A ring's space charge raises it.
-    /// o.ring = Some(Ring { radius: 8e-3, thickness: 1e-3, tube: 10e-3 });
+    /// o.beam.ring = Some(Ring { radius: 8e-3, thickness: 1e-3, tube: 10e-3 });
     /// assert!(o.start_current().unwrap() > i / 8.0);
     /// o.impedance = 0.0;
     /// assert!(o.start_current().is_none());
@@ -263,11 +293,41 @@ pub struct Reflecting {
     pub circuit: Vec<Sample>,
     pub period: f64,
     pub periods: usize,
-    pub gamma0: f64,
-    pub charge: f64,
-    pub mass: f64,
-    pub ring: Option<Ring>,
+    pub beam: Beam,
 }
+
+/// Pierce's CN, b and QC at a current and frequency, and the collector's echo ρe^{jΦ}.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pierce {
+    cn: f64,
+    b: f64,
+    qc: f64,
+    echo: Z,
+}
+
+/// Where an oscillator starts: its current (A) and frequency (Hz).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StartPoint {
+    pub current: f64,
+    pub frequency: f64,
+}
+
+/// The reflecting oscillator's Newton: the forward differences' step in (ln I, f/GHz); each step
+/// clamped to these (a factor e^½ of the current, 50 MHz) and halved at most this often until
+/// it lowers |det|; settled once a step is below this and |det| below that (the numerical
+/// derivative's noise).
+const REFLECTING_H: f64 = 1e-6;
+const MAX_LN_CURRENT_STEP: f64 = 0.5;
+const MAX_GHZ_STEP: f64 = 0.05;
+const HALVINGS: usize = 30;
+const SETTLED_STEP: f64 = 1e-9;
+const SETTLED_DET: f64 = 1e-8;
+
+/// Newton's guesses along the circuit (this many steps across its span), and what a start is,
+/// not the determinant vanishing as C → 0 (b without bound): CN and |b| within these.
+const GUESSES: usize = 100;
+const MIN_START_CN: f64 = 0.05;
+const MAX_START_B: f64 = 20.0;
 
 /// The most cells a reflecting oscillator may have.
 const MAX_PERIODS: usize = 100_000;
@@ -281,6 +341,7 @@ impl Reflecting {
             && self.period.is_finite()
             && self.period > 0.0
             && (1..=MAX_PERIODS).contains(&self.periods)
+            && self.beam.valid()
     }
 
     /// The circuit at `f` (Hz), between its samples.
@@ -298,19 +359,11 @@ impl Reflecting {
 
     /// The matched oscillator at the circuit's sample `s`.
     fn matched(&self, s: &Sample) -> Oscillator {
-        Oscillator {
-            impedance: s.impedance,
-            length: self.periods as f64 * self.period,
-            frequency: s.frequency,
-            gamma0: self.gamma0,
-            charge: self.charge,
-            mass: self.mass,
-            ring: self.ring,
-        }
+        Oscillator { impedance: s.impedance, length: self.periods as f64 * self.period, frequency: s.frequency, beam: self.beam }
     }
 
-    /// Pierce's CN, b and QC and the collector's echo ρe^{jΦ} at `current` (A) and `f` (Hz).
-    fn parameters(&self, current: f64, f: f64) -> Option<(f64, f64, f64, Z)> {
+    /// Pierce's parameters at `current` (A) and `f` (Hz).
+    fn parameters(&self, current: f64, f: f64) -> Option<Pierce> {
         let s = self.at(f)?;
         let o = self.matched(&s);
         let c = (current / o.scale()).cbrt();
@@ -320,12 +373,12 @@ impl Reflecting {
         let b = ((2.0 * std::f64::consts::PI - s.phase) / (be * self.period) - 1.0) / c;
         let n = o.length * f / v0;
         let phi = 2.0 * std::f64::consts::PI * n - s.phase * self.periods as f64;
-        Some((c * n, b, qc, s.reflection * Z::from_polar(1.0, phi)))
+        Some(Pierce { cn: c * n, b, qc, echo: s.reflection * Z::from_polar(1.0, phi) })
     }
 
     /// The boundary conditions' determinant at `current` (A) and `f` (Hz).
     fn mismatch(&self, current: f64, f: f64) -> Option<Z> {
-        let (cn, b, qc, echo) = self.parameters(current, f)?;
+        let Pierce { cn, b, qc, echo } = self.parameters(current, f)?;
         Some(determinant(cn, b, qc.min(1.0), echo))
     }
 
@@ -334,85 +387,76 @@ impl Reflecting {
     /// matched start at each sample, bounded. None for hostile input or if none settles.
     ///
     /// ```
-    /// use emcraft_theory::bwo::{Oscillator, Reflecting, Sample};
+    /// use emcraft_model::particles::ELECTRON;
+    /// use emcraft_theory::bwo::{Beam, Oscillator, Reflecting, Sample};
     /// use num_complex::Complex64 as Z;
-    /// let (q, m, gamma0) = (-1.602_176_634e-19, 9.109_383_701_5e-31, 1.0 + 1e5 / 510_998.95);
+    /// let beam = Beam { gamma0: 1.0 + 1e5 / 510_998.95, species: ELECTRON, ring: None };
     /// // A circuit in step with a 100 kV beam near ψ = 100°, 11.9 GHz, ends matched.
     /// let sample = |f: f64, deg: f64, k: f64| Sample { frequency: f, phase: deg.to_radians(), impedance: k, reflection: Z::new(0.0, 0.0) };
     /// let circuit = vec![sample(11.25e9, 80.0, 0.35), sample(11.91e9, 100.0, 0.59), sample(12.58e9, 120.0, 1.13)];
-    /// let o = Reflecting { circuit: circuit.clone(), period: 0.01, periods: 24, gamma0, charge: q, mass: m, ring: None };
-    /// let (i, f) = o.start().unwrap();
+    /// let o = Reflecting { circuit: circuit.clone(), period: 0.01, periods: 24, beam };
+    /// let start = o.start().unwrap();
+    /// let (i, f) = (start.current, start.frequency);
     /// // Johnson's at that frequency's impedance.
     /// let s = circuit[1];
     /// let k = (s.impedance.ln() + (f - s.frequency) / (circuit[0].frequency - s.frequency) * (circuit[0].impedance.ln() - s.impedance.ln())).exp();
-    /// let johnson = Oscillator { impedance: k, length: 0.24, frequency: f, gamma0, charge: q, mass: m, ring: None };
+    /// let johnson = Oscillator { impedance: k, length: 0.24, frequency: f, beam };
     /// assert!((i / johnson.start_current().unwrap() - 1.0).abs() < 1e-6);
     /// assert!(f > 11.5e9 && f < 11.9e9);
     /// // Reflecting ends move it.
     /// let echo = Reflecting { circuit: circuit.iter().map(|s| Sample { reflection: Z::new(0.3, 0.0), ..*s }).collect(), ..o.clone() };
-    /// assert!((echo.start().unwrap().0 / i - 1.0).abs() > 0.05);
+    /// assert!((echo.start().unwrap().current / i - 1.0).abs() > 0.05);
     /// assert!(Reflecting { periods: 0, ..o }.start().is_none());
     /// ```
-    pub fn start(&self) -> Option<(f64, f64)> {
-        if !self.valid()
-            || !(self.gamma0.is_finite()
-                && self.gamma0 > 1.0
-                && self.charge.is_finite()
-                && self.charge != 0.0
-                && self.mass.is_finite()
-                && self.mass > 0.0)
-        {
+    pub fn start(&self) -> Option<StartPoint> {
+        if !self.valid() {
             return None;
         }
         let ghz = 1e9;
-        // Newton's method, each step halved until it lowers |det| (at most 30 times).
-        let solve = |guess: (f64, f64)| -> Option<(f64, f64)> {
+        let det = |x: f64, y: f64| self.mismatch(x.exp(), y * ghz);
+        // Newton's method on (ln I, f/GHz), each step halved until it lowers |det|.
+        let solve = |guess: (f64, f64)| -> Option<StartPoint> {
             let (mut x, mut y) = (guess.0.ln(), guess.1 / ghz);
-            let mut d = self.mismatch(x.exp(), y * ghz)?;
-            for _ in 0..100 {
-                let h = 1e-6;
-                let dx = (self.mismatch((x + h).exp(), y * ghz)? - d) / h;
-                let dy = (self.mismatch(x.exp(), (y + h) * ghz)? - d) / h;
-                let det = dx.re * dy.im - dy.re * dx.im;
-                if det == 0.0 || !det.is_finite() {
-                    return None;
-                }
-                let (mut sx, mut sy) =
-                    (((d.re * dy.im - d.im * dy.re) / det).clamp(-0.5, 0.5), ((dx.re * d.im - dx.im * d.re) / det).clamp(-0.05, 0.05));
+            let mut d = det(x, y)?;
+            for _ in 0..MAX_NEWTON {
+                let [sx, sy] = newton_step(det, (x, y), d, REFLECTING_H)?;
+                let (mut sx, mut sy) = (sx.clamp(-MAX_LN_CURRENT_STEP, MAX_LN_CURRENT_STEP), sy.clamp(-MAX_GHZ_STEP, MAX_GHZ_STEP));
                 let mut next = None;
-                for _ in 0..30 {
-                    if let Some(e) = self.mismatch((x - sx).exp(), (y - sy) * ghz).filter(|e| e.norm() < d.norm()) {
+                for _ in 0..HALVINGS {
+                    if let Some(e) = det(x - sx, y - sy).filter(|e| e.norm() < d.norm()) {
                         next = Some(e);
                         break;
                     }
                     (sx, sy) = (0.5 * sx, 0.5 * sy);
                 }
                 d = next?;
-                // Settled to 1e-9 of the current and 1 Hz (the numerical derivative's noise), at a
-                // zero rather than a stalled step.
-                if sx.abs() < 1e-9 && sy.abs() < 1e-9 {
-                    return (d.norm() < 1e-8).then(|| ((x - sx).exp(), (y - sy) * ghz));
+                // At a zero rather than a stalled step.
+                if sx.abs() < SETTLED_STEP && sy.abs() < SETTLED_STEP {
+                    return (d.norm() < SETTLED_DET).then(|| StartPoint { current: (x - sx).exp(), frequency: (y - sy) * ghz });
                 }
                 (x, y) = (x - sx, y - sy);
             }
             None
         };
-        // Guesses every 1 % of the circuit's span: each frequency with Johnson's matched start.
+        // Guesses across the circuit's span: each frequency with Johnson's matched start.
         let (lo, hi) = (self.circuit[0].frequency, self.circuit[self.circuit.len() - 1].frequency);
-        (0..=100)
-            .map(|k| lo + (hi - lo) * k as f64 / 100.0)
+        (0..=GUESSES)
+            .map(|k| lo + (hi - lo) * k as f64 / GUESSES as f64)
             .filter_map(|f| {
                 let s = self.at(f)?;
                 solve((self.matched(&s).start_current()?, f))
             })
-            // A start, not the determinant's vanishing as C → 0 (b without bound).
-            .filter(|(i, f)| i.is_finite() && self.parameters(*i, *f).is_some_and(|(cn, b, ..)| cn > 0.05 && b.abs() < 20.0))
-            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .filter(|p| {
+                p.current.is_finite() && self.parameters(p.current, p.frequency).is_some_and(|q| q.cn > MIN_START_CN && q.b.abs() < MAX_START_B)
+            })
+            .min_by(|a, b| a.current.total_cmp(&b.current))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use emcraft_model::particles::ELECTRON;
+
     use super::*;
 
     #[test]
@@ -431,10 +475,10 @@ mod tests {
     #[test]
     fn a_slow_beams_start_current_is_pierces() {
         // At v₀ ≪ c the relativistic C³ is Pierce's K I/(4V₀) (Pierce 1950, ch. II), V₀ = m v₀²/2q.
-        let (q, m) = (-1.602_176_634e-19f64, 9.109_383_701_5e-31);
+        let Species { charge: q, mass: m } = ELECTRON;
         let v0 = 1e-3 * C0;
         let gamma0 = 1.0 / (1.0 - 1e-6f64).sqrt();
-        let o = Oscillator { impedance: 5.0, length: 0.1, frequency: 3e9, gamma0, charge: q, mass: m, ring: None };
+        let o = Oscillator { impedance: 5.0, length: 0.1, frequency: 3e9, beam: Beam { gamma0, species: ELECTRON, ring: None } };
         let v = 0.5 * m * v0 * v0 / q.abs();
         let pierce = 4.0 * v * (0.314_055 / (0.1 * 3e9 / v0)).powi(3) / 5.0;
         approx::assert_abs_diff_eq!(o.start_current().unwrap() / pierce, 1.0, epsilon = 1e-5);
@@ -445,22 +489,16 @@ mod tests {
         // A ring far from the wall and thin against 1/κ: G → I₀K₀(κb), and at κb ≫ 1 that tends to
         // 1/(2κb) (Abramowitz & Stegun 9.7.1–9.7.2), so R² → βₑ² t/(2κγ²) = βₑ t/(2γ).
         let ring = Ring { radius: 0.05, thickness: 1e-4, tube: 0.3 };
-        let o = Oscillator {
-            impedance: 1.0,
-            length: 0.1,
-            frequency: 30e9,
-            gamma0: 1.1,
-            charge: -1.602_176_634e-19,
-            mass: 9.109_383_701_5e-31,
-            ring: Some(ring),
-        };
+        let gamma0 = 1.1;
+        let o = Oscillator { impedance: 1.0, length: 0.1, frequency: 30e9, beam: Beam { gamma0, species: ELECTRON, ring: Some(ring) } };
+        let Species { charge: q, mass: m } = ELECTRON;
         let (v0, w) = (o.speed(), 2.0 * std::f64::consts::PI * o.frequency);
         let current = 3.0;
-        let density = current / (o.charge.abs() * v0 * 2.0 * std::f64::consts::PI * ring.radius * ring.thickness);
-        let wp2 = density * o.charge * o.charge / (EPS0 * o.mass);
-        let r2 = (w / v0) * ring.thickness / (2.0 * o.gamma0);
+        let density = current / (q.abs() * v0 * 2.0 * std::f64::consts::PI * ring.radius * ring.thickness);
+        let wp2 = density * q * q / (EPS0 * m);
+        let r2 = (w / v0) * ring.thickness / (2.0 * gamma0);
         let c = (current / o.scale()).cbrt();
-        let want = r2 * wp2 / o.gamma0.powi(3) / (w * c).powi(2) / 4.0;
+        let want = r2 * wp2 / gamma0.powi(3) / (w * c).powi(2) / 4.0;
         // κb = 69: the asymptote's next term is 1/(8(κb)²) relative, the wall's e^{−2κ(a−b)}.
         approx::assert_abs_diff_eq!(o.space_charge(current).unwrap() / want, 1.0, epsilon = 1e-3);
     }

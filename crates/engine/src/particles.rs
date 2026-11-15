@@ -37,7 +37,7 @@ pub const SNAPSHOT: usize = 20_000;
 const COURANT: f64 = 0.95;
 
 /// The elementary charge (C): electronvolts to joules.
-pub(crate) const EV: f64 = 1.602_176_634e-19;
+pub(crate) const EV: f64 = -emcraft_model::particles::ELECTRON.charge;
 
 /// A record of the run: its time (s), the energy in the field and in the particles (J), the
 /// particles held, the current emitted and collected on each wall (A, by axis, low and high;

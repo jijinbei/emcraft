@@ -320,17 +320,8 @@ fn reflections(s: Structure, cells: Cells, periods: usize, inset: usize, freqs: 
         (a, b, residual)
     };
     let fit = |e: &[Z], m: &[f64], psi: f64| {
-        let golden = 0.5 * (5f64.sqrt() - 1.0);
-        let (mut lo, mut hi) = (psi - 0.1, psi + 0.1);
-        for _ in 0..60 {
-            let (x1, x2) = (hi - golden * (hi - lo), lo + golden * (hi - lo));
-            if split(e, m, x1).2 < split(e, m, x2).2 {
-                hi = x2;
-            } else {
-                lo = x1;
-            }
-        }
-        let (a, b, _) = split(e, m, 0.5 * (lo + hi));
+        let best = emcraft_theory::search::golden(psi - 0.1, psi + 0.1, 60, |p| split(e, m, p).2, |a, b| a < b);
+        let (a, b, _) = split(e, m, best.at);
         (a, b)
     };
     let right: Vec<f64> = ms.iter().map(|m| -m).collect();
@@ -407,8 +398,9 @@ fn a_backward_wave_oscillator_starts_where_its_reflecting_ends_say() {
     let ring = Some(Ring { radius: 0.008, thickness: 0.001, tube: s.narrowest });
     let start = |periods: usize, echo: bool| {
         let circuit = circuit(&band, radii, &freqs, &rho, echo);
-        Reflecting { circuit, period: s.period, periods, gamma0: beam(0.0).gamma0(), charge: ELECTRON.charge, mass: ELECTRON.mass, ring }
+        Reflecting { circuit, period: s.period, periods, beam: emcraft_theory::bwo::Beam { gamma0: beam(0.0).gamma0(), species: ELECTRON, ring } }
             .start()
+            .map(|p| (p.current, p.frequency))
             .unwrap()
     };
     let (short, long, matched) = (start(12, true), start(24, true), start(12, false));
@@ -487,8 +479,9 @@ fn a_relativistic_backward_wave_oscillator_starts_where_its_theory_says() {
     let ring = Some(Ring { radius: 0.012, thickness: 0.001, tube: s.narrowest });
     let start = |echo: bool| {
         let circuit = circuit(&band, radii, &freqs, &rho, echo);
-        Reflecting { circuit, period: s.period, periods: 16, gamma0: beam(0.0).gamma0(), charge: ELECTRON.charge, mass: ELECTRON.mass, ring }
+        Reflecting { circuit, period: s.period, periods: 16, beam: emcraft_theory::bwo::Beam { gamma0: beam(0.0).gamma0(), species: ELECTRON, ring } }
             .start()
+            .map(|p| (p.current, p.frequency))
             .unwrap()
     };
     let (matched, (current, f_start)) = (start(false), start(true));
