@@ -24,6 +24,10 @@ It is, if you want to:
 |---|---|
 | Get it running | [Install](start/install.md) |
 | See one model solved end to end | [Your first solve](start/first-solve.md) |
+| Build a filter, a cavity, an antenna or a board from nothing | the tutorials, from [a waveguide filter](tutorials/waveguide-filter.md) on |
+| Bring a part from SolidCraft | [Solve a part drawn in SolidCraft](tutorials/from-solidcraft.md) |
+| Do one thing: ports, the mesh, sweeps, exports | the how-to pages, from [ports](howto/ports.md) on |
+| Drive it from a script or an agent | [Scripts](howto/scripts-and-cli.md), [agents](howto/agents.md) |
 | Find a model close to yours | [Samples](reference/samples.md) |
 | Look up a command and its parameters | [Commands](reference/commands.md) |
 | Judge the accuracy | [How results are checked](verification/how.md) |

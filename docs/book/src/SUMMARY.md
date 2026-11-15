@@ -15,6 +15,16 @@
 - [A microstrip filter on a board](tutorials/microstrip-filter.md)
 - [Solve a part drawn in SolidCraft](tutorials/from-solidcraft.md)
 
+# How to
+
+- [Choose and place ports](howto/ports.md)
+- [Get a mesh you can trust](howto/mesh-and-accuracy.md)
+- [Sweep frequencies, and sweep a dimension](howto/sweeps.md)
+- [Use the time-domain solver](howto/time-domain.md)
+- [Get results out](howto/export-results.md)
+- [Run EMCraft from scripts](howto/scripts-and-cli.md)
+- [Drive the window from an agent](howto/agents.md)
+
 # Reference
 
 - [Samples](reference/samples.md)

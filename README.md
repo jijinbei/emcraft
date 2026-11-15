@@ -11,6 +11,14 @@
 </p>
 
 <p align="center">
+  <a href="https://jijinbei.github.io/emcraft/">Website</a> ·
+  <a href="https://jijinbei.github.io/emcraft/book/start/install.html">Install</a> ·
+  <a href="https://jijinbei.github.io/emcraft/book/start/first-solve.html">Your first solve</a> ·
+  <a href="https://jijinbei.github.io/emcraft/book/">Documentation</a> ·
+  <a href="https://jijinbei.github.io/emcraft/book/verification/results.html">Verification</a>
+</p>
+
+<p align="center">
   <img src="docs/media/walkthrough.gif" alt="A waveguide resonator drawn in SolidCraft — a WR-90 guide and two metal posts — imported into EMCraft, its ports placed, solved from 8 to 12 GHz, its passband near 9.8 GHz clicked for the field there, which then plays" />
 </p>
 <p align="center"><em>
