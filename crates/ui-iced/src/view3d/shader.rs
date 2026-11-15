@@ -94,29 +94,48 @@ pub struct Viewer {
     pub plane: Option<Arc<emcraft_ui_core::scene3d::Built>>,
 }
 
-/// The pointer between events: the drag in progress (its mode and where it was last), where the
-/// left button went down, the last click (when and where, for a double click), the modifier keys
-/// held and the view's size as last reported.
+/// What the left (or another) button is doing in the view, one thing at a time.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum Gesture {
+    #[default]
+    Idle,
+    /// The left button down with nothing to drag (a tool on): a click when it comes up near.
+    Press(Point),
+    /// The camera dragged in `mode`, the pointer last at `last`; its orbit snaps with Shift
+    /// (`snaps`: Shift was not needed to start it, and the mapping snaps); `pressed` where the
+    /// left button went down, a click when it comes up near.
+    Navigate { mode: NavMode, last: Point, snaps: bool, pressed: Option<Point> },
+    /// A selection box from `start` (where the left button went down), adding to the selection
+    /// or not, `out` once it has left the click's slop.
+    Box { start: Point, add: bool, out: bool },
+    /// The field's plane dragged, the pointer last at this point.
+    Plane(Point),
+    /// The reference plane's grip dragged, the pointer last at this point.
+    Grip(Point),
+}
+
+impl Gesture {
+    /// Where the left button went down, if this may still end in a click.
+    fn pressed(self) -> Option<Point> {
+        match self {
+            Gesture::Press(at) => Some(at),
+            Gesture::Navigate { pressed, .. } => pressed,
+            Gesture::Box { start, .. } => Some(start),
+            Gesture::Idle | Gesture::Plane(_) | Gesture::Grip(_) => None,
+        }
+    }
+}
+
+/// The pointer between events: the gesture under way, the touchpad mapping's last point with
+/// no button down, the last click (when and where, for a double click), the modifier keys held,
+/// the view's size as last reported and whether the pointer was last over it.
 #[derive(Default)]
 pub struct Grip {
-    drag: Option<(NavMode, Point)>,
-    /// The drag's orbit snaps with Shift (Shift was not needed to start it, and the mapping
-    /// snaps).
-    snaps: bool,
-    /// The field's plane dragged: where the pointer was last.
-    planed: Option<Point>,
-    /// The touchpad mapping's move with no button down: where the pointer was last.
+    gesture: Gesture,
     motion: Option<Point>,
-    /// A selection box: where it began, whether it adds to the selection, whether it has left
-    /// the click's slop.
-    boxing: Option<(Point, bool, bool)>,
-    /// The reference plane's grip dragged: where the pointer was last.
-    gripped: Option<Point>,
-    pressed: Option<Point>,
     clicked: Option<(std::time::Instant, Point)>,
     keys: NavKeys,
     size: Option<Size>,
-    /// The pointer was last reported over the view.
     over: bool,
 }
 
@@ -153,6 +172,140 @@ impl Viewer {
     }
 }
 
+impl Viewer {
+    /// Button `b` pressed at `at` (points from the view's corner): a plain left press on a grip
+    /// or on the field's plane drags it; else the mapping's navigation begins (an orbit choosing
+    /// its pivot there), or, the left button free of one and no tool on, a selection box.
+    fn pressed(&self, grip: &mut Grip, b: mouse::Button, at: Point, bounds: Rectangle) -> Option<Action<Message>> {
+        let left = b == mouse::Button::Left;
+        let plain = !grip.keys.shift && !grip.keys.ctrl && !grip.keys.alt;
+        if left && plain && self.grips.iter().any(|g| g.distance(at) <= emcraft_ui_core::tools::GRIP_PX) {
+            grip.gesture = Gesture::Grip(at);
+            return Some(Action::publish(Message::Grip(GripMove::Start(crate::geom::shared(at)))).and_capture());
+        }
+        if left && plain && self.on_plane(at, bounds) {
+            grip.gesture = Gesture::Plane(at);
+            return Some(Action::capture());
+        }
+        let mode_with = |k: NavKeys| match button(b) {
+            Some(NavButton::Left) => left_mode(self.nav, k),
+            Some(other) => self.nav.mode(other, k),
+            None => None,
+        };
+        let mode = mode_with(grip.keys);
+        let pressed = left.then_some(at);
+        grip.gesture = match (mode, pressed) {
+            (Some(mode), _) => {
+                let snaps = mode_with(NavKeys { shift: false, ..grip.keys }) == Some(mode) && self.nav.id != emcraft_ui_core::navigation::OPENSCAD;
+                Gesture::Navigate { mode, last: at, snaps, pressed }
+            }
+            (None, Some(start)) if !self.tool => Gesture::Box { start, add: grip.keys.shift, out: false },
+            (None, Some(at)) => Gesture::Press(at),
+            (None, None) => Gesture::Idle,
+        };
+        match mode {
+            // The orbit's pivot is chosen where it begins.
+            Some(NavMode::Orbit) => Some(Action::publish(Message::View3d(Nav::OrbitFrom(crate::geom::shared(at), self.around))).and_capture()),
+            _ => Some(Action::capture()),
+        }
+    }
+
+    /// The pointer moved to `at` (points from the view's corner; `over`: inside the view): what
+    /// is dragged follows it, a box grows; with nothing dragged the touchpad mapping's move pans
+    /// or orbits, or where the pointer is is said.
+    fn moved(&self, grip: &mut Grip, at: Point, over: Option<Point>) -> Option<Action<Message>> {
+        match grip.gesture {
+            Gesture::Plane(last) => {
+                grip.gesture = Gesture::Plane(at);
+                Some(Action::publish(Message::View3d(Nav::DragPlane(at.x - last.x, at.y - last.y))).and_capture())
+            }
+            Gesture::Grip(last) => {
+                grip.gesture = Gesture::Grip(at);
+                Some(Action::publish(Message::Grip(GripMove::By(at.x - last.x, at.y - last.y))).and_capture())
+            }
+            Gesture::Box { start, add, out } => {
+                let out = out || start.distance(at) > crate::parts::CLICK_SLOP;
+                grip.gesture = Gesture::Box { start, add, out };
+                out.then(|| Action::publish(Message::View3d(Nav::Box(Some(BoxSel::from_drag(crate::geom::shared(start), crate::geom::shared(at)))))))
+            }
+            Gesture::Navigate { mode, last, snaps, pressed } => {
+                grip.gesture = Gesture::Navigate { mode, last: at, snaps, pressed };
+                let d = at - last;
+                match mode {
+                    NavMode::Orbit if snaps && grip.keys.shift => publish(Nav::OrbitSnapped(d.x, d.y)),
+                    _ => publish(dragged(mode, d)),
+                }
+            }
+            Gesture::Idle | Gesture::Press(_) => self.moved_free(grip, over),
+        }
+    }
+
+    /// The pointer moved with nothing dragged, now at `over` when inside the view.
+    fn moved_free(&self, grip: &mut Grip, over: Option<Point>) -> Option<Action<Message>> {
+        if let Some(mode) = self.nav.motion_mode(grip.keys) {
+            // The touchpad mapping: Shift or Alt held, the pointer's move pans or orbits.
+            let at = over?;
+            let last = grip.motion.replace(at);
+            let d = last.map_or(iced::Vector::ZERO, |l| at - l);
+            return (d != iced::Vector::ZERO && d.x.hypot(d.y) <= MAX_MOTION).then(|| Action::publish(Message::View3d(dragged(mode, d))));
+        }
+        grip.motion = None;
+        // Not dragging: where the pointer is, while asked and inside; once that it left.
+        let at = over.filter(|_| self.hover);
+        let was = std::mem::replace(&mut grip.over, at.is_some());
+        (at.is_some() || was).then(|| Action::publish(Message::Hover(at.map(crate::geom::shared))))
+    }
+
+    /// The wheel turned by `delta` with `keys` held, the pointer at `at`: a wheel's notch zooms
+    /// there; a trackpad's two-finger scroll pans (with Shift orbits, where the mapping says
+    /// so), and with Ctrl, or in the touchpad mapping, zooms.
+    fn scrolled(&self, keys: NavKeys, delta: mouse::ScrollDelta, at: Point) -> Option<Action<Message>> {
+        let zoom = |steps: f32| publish(Nav::ZoomAt(if self.nav.reverse_zoom { -steps } else { steps }, crate::geom::shared(at)));
+        match delta {
+            mouse::ScrollDelta::Lines { y, .. } => zoom(y),
+            mouse::ScrollDelta::Pixels { y, .. } if keys.ctrl || !self.nav.scroll_pans() => zoom(y * PIXEL_ZOOM),
+            mouse::ScrollDelta::Pixels { x, y } if keys.shift && self.nav.shift_scroll_orbits() => publish(Nav::Orbit(x, y)),
+            mouse::ScrollDelta::Pixels { x, y } => publish(Nav::Pan(x, y)),
+        }
+    }
+}
+
+/// The longest move (points) the touchpad mapping takes as one: past it the pointer came back
+/// into the view somewhere else.
+const MAX_MOTION: f32 = 1e4;
+
+/// Button `b` released, the pointer at `at` when inside the view: a drag of the field's plane or
+/// of a grip ends with the left button, a box drawn out of the click's slop selects; anything
+/// else ends what was under way, and a left press that came up near is a click.
+fn released(grip: &mut Grip, b: mouse::Button, at: Option<Point>) -> Option<Action<Message>> {
+    let left = b == mouse::Button::Left;
+    match grip.gesture {
+        Gesture::Plane(_) if left => {
+            grip.gesture = Gesture::Idle;
+            Some(Action::request_redraw().and_capture())
+        }
+        Gesture::Grip(_) if left => {
+            grip.gesture = Gesture::Idle;
+            Some(Action::publish(Message::Grip(GripMove::End)).and_capture())
+        }
+        // Another button changes nothing of these drags.
+        Gesture::Plane(_) | Gesture::Grip(_) => Some(Action::request_redraw()),
+        Gesture::Box { add, out: true, .. } if left => {
+            grip.gesture = Gesture::Idle;
+            Some(Action::publish(Message::Boxed(add)).and_capture())
+        }
+        gesture => {
+            grip.gesture = Gesture::Idle;
+            match (gesture.pressed().filter(|_| left), at) {
+                (Some(p), Some(at)) if p.distance(at) <= crate::parts::CLICK_SLOP => {
+                    Some(Action::publish(Message::Click(clicked(grip, at))).and_capture())
+                }
+                _ => Some(Action::request_redraw()),
+            }
+        }
+    }
+}
+
 /// What a drag by `d` (points) in `mode` does to the camera.
 fn dragged(mode: NavMode, d: iced::Vector) -> Nav {
     match mode {
@@ -185,137 +338,30 @@ impl shader::Program<Message> for Viewer {
             grip.size = Some(bounds.size());
             return Some(Action::publish(Message::View3d(Nav::Size(bounds.width, bounds.height))));
         }
+        let inside = |position: Point| position - iced::Vector::new(bounds.x, bounds.y);
         match event {
             iced::Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => {
                 grip.keys = held(*m);
                 None
             }
-            iced::Event::Mouse(mouse::Event::ButtonPressed(b)) => {
-                let at = cursor.position_in(bounds)?;
-                let left = *b == mouse::Button::Left;
-                let plain = !grip.keys.shift && !grip.keys.ctrl && !grip.keys.alt;
-                if left && plain && self.grips.iter().any(|g| g.distance(at) <= emcraft_ui_core::tools::GRIP_PX) {
-                    grip.gripped = Some(at);
-                    return Some(Action::publish(Message::Grip(GripMove::Start(crate::geom::shared(at)))).and_capture());
-                }
-                if left && plain && self.on_plane(at, bounds) {
-                    grip.planed = Some(at);
-                    return Some(Action::capture());
-                }
-                grip.pressed = left.then_some(at);
-                let mode_with = |k: NavKeys| match button(*b) {
-                    Some(NavButton::Left) => left_mode(self.nav, k),
-                    Some(other) => self.nav.mode(other, k),
-                    None => None,
-                };
-                let mode = mode_with(grip.keys);
-                grip.snaps = mode_with(NavKeys { shift: false, ..grip.keys }) == mode && self.nav.id != emcraft_ui_core::navigation::OPENSCAD;
-                grip.drag = mode.map(|mode| (mode, at));
-                grip.boxing = (left && grip.drag.is_none() && !self.tool).then_some((at, grip.keys.shift, false));
-                match mode {
-                    // The orbit's pivot is chosen where it begins.
-                    Some(NavMode::Orbit) => {
-                        Some(Action::publish(Message::View3d(Nav::OrbitFrom(crate::geom::shared(at), self.around))).and_capture())
-                    }
-                    _ => Some(Action::capture()),
-                }
-            }
-            iced::Event::Mouse(mouse::Event::CursorMoved { position }) if grip.planed.is_some() => {
-                let last = grip.planed?;
-                let at = *position - iced::Vector::new(bounds.x, bounds.y);
-                grip.planed = Some(at);
-                Some(Action::publish(Message::View3d(Nav::DragPlane(at.x - last.x, at.y - last.y))).and_capture())
-            }
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if grip.planed.is_some() => {
-                grip.planed = None;
-                Some(Action::request_redraw().and_capture())
-            }
-            iced::Event::Mouse(mouse::Event::CursorMoved { position }) if grip.gripped.is_some() => {
-                let last = grip.gripped?;
-                let at = *position - iced::Vector::new(bounds.x, bounds.y);
-                grip.gripped = Some(at);
-                Some(Action::publish(Message::Grip(GripMove::By(at.x - last.x, at.y - last.y))).and_capture())
-            }
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if grip.gripped.is_some() => {
-                grip.gripped = None;
-                Some(Action::publish(Message::Grip(GripMove::End)).and_capture())
-            }
-            iced::Event::Mouse(mouse::Event::CursorMoved { position }) if grip.boxing.is_some() => {
-                let (start, add, out) = grip.boxing?;
-                let at = *position - iced::Vector::new(bounds.x, bounds.y);
-                let out = out || start.distance(at) > crate::parts::CLICK_SLOP;
-                grip.boxing = Some((start, add, out));
-                out.then(|| Action::publish(Message::View3d(Nav::Box(Some(BoxSel::from_drag(crate::geom::shared(start), crate::geom::shared(at)))))))
-            }
-            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) if grip.drag.is_none() && self.nav.motion_mode(grip.keys).is_some() => {
-                // The touchpad mapping: Shift or Alt held, the pointer's move pans or orbits.
-                let (mode, at) = self.nav.motion_mode(grip.keys).zip(cursor.position_in(bounds))?;
-                let last = grip.motion.replace(at);
-                let d = last.map_or(iced::Vector::ZERO, |l| at - l);
-                (d != iced::Vector::ZERO && d.x.hypot(d.y) <= 1e4).then(|| Action::publish(Message::View3d(dragged(mode, d))))
-            }
-            iced::Event::Mouse(mouse::Event::CursorMoved { .. }) if grip.drag.is_none() => {
-                grip.motion = None;
-                // Not dragging: where the pointer is, while asked and inside; once that it left.
-                let at = cursor.position_in(bounds).filter(|_| self.hover);
-                let was = std::mem::replace(&mut grip.over, at.is_some());
-                (at.is_some() || was).then(|| Action::publish(Message::Hover(at.map(crate::geom::shared))))
-            }
-            iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
-                let (mode, last) = grip.drag?;
-                let at = *position - iced::Vector::new(bounds.x, bounds.y);
-                grip.drag = Some((mode, at));
-                let d = at - last;
-                match mode {
-                    NavMode::Orbit if grip.snaps && grip.keys.shift => publish(Nav::OrbitSnapped(d.x, d.y)),
-                    _ => publish(dragged(mode, d)),
-                }
-            }
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) if grip.boxing.is_some_and(|(_, _, out)| out) => {
-                let (_, add, _) = grip.boxing.take()?;
-                grip.pressed = None;
-                Some(Action::publish(Message::Boxed(add)).and_capture())
-            }
-            iced::Event::Mouse(mouse::Event::ButtonReleased(b)) => {
-                grip.drag = None;
-                grip.boxing = None;
-                let at = cursor.position_in(bounds);
-                let pressed = grip.pressed.take().filter(|_| *b == mouse::Button::Left);
-                match (pressed, at) {
-                    (Some(p), Some(at)) if p.distance(at) <= crate::parts::CLICK_SLOP => {
-                        Some(Action::publish(Message::Click(clicked(grip, at))).and_capture())
-                    }
-                    _ => Some(Action::request_redraw()),
-                }
-            }
-            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => {
-                let at = cursor.position_in(bounds)?;
-                let zoom = |steps: f32| publish(Nav::ZoomAt(if self.nav.reverse_zoom { -steps } else { steps }, crate::geom::shared(at)));
-                let k = grip.keys;
-                match delta {
-                    mouse::ScrollDelta::Lines { y, .. } => zoom(*y),
-                    // A trackpad's two-finger scroll pans (with Shift orbits, where the mapping
-                    // says so); with Ctrl, or in the touchpad mapping, it zooms.
-                    mouse::ScrollDelta::Pixels { y, .. } if k.ctrl || !self.nav.scroll_pans() => zoom(y * PIXEL_ZOOM),
-                    mouse::ScrollDelta::Pixels { x, y } if k.shift && self.nav.shift_scroll_orbits() => publish(Nav::Orbit(*x, *y)),
-                    mouse::ScrollDelta::Pixels { x, y } => publish(Nav::Pan(*x, *y)),
-                }
-            }
+            iced::Event::Mouse(mouse::Event::ButtonPressed(b)) => self.pressed(grip, *b, cursor.position_in(bounds)?, bounds),
+            iced::Event::Mouse(mouse::Event::CursorMoved { position }) => self.moved(grip, inside(*position), cursor.position_in(bounds)),
+            iced::Event::Mouse(mouse::Event::ButtonReleased(b)) => released(grip, *b, cursor.position_in(bounds)),
+            iced::Event::Mouse(mouse::Event::WheelScrolled { delta }) => self.scrolled(grip.keys, *delta, cursor.position_in(bounds)?),
             _ => None,
         }
     }
 
     fn draw(&self, grip: &Grip, _cursor: mouse::Cursor, _bounds: Rectangle) -> Shot {
-        Shot { moving: grip.drag.is_some(), ..self.shot.clone() }
+        Shot { moving: matches!(grip.gesture, Gesture::Navigate { .. }), ..self.shot.clone() }
     }
 
     fn mouse_interaction(&self, grip: &Grip, _bounds: Rectangle, _cursor: mouse::Cursor) -> mouse::Interaction {
-        match grip.drag {
-            None if grip.gripped.is_some() || grip.planed.is_some() => mouse::Interaction::Grabbing,
-            None if grip.boxing.is_some() => mouse::Interaction::Crosshair,
-            Some((NavMode::Pan, _)) => mouse::Interaction::Grabbing,
-            Some(_) => mouse::Interaction::Move,
-            None => mouse::Interaction::default(),
+        match grip.gesture {
+            Gesture::Grip(_) | Gesture::Plane(_) | Gesture::Navigate { mode: NavMode::Pan, .. } => mouse::Interaction::Grabbing,
+            Gesture::Box { .. } => mouse::Interaction::Crosshair,
+            Gesture::Navigate { .. } => mouse::Interaction::Move,
+            Gesture::Idle | Gesture::Press(_) => mouse::Interaction::default(),
         }
     }
 }
