@@ -81,7 +81,10 @@ People trust EMCraft with their models; a crash loses their work. **This outrank
 2. When the change is done: `cargo fmt --all`, `cargo clippy -p <crate> --all-targets -- -D warnings`
    for each crate you touched. Regenerate what your change affects: `docs/features.md` when
    commands change (`cargo xtask features`), `docs/oracle.md` when oracle cases or solver numerics
-   change (`cargo xtask oracle`).
+   change (`cargo xtask oracle`). The site (`docs/book`: the landing page and the book for
+   people who use EMCraft) copies those documents: when what a page shows changes — a step of
+   the window, a command it names, an install step — change the page too, and build it with
+   `cargo xtask book` (needs `mdbook`; it fails on a link that leads nowhere).
    Before merging, `cargo xtask dupes` (and `--loose` for code you adapted from elsewhere in the
    workspace): factor copies into the shared building blocks of `docs/architecture.md` rather
    than writing a helper again; look there before writing one.

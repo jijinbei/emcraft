@@ -1,0 +1,203 @@
+<!doctype html>
+<!-- The site's landing page. `cargo xtask book` fills the numbers in double braces from docs/oracle.md,
+     docs/features.md and docs/samples.md and writes it to target/site/index.html; the pictures are docs/media's. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EMCraft — open-source electromagnetic simulation, checked against theory</title>
+<meta name="description" content="EMCraft is an open-source electromagnetic field simulator in pure Rust for microwave, RF and PCB work: finite element and time-domain solvers, S-parameters, fields and far fields, every capability checked against exact solutions or published benchmarks.">
+<link rel="icon" type="image/png" href="book/media/emcraft-logo.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="EMCraft">
+<meta property="og:title" content="EMCraft — open-source electromagnetic simulation">
+<meta property="og:description" content="Finite element and time-domain solvers in pure Rust, every capability checked against theory.">
+<meta property="og:image" content="https://jijinbei.github.io/emcraft/book/media/app-sparameters.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root {
+  --ground: #ffffff; --band: #f3f6fb; --ink: #131a26; --dim: #556072; --line: #dbe2ec;
+  --accent: #1763d6; --accent-ink: #ffffff; --wave: #f0602c; --code: #0f1724; --code-ink: #e6ebf3;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground: #10141b; --band: #171c25; --ink: #e9edf3; --dim: #9aa5b6; --line: #2a3140;
+    --accent: #5a9cf5; --accent-ink: #0b1220; --wave: #ff8a5c; --code: #0b0f15; --code-ink: #dfe5ee;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; background: var(--ground); color: var(--ink);
+  font: 17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+a { color: var(--accent); }
+img, video { max-width: 100%; height: auto; display: block; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+header.bar { border-bottom: 1px solid var(--line); }
+header.bar .wrap { display: flex; align-items: center; gap: 22px; height: 60px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--ink); text-decoration: none; margin-right: auto; }
+.brand img { width: 32px; height: 32px; }
+header.bar nav { display: flex; gap: 22px; }
+header.bar nav a { color: var(--dim); text-decoration: none; font-size: 15px; }
+header.bar nav a:hover { color: var(--ink); }
+.hero { padding: 64px 0 40px; text-align: center; }
+.hero h1 { font-size: clamp(32px, 5.2vw, 54px); line-height: 1.1; letter-spacing: -0.02em; margin: 0 auto 18px; max-width: 17em; }
+.hero h1 em { font-style: normal; color: var(--wave); }
+.hero p { color: var(--dim); font-size: 19px; max-width: 40em; margin: 0 auto 28px; }
+.buttons { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+.button { padding: 11px 20px; border-radius: 8px; text-decoration: none; font-weight: 600; border: 1px solid var(--line); color: var(--ink); }
+.button.main { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.shot { margin: 44px auto 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--band); }
+.shot video { width: 100%; }
+.caption { color: var(--dim); font-size: 14px; margin: 10px 0 0; text-align: center; }
+.numbers { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; padding: 44px 0; text-align: center; }
+.numbers b { display: block; font-size: clamp(26px, 4vw, 40px); letter-spacing: -0.02em; }
+.numbers span { color: var(--dim); font-size: 15px; }
+section.band { background: var(--band); border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+section { padding: 56px 0; }
+h2 { font-size: clamp(24px, 3.2vw, 32px); letter-spacing: -0.01em; margin: 0 0 8px; }
+.lead { color: var(--dim); margin: 0 0 30px; max-width: 44em; }
+.three { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+.card { background: var(--ground); border: 1px solid var(--line); border-radius: 10px; padding: 22px; }
+.card h3 { margin: 0 0 8px; font-size: 19px; }
+.card p { margin: 0; color: var(--dim); font-size: 16px; }
+.card a { font-size: 15px; display: inline-block; margin-top: 12px; }
+.gallery { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; align-items: start; }
+figure { margin: 0; }
+figure img { border: 1px solid var(--line); border-radius: 10px; width: 100%; background: #fff; }
+figcaption { color: var(--dim); font-size: 14px; margin-top: 8px; }
+.does { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 36px; padding: 0; margin: 0; list-style: none; }
+.does li { padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 16px; }
+.does b { display: block; }
+.does span { color: var(--dim); }
+pre { background: var(--code); color: var(--code-ink); border-radius: 10px; padding: 18px 20px; overflow-x: auto; font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 0 0 14px; }
+pre i { font-style: normal; opacity: 0.55; }
+footer { border-top: 1px solid var(--line); padding: 28px 0 40px; color: var(--dim); font-size: 14px; }
+footer .wrap { display: flex; gap: 20px; flex-wrap: wrap; }
+footer span { margin-right: auto; }
+@media (max-width: 760px) {
+  .three, .gallery, .does { grid-template-columns: 1fr; }
+  header.bar nav { gap: 14px; }
+  .hero { padding-top: 40px; }
+}
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="book/media/emcraft-logo.png" alt="">EMCraft</a>
+    <nav>
+      <a href="book/">Docs</a>
+      <a href="book/verification/how.html">Verification</a>
+      <a href="https://github.com/jijinbei/emcraft">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<div class="wrap hero">
+  <h1>Open-source electromagnetic simulation, <em>checked against theory</em></h1>
+  <p>EMCraft models microwave, RF and PCB structures, solves Maxwell's equations with its own
+  finite element and time-domain solvers, and shows S-parameters, fields and far fields.
+  Pure Rust. MIT or Apache-2.0.</p>
+  <div class="buttons">
+    <a class="button main" href="book/start/install.html">Get started</a>
+    <a class="button" href="book/start/first-solve.html">Your first solve</a>
+    <a class="button" href="https://github.com/jijinbei/emcraft">Source</a>
+  </div>
+  <div class="shot">
+    <video controls muted playsinline preload="metadata" poster="book/media/app-sparameters.png">
+      <source src="book/media/walkthrough.mp4" type="video/mp4">
+    </video>
+  </div>
+  <p class="caption">Drawn in SolidCraft, solved in EMCraft: a WR-90 guide with two 3 mm posts passes near 9.8 GHz.</p>
+</div>
+
+<div class="wrap numbers">
+  <div><b>{{passed}} / {{quantities}}</b><span>checked quantities pass</span></div>
+  <div><b>{{commands}}</b><span>commands, the same in the window, scripts and agents</span></div>
+  <div><b>100 %</b><span>Rust, solvers included</span></div>
+</div>
+
+<section class="band">
+  <div class="wrap">
+    <h2>Why another field solver</h2>
+    <p class="lead">A simulator is only as useful as the trust you can put in its numbers and the
+    freedom you have to look inside it.</p>
+    <div class="three">
+      <div class="card">
+        <h3>Verified</h3>
+        <p>Every solver capability is compared with a closed form, mode matching or a published
+        benchmark. Accepted results are frozen, so a change that moves one fails the build.</p>
+        <a href="book/verification/results.html">See every checked quantity →</a>
+      </div>
+      <div class="card">
+        <h3>Open</h3>
+        <p>The mesher, the finite elements, the direct and iterative solvers and the time domain
+        are all in the repository, each method citing the paper it comes from. No licence server.</p>
+        <a href="https://github.com/jijinbei/emcraft/blob/main/docs/solvers/literature.md">The papers behind the solvers →</a>
+      </div>
+      <div class="card">
+        <h3>Scriptable</h3>
+        <p>Everything the window does is a command. A JSON script or an agent on the control
+        channel reaches the same commands, and a session's history saves as a script.</p>
+        <a href="book/reference/commands.html">The command reference →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Checked, not claimed</h2>
+    <p class="lead">Four of the cases, each drawn by EMCraft itself.</p>
+    <div class="gallery">
+      <figure><img src="book/media/highpass-fem-fdtd.png" alt="S-parameters of a waveguide high-pass filter: the exact solution, the finite elements and the time domain on one chart" loading="lazy"><figcaption>High-pass filter: exact solution, finite elements and time domain</figcaption></figure>
+      <figure><img src="book/media/sphere-rcs-e-plane.png" alt="The radar cross-section of a dielectric sphere against the Mie series" loading="lazy"><figcaption>A dielectric sphere's radar cross-section against the Mie series</figcaption></figure>
+      <figure><img src="book/media/bandpass-h-10GHz.png" alt="The electric field in the three cavities of an iris band-pass filter at 10 GHz" loading="lazy"><figcaption>Iris band-pass filter at 10 GHz</figcaption></figure>
+      <figure><img src="book/media/cavity-te101-h.png" alt="The magnetic field of the TE101 mode of a copper cavity" loading="lazy"><figcaption>A copper cavity's TE101 mode, Q = 7614</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section class="band">
+  <div class="wrap">
+    <h2>What it does</h2>
+    <p class="lead">{{samples}} samples open from the start page, their dimensions variables.</p>
+    <ul class="does">
+      <li><b>S-parameters</b><span>Waveguide, coaxial and planar components; modal, terminal, lumped and Floquet ports; a fast frequency sweep; adaptive refinement.</span></li>
+      <li><b>Resonators</b><span>Cavity resonances with Q factors, port modes of any cross-section, dispersion diagrams of periodic cells.</span></li>
+      <li><b>Antennas and scattering</b><span>Perfectly matched layers, plane waves, far fields, directivity and radar cross-section.</span></li>
+      <li><b>Time domain</b><span>Finite integration on hexahedral grids with losses and dispersion, on CPU threads or GPUs.</span></li>
+      <li><b>Boards</b><span>KiCad boards read whole or drawn in 3D, return-path screening, lumped ports at trace ends.</span></li>
+      <li><b>Materials</b><span>Dielectric and magnetic losses, Debye, Lorentz and Drude dispersion, walls of finite conductivity.</span></li>
+      <li><b>Geometry</b><span>Guides, boxes, cylinders, spheres and their Booleans; STL, 3MF and SolidCraft designs with exact curved surfaces.</span></li>
+      <li><b>Studies</b><span>Variables, parameter sweeps and optimization; one project file keeps the model, the mesh and every solve.</span></li>
+    </ul>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Try it</h2>
+    <p class="lead">With a Rust toolchain, from a clone of the repository:</p>
+<pre>cargo run --release -p emcraft -- --sample highpass          <i># the desktop app, a filter open</i>
+cargo run --release -p emcraft-cli -- sample highpass --out pictures   <i># solve it, compare with the exact solution</i></pre>
+    <p><a href="book/start/install.html">Install on Linux, macOS and Windows →</a></p>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>EMCraft contributors · MIT OR Apache-2.0</span>
+    <a href="book/">Docs</a>
+    <a href="https://github.com/jijinbei/emcraft">GitHub</a>
+    <a href="https://github.com/tangency-labs/solidcraft">SolidCraft</a>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,5 @@
+[
+  {"command": "file.sample", "params": {"name": "highpass", "solve": true}},
+  {"command": "results.check", "params": {}},
+  {"command": "results.touchstone", "params": {"path": "highpass.s2p"}}
+]

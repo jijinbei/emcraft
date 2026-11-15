@@ -1,0 +1,21 @@
+# The book of the site (https://jijinbei.github.io/emcraft/book/): for people who use EMCraft.
+# `cargo xtask book` writes its generated pages and builds it into target/site/book.
+[book]
+title = "EMCraft"
+description = "EMCraft, an open-source electromagnetic field simulator in pure Rust: getting started, tutorials, reference and verification."
+authors = ["EMCraft contributors"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../../target/book"
+create-missing = false
+
+[output.html]
+git-repository-url = "https://github.com/jijinbei/emcraft"
+site-url = "/emcraft/book/"
+default-theme = "light"
+preferred-dark-theme = "navy"
+
+[output.html.search]
+enable = true

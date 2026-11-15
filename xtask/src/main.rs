@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod bench;
+mod book;
 mod changed;
 mod colours;
 mod designs;
@@ -41,7 +42,12 @@ commands:
                   solve); --save writes them and every number replied as a baseline,
                   --against compares with one (times as ratios, results bit for bit; fails
                   when a result moved); --runs keeps the fastest of N
-  features        write docs/features.md (every command with its parameters)
+  features        write docs/features.md (every command with its parameters) and
+                  docs/samples.md (every sample with its parameters)
+  book [--serve]  build the site into target/site: the landing page and the book (docs/book,
+                  with mdbook: $MDBOOK, else on the PATH), its reference pages copied from
+                  docs/features.md and docs/oracle.md, its links checked; --serve serves the
+                  book alone and rebuilds it as its pages change
   designs [--check]
                   build the templates' SolidCraft designs from their command scripts
                   (crates/templates/designs/<name>.script.json) with solidcraft-cli at the commit
@@ -86,6 +92,7 @@ fn main() -> ExitCode {
         }
         Some("bench") => bench::run(&root(), &rest),
         Some("features") => cmd_features(),
+        Some("book") => book::run(&root(), &rest),
         Some("designs") => designs::run(&root(), &rest),
         Some("dupes") => cmd_dupes(&rest),
         Some("colours" | "colors") => colours::run(&root()),
@@ -230,7 +237,13 @@ fn cmd_features() -> Result<(), String> {
     if !out.status.success() {
         return Err(format!("features: {}", String::from_utf8_lossy(&out.stderr)));
     }
-    std::fs::write(root().join("docs/features.md"), &out.stdout).map_err(|e| format!("docs/features.md: {e}"))
+    std::fs::write(root().join("docs/features.md"), &out.stdout).map_err(|e| format!("docs/features.md: {e}"))?;
+    let out = cargo().args(["run", "-q", "-p", "emcraft-cli", "--", "exec", "file.templates"]).output().map_err(|e| format!("samples: {e}"))?;
+    if !out.status.success() {
+        return Err(format!("samples: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    let reply = serde_json::from_slice(&out.stdout).map_err(|e| format!("samples: the reply of file.templates: {e}"))?;
+    std::fs::write(root().join(book::SAMPLES), book::samples_page(&reply)?).map_err(|e| format!("{}: {e}", book::SAMPLES))
 }
 
 fn cmd_dupes(rest: &[&str]) -> Result<(), String> {

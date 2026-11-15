@@ -11,3 +11,8 @@
 .claude/
 .oracle-pass
 .heavy-pass
+# The book's generated pages and pictures (cargo xtask book).
+/docs/book/src/reference/commands.md
+/docs/book/src/verification/results.md
+/docs/book/src/media/
+/docs/book/src/reference/samples.md
