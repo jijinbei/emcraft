@@ -555,7 +555,7 @@ impl App {
         // The reference plane's number follows the port and a drag until it is edited.
         self.ref_text = match (self.reference_now(), self.ref_text.take()) {
             (Some((port, now)), Some(kept)) if kept.0 == port && kept.2 == now => Some(kept),
-            (Some((port, now)), _) => Some((port, emcraft_ui_core::tools::trimmed(now, 3), now)),
+            (Some((port, now)), _) => Some((port, emcraft_ui_core::number::trimmed(now, 3), now)),
             (None, _) => None,
         };
         let (dirty, busy) = (self.session.is_dirty(), self.job.is_some());

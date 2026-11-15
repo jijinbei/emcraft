@@ -148,7 +148,7 @@ pub fn coupling(reply: &Value) -> Table {
         .collect();
     let list = |key: &str| {
         let v: Vec<String> = reply[key].as_array().map_or_default(|a| a.iter().filter_map(|x| x.as_f64().map(|x| format!("{x:.3}"))).collect());
-        if v.is_empty() { "—".to_owned() } else { v.join(", ") }
+        if v.is_empty() { crate::number::NONE.to_owned() } else { v.join(", ") }
     };
     let caption = trf(t!("Reflection zeros ω: {r} · transmission zeros ω: {z}"), args!(r = list("reflection_zeros"), z = list("transmission_zeros")));
     Table { caption: Some(caption), headers: std::iter::once(String::new()).chain(names.iter().cloned()).collect(), rows, marks: None }

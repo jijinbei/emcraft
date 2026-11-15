@@ -15,7 +15,7 @@ use emcraft_ui_core::browser::{Act, Row};
 use emcraft_ui_core::files::FileAction;
 use emcraft_ui_core::glyph::Glyph;
 use emcraft_ui_core::lang::{lookup, shown, tr};
-use emcraft_ui_core::outline::{Add, Head, Mark, Part};
+use emcraft_ui_core::outline::{Add, Head, Mark, Part, Section};
 use emcraft_ui_core::steps::{Solver, kinds};
 use emcraft_ui_core::system::gesture::Command;
 use iced::widget::{Column, Space, button, container, pick_list, row, scrollable, text};
@@ -236,12 +236,12 @@ fn ghost<'a>(app: &App, t: Tokens, id: &'static str) -> Element<'a, Message> {
 }
 
 /// A section's heading of its own (the variables, a system's): its fold, name and count.
-fn section_head<'a>(app: &App, t: Tokens, part: &Part, name: &str, folded: bool) -> Element<'a, Message> {
+fn section_head<'a>(app: &App, t: Tokens, part: &Part, section: Section, folded: bool) -> Element<'a, Message> {
     let count = part.count();
     let ink = if count == 0 { t.text_dim } else { t.text };
     let head = row![
         text(if folded { "▸" } else { "▾" }).size(t.font_small).color(t.text_dim),
-        text(lookup(name).to_owned()).size(t.font_small).color(ink),
+        text(tr(section.heading())).size(t.font_small).color(ink),
         Space::new().width(Fill),
         text(count.to_string()).size(t.font_small).color(t.text_dim)
     ]
@@ -264,16 +264,16 @@ pub fn view(app: &App, width: f32) -> Element<'_, Message> {
         let folded = part.count() > 0 && app.folded.iter().any(|f| f == part.key());
         let head = match part.head {
             Head::Step(step) => step_head(app, t, step, part, folded),
-            Head::Section(name) => section_head(app, t, part, name, folded),
+            Head::Section(section) => section_head(app, t, part, section, folded),
         };
         let headed = part.groups.len() > 1;
         let kind = app.solver();
-        let shown = |(name, rows): &&(&str, Vec<Row>)| !rows.is_empty() || emcraft_ui_core::outline::ghost(name, kind).is_some();
-        let groups = part.groups.iter().filter(shown).map(|(name, rows)| {
-            let heading = headed
-                .then(|| container(text(lookup(name).to_owned()).size(t.font_small).color(t.text_dim)).padding([t.space_2, t.space_24]).boxed());
-            let lines = rows.iter().map(|r| line(app, t, r, stale && *name == "Results"));
-            let more = emcraft_ui_core::outline::ghost(name, kind).map(|id| ghost(app, t, id));
+        let shown = |(section, rows): &&(Section, Vec<Row>)| !rows.is_empty() || section.ghost(kind).is_some();
+        let groups = part.groups.iter().filter(shown).map(|(section, rows)| {
+            let heading =
+                headed.then(|| container(text(tr(section.heading())).size(t.font_small).color(t.text_dim)).padding([t.space_2, t.space_24]).boxed());
+            let lines = rows.iter().map(|r| line(app, t, r, stale && *section == Section::Results));
+            let more = section.ghost(kind).map(|id| ghost(app, t, id));
             Column::with_children(heading.into_iter().chain(lines).chain(more)).spacing(t.space_2).boxed()
         });
         let body = (!folded).then(|| Column::with_children(groups).spacing(t.space_4).boxed());

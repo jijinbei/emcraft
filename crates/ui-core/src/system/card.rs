@@ -108,7 +108,7 @@ pub fn command(node: &NodeBox, key: &str, value: Value) -> Command {
 /// What the chain reads at `node`'s output: a stage's gain and noise figure, the receiver's
 /// sensitivity.
 pub fn reading(s: &Session, node: &NodeBox) -> Option<String> {
-    let f = |x: Option<f64>| x.map_or_else(|| "—".to_owned(), |v| format!("{v:.2}"));
+    let f = |x: Option<f64>| x.map_or_else(|| crate::number::NONE.to_owned(), |v| format!("{v:.2}"));
     match node.kind {
         Kind::Source => None,
         Kind::Receiver => {

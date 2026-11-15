@@ -17,7 +17,7 @@ const FRAMES: usize = 24;
 /// reply) as a table — each port with its S, its share of the incident power and of what
 /// leaves — and what is not accounted for (loss, radiation, error).
 pub fn power(report: &Value) -> (Table, String) {
-    let percent = |v: Option<f64>| v.map_or_else(|| "—".to_owned(), |v| format!("{:.1}%", 100.0 * v));
+    let percent = |v: Option<f64>| v.map_or_else(|| crate::number::NONE.to_owned(), |v| format!("{:.1}%", 100.0 * v));
     let rows = report["outputs"]
         .as_array()
         .into_iter()

@@ -23,7 +23,7 @@ pub const HEADERS: [Text; 11] = [
 
 /// Stage `name`'s cells, a column each ("—" for what is not known).
 pub fn cells(name: &str, x: &Row) -> Vec<String> {
-    let num = |v: Option<f64>, digits: usize| v.map_or_else(|| "—".to_owned(), |v| format!("{v:.digits$}"));
+    let num = |v: Option<f64>, digits: usize| v.map_or_else(|| crate::number::NONE.to_owned(), |v| format!("{v:.digits$}"));
     std::iter::once(name.to_owned())
         .chain([
             num(x.stage_gain_db, 2),

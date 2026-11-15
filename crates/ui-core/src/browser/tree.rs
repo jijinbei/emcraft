@@ -16,6 +16,7 @@ use serde_json::json;
 use super::Item;
 use crate::glyph::Glyph;
 use crate::lang::{self, Both, args};
+use crate::outline::Section;
 use crate::pick::Pick;
 use crate::replies::Replies;
 use crate::view::View;
@@ -159,7 +160,7 @@ fn words(template: crate::lang::Text, args: &[(&str, &dyn Display)]) -> Both {
 
 /// A name that is the model's own (a body's, a material's): the same in every language.
 fn own(name: &str) -> Both {
-    Both { en: name.to_owned(), shown: name.to_owned() }
+    Both::same(name)
 }
 
 impl Row {
@@ -207,7 +208,7 @@ impl Row {
 /// The tree's sections and rows for a session: what the model is made of (its bodies and their
 /// materials), the region it is solved in and what bounds it, what drives it, its mesh and its
 /// results.
-pub fn tree(session: &Session, replies: &Replies) -> Vec<(&'static str, Vec<Row>)> {
+pub fn tree(session: &Session, replies: &Replies) -> Vec<(Section, Vec<Row>)> {
     let f = Fmt::new(session);
     let m = session.model();
     let mut sections = Vec::new();
@@ -218,7 +219,7 @@ pub fn tree(session: &Session, replies: &Replies) -> Vec<(&'static str, Vec<Row>
             let act = Act::Run("view.pcb", serde_json::json!({"net":net,"stage":"net"}));
             rows.push(node(format!("net:{net}"), words(t!("Net"), &[]), Some(own(net)), Glyph::Chart, act).under());
         }
-        return vec![(t!("PCB").en(), rows)];
+        return vec![(Section::Pcb, rows)];
     }
     if m.analysis() == Analysis::System {
         return system_tree(session);
@@ -227,15 +228,15 @@ pub fn tree(session: &Session, replies: &Replies) -> Vec<(&'static str, Vec<Row>
     // to change one.
     let own_variables = variables(session);
     if !own_variables.is_empty() {
-        sections.push((t!("Parameters").en(), own_variables));
+        sections.push((Section::Parameters, own_variables));
     }
     sections.extend([
-        (t!("Bodies").en(), design_rows(session).into_iter().chain(bodies(m, &f)).collect()),
-        (t!("Materials").en(), materials(m)),
-        (t!("Domain").en(), domain(m, &f)),
-        (t!("Excitation").en(), excitation(session, &f)),
-        (t!("Mesh").en(), mesh(m)),
-        (t!("Results").en(), results(session, replies)),
+        (Section::Bodies, design_rows(session).into_iter().chain(bodies(m, &f)).collect()),
+        (Section::Materials, materials(m)),
+        (Section::Domain, domain(m, &f)),
+        (Section::Excitation, excitation(session, &f)),
+        (Section::Mesh, mesh(m)),
+        (Section::Results, results(session, replies)),
     ]);
     // Each row's eye, once: what its pick shows in the view, unless the row named its own.
     for (_, rows) in &mut sections {
@@ -248,20 +249,20 @@ pub fn tree(session: &Session, replies: &Replies) -> Vec<(&'static str, Vec<Row>
 
 /// A system's tree: its variables, the source, the stages in order (each edited and deleted from
 /// its row), the receiver, the measurements its S-parameter stages read and its budget.
-fn system_tree(s: &Session) -> Vec<(&'static str, Vec<Row>)> {
+fn system_tree(s: &Session) -> Vec<(Section, Vec<Row>)> {
     let m = s.model();
     let fu = s.display().frequency;
     let mut sections = Vec::new();
     let own_variables = variables(s);
     if !own_variables.is_empty() {
-        sections.push((t!("Parameters").en(), own_variables));
+        sections.push((Section::Parameters, own_variables));
     }
     let src = &m.system.source;
     let antenna = src.antenna.clone().unwrap_or_else(|| format!("{} Ω", m.system.receiver.impedance));
     let power = src.power.map_or_else(String::new, |p| format!(" · {p} dBm"));
     let source =
         node("system:source", own(&antenna), Some(own(&format!("{} K{power}", src.temperature))), Glyph::Radiation, Act::Edit("system.source"));
-    sections.push((t!("Source").en(), vec![source]));
+    sections.push((Section::Source, vec![source]));
     let stages = m
         .system
         .stages
@@ -269,7 +270,7 @@ fn system_tree(s: &Session) -> Vec<(&'static str, Vec<Row>)> {
         .map(|st| {
             let kind = crate::system::kind_name(&st.part);
             let summary = crate::system::summary(st);
-            let detail = Both { en: format!("{} · {summary}", kind.en()), shown: format!("{} · {summary}", lang::tr(kind)) };
+            let detail = lang::both(kind, &[]).map(|k| format!("{k} · {summary}"));
             let glyph = match st.part.kind() {
                 "amplifier" => Glyph::Sweep,
                 "data" => Glyph::Touchstone,
@@ -279,7 +280,7 @@ fn system_tree(s: &Session) -> Vec<(&'static str, Vec<Row>)> {
             node(format!("stage:{}", st.name), own(&st.name), Some(detail), glyph, Act::None).item(stage_item(&st.name))
         })
         .collect();
-    sections.push((t!("Stages").en(), stages));
+    sections.push((Section::Stages, stages));
     let r = &m.system.receiver;
     let bw = r.bandwidth.map_or_else(String::new, |b| format!(" · {} {}", fu.from_si(b), fu.symbol()));
     let receiver = node(
@@ -289,7 +290,7 @@ fn system_tree(s: &Session) -> Vec<(&'static str, Vec<Row>)> {
         Glyph::Table,
         Act::Edit("system.receiver"),
     );
-    sections.push((t!("Receiver").en(), vec![receiver]));
+    sections.push((Section::Receiver, vec![receiver]));
     let measured = s
         .views()
         .measured
@@ -299,7 +300,7 @@ fn system_tree(s: &Session) -> Vec<(&'static str, Vec<Row>)> {
             node(format!("measured:{}", x.name), own(&x.name), Some(detail), Glyph::Touchstone, Act::Show(View::SParameters))
         })
         .collect();
-    sections.push((t!("Measurements").en(), measured));
+    sections.push((Section::Measurements, measured));
     let results = match &s.results().system {
         Some(r) => {
             let detail = words(t!("{n} frequencies"), args!(n = r.points.len()));
@@ -307,7 +308,7 @@ fn system_tree(s: &Session) -> Vec<(&'static str, Vec<Row>)> {
         }
         None => Vec::new(),
     };
-    sections.push((t!("Results").en(), results));
+    sections.push((Section::Results, results));
     sections
 }
 
@@ -363,7 +364,7 @@ fn design_parameter(d: &emcraft_engine::ImportedDesign, q: &emcraft_engine::Desi
     let said = format!("= {value} {} · {}", q.unit, file_name(&d.path));
     let edit = serde_json::json!({"design": d.path, "name": q.name, "value": value});
     let id = format!("design:{}:{}", d.path, q.name);
-    Some(node(id, own(&q.name), Some(Both { en: said.clone(), shown: said }), Glyph::Variable, Act::EditWith("geometry.design", edit)))
+    Some(node(id, own(&q.name), Some(Both::same(said)), Glyph::Variable, Act::EditWith("geometry.design", edit)))
 }
 
 /// A file's name without its folders (a template's design: after `template:`).
@@ -574,7 +575,7 @@ fn materials(m: &emcraft_model::Model) -> Vec<Row> {
             let used = users(&mat.name);
             let tail = if used.is_empty() { String::new() } else { format!("  ·  {}", used.join(", ")) };
             let props = crate::math::material(mat);
-            let detail = Both { en: format!("{}{tail}", mat.summary()), shown: format!("{}{tail}", mat.summary()) };
+            let detail = Both::same(format!("{}{tail}", mat.summary()));
             Row {
                 rich: Some(format!("{props}{}", tail.replace('$', "\\$"))),
                 ..node(format!("material:{}", mat.name), material_name(&mat.name), Some(detail), Glyph::Material, Act::None)
@@ -592,10 +593,7 @@ fn materials(m: &emcraft_model::Model) -> Vec<Row> {
         metal.extend((0..w.vias.len()).map(|k| lang::trf(t!("Via {n}"), args!(n = k + 1))));
     }
     if !metal.is_empty() {
-        let detail = Both {
-            en: format!("perfect conductor  ·  {}", metal.join(", ")),
-            shown: format!("{}  ·  {}", lang::tr(t!("perfect conductor")), metal.join(", ")),
-        };
+        let detail = words(t!("perfect conductor"), &[]).join("  ·  ", &Both::same(metal.join(", ")));
         rows.push(node("material:metal", words(t!("metal"), &[]), Some(detail), Glyph::Metal, Act::None));
     }
     rows
@@ -666,14 +664,14 @@ fn domain(m: &emcraft_model::Model, f: &Fmt) -> Vec<Row> {
             let detail = match d.wall_thickness {
                 Some(t) => {
                     let thick = words(t!("{thickness} {unit} thick"), args!(thickness = mm(t.get()), unit = lu));
-                    Both { en: format!("{} · {}", wall.en, thick.en), shown: format!("{} · {}", wall.shown, thick.shown) }
+                    wall.join(" · ", &thick)
                 }
                 None => wall,
             };
             let detail = match d.wall_roughness {
                 Some(h) => {
                     let rough = words(t!("{roughness} {unit} rough"), args!(roughness = mm(h.get()), unit = lu));
-                    Both { en: format!("{} · {}", detail.en, rough.en), shown: format!("{} · {}", detail.shown, rough.shown) }
+                    detail.join(" · ", &rough)
                 }
                 None => detail,
             };
@@ -699,7 +697,7 @@ fn domain(m: &emcraft_model::Model, f: &Fmt) -> Vec<Row> {
         rows.push(node("rotation", words(t!("Rotational symmetry"), &[]), Some(detail), Glyph::Symmetry, Act::Edit("model.rotation")).under());
     }
     if let Some(p) = &d.periodic {
-        let detail = Both { en: periodic_text(p), shown: periodic_text(p) };
+        let detail = Both::same(periodic_text(p));
         rows.push(node("periodic", words(t!("Periodic boundaries"), &[]), Some(detail), Glyph::Periodic, Act::Edit("model.periodic")).under());
     }
     rows

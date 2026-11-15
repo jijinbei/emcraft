@@ -123,7 +123,7 @@ fn geometry(app: &App) -> Vec<Element<'_, Message>> {
         .boxed()
     });
     let groups = app.tree.iter().flat_map(|(_, tree)| tree.iter().flat_map(|p| p.groups.iter()));
-    let bodies = groups.filter(|(s, _)| *s == "Bodies").flat_map(|(_, rows)| rows.iter());
+    let bodies = groups.filter(|(s, _)| *s == emcraft_ui_core::outline::Section::Bodies).flat_map(|(_, rows)| rows.iter());
     let bodies = bodies.map(|r| small(t, r.tip(), t.text));
     let l = app.session.display().length;
     let extent = m.bounds().map(|b| {
@@ -295,9 +295,9 @@ fn excitation(app: &App) -> Vec<Element<'_, Message>> {
                 let numbers = if mode.propagating {
                     format!(
                         "β {}  εeff {}  Z {} Ω",
-                        mode.beta.map_or_else(|| "—".into(), number::value),
-                        mode.eps_eff.map_or_else(|| "—".into(), number::value),
-                        mode.impedance.map_or_else(|| "—".into(), |v| format!("{v:.2}"))
+                        mode.beta.map_or_else(|| number::NONE.into(), number::value),
+                        mode.eps_eff.map_or_else(|| number::NONE.into(), number::value),
+                        mode.impedance.map_or_else(|| number::NONE.into(), |v| format!("{v:.2}"))
                     )
                 } else {
                     trf(t!("cut off, {a} dB/{unit}"), args!(a = format!("{:.1}", mode.attenuation_db.unwrap_or(f64::NAN)), unit = reply.length_unit))

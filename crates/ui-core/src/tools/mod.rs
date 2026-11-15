@@ -15,6 +15,7 @@ pub mod port;
 pub mod reference;
 pub mod snap;
 
+use crate::number::trimmed;
 use emcraft_model::units::Length;
 use serde_json::{Value, json};
 
@@ -222,17 +223,6 @@ fn snap_inspect(s: &Snap, l: Length) -> Value {
     json!({"kind": s.kind.id(), "at": shown(l, s.at)})
 }
 
-/// `v` with up to `digits` decimals, trailing zeros dropped.
-///
-/// ```
-/// assert_eq!(emcraft_ui_core::tools::trimmed(2.50, 3), "2.5");
-/// assert_eq!(emcraft_ui_core::tools::trimmed(3.0, 2), "3");
-/// ```
-pub fn trimmed(v: f64, digits: usize) -> String {
-    let s = format!("{v:.digits$}");
-    if s.contains('.') { s.trim_end_matches('0').trim_end_matches('.').to_owned() } else { s }
-}
-
 /// The smallest free port name: 1, 2, …
 pub fn next_name(m: &emcraft_model::Model) -> String {
     (1..=10_000usize).map(|n| n.to_string()).find(|n| !m.has_port_named(n)).unwrap_or_else(|| "new".to_owned())
@@ -290,7 +280,7 @@ pub fn measure_card(reply: &Value) -> Vec<(String, Ink)> {
     let unit = reply.get("unit").and_then(Value::as_str).unwrap_or("");
     let num = |k: &str| reply.get(k).and_then(Value::as_f64);
     let delta = reply.get("delta").and_then(Value::as_array);
-    let comp = |k: usize| delta.and_then(|v| v.get(k)).and_then(Value::as_f64).map_or_else(|| "—".to_owned(), |x| trimmed(x, 4));
+    let comp = |k: usize| delta.and_then(|v| v.get(k)).and_then(Value::as_f64).map_or_else(|| crate::number::NONE.to_owned(), |x| trimmed(x, 4));
     let distance = (measure_distance(reply), Ink::Text);
     let axes = ["Δx", "Δy", "Δz"].into_iter().enumerate().map(|(k, d)| (format!("{d} {}", comp(k)), Ink::Axis(k)));
     let gap = num("gap").map(|g| (trf(t!("gap {gap} {unit}"), args!(gap = trimmed(g, 4), unit = unit)), Ink::Text));
@@ -301,5 +291,5 @@ pub fn measure_card(reply: &Value) -> Vec<(String, Ink)> {
 /// The measured distance with its unit, as written on the dimension.
 pub fn measure_distance(reply: &Value) -> String {
     let unit = reply.get("unit").and_then(Value::as_str).unwrap_or("");
-    reply.get("distance").and_then(Value::as_f64).map_or_else(|| "—".to_owned(), |x| format!("{} {unit}", trimmed(x, 4)))
+    reply.get("distance").and_then(Value::as_f64).map_or_else(|| crate::number::NONE.to_owned(), |x| format!("{} {unit}", trimmed(x, 4)))
 }

@@ -74,9 +74,8 @@ pub fn handles(app: &App) -> Vec<(String, Message)> {
         _ => None,
     });
     // The groups' ghost rows (`ghost:<group>`).
-    let ghosts = parts.iter().flat_map(|p| &p.groups).filter_map(|(name, _)| {
-        emcraft_ui_core::outline::ghost(name, kind)
-            .map(|id| (format!("ghost:{name}"), crate::browser::add_message(emcraft_ui_core::outline::Add::Command(id))))
+    let ghosts = parts.iter().flat_map(|p| &p.groups).filter_map(|(section, _)| {
+        section.ghost(kind).map(|id| (format!("ghost:{}", section.id()), crate::browser::add_message(emcraft_ui_core::outline::Add::Command(id))))
     });
     let tabs = plays.chain(adds).chain(designs).chain(ghosts).collect::<Vec<_>>();
     let model = (app.page == View::Model).then(|| {

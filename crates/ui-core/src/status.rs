@@ -100,7 +100,7 @@ pub fn text(id: &str, params: &Value, reply: &Value, session: &Session) -> Strin
         }
         "mesh.adapt" => adapted(r, session),
         "geometry.measure" => {
-            trf(t!("Distance {distance} {unit}."), args!(distance = crate::tools::trimmed(r.num("distance"), 4), unit = r.text("unit")))
+            trf(t!("Distance {distance} {unit}."), args!(distance = crate::number::trimmed(r.num("distance"), 4), unit = r.text("unit")))
         }
         "project.variable" => format!("{} = {}.", p.text("name"), r.num("value")),
         "project.variable.delete" => trf(t!("Deleted variable {name}."), args!(name = p.text("name"))),
@@ -189,8 +189,10 @@ fn radiation(reply: &Value, length_unit: &str) -> String {
 /// results.measured: the worst difference from the measurement and its entry.
 fn measured(r: Reply<'_>) -> String {
     let worst =
-        r.0.pointer("/compared/worst/max_difference").and_then(serde_json::Value::as_f64).map_or_else(|| "—".to_owned(), crate::number::value);
-    let entry = r.0.pointer("/compared/worst/entry").and_then(serde_json::Value::as_str).unwrap_or("—").to_owned();
+        r.0.pointer("/compared/worst/max_difference")
+            .and_then(serde_json::Value::as_f64)
+            .map_or_else(|| crate::number::NONE.to_owned(), crate::number::value);
+    let entry = r.0.pointer("/compared/worst/entry").and_then(serde_json::Value::as_str).unwrap_or(crate::number::NONE).to_owned();
     trf(t!("Worst |S − S_measured| = {worst} ({entry})."), args!(worst = worst, entry = entry))
 }
 
@@ -211,7 +213,7 @@ fn adapted(r: Reply<'_>, session: &Session) -> String {
     // An open problem driven by sources alone converges on its far field.
     let far = r.text("quantity") == "far_field";
     let key = if far { "delta_far_field" } else { "delta_s" };
-    let last = passes.last().and_then(|p| p.get(key)?.as_f64()).map_or_else(|| "—".to_owned(), |d| format!("{d:.2e}"));
+    let last = passes.last().and_then(|p| p.get(key)?.as_f64()).map_or_else(|| crate::number::NONE.to_owned(), |d| format!("{d:.2e}"));
     let tets = session.model().mesh.as_ref().map_or(0, |m| m.tets.len());
     let converged = tr(if r.flag("converged") { t!("converged") } else { t!("not converged") });
     let what = tr(if far { t!("far-field change") } else { t!("ΔS") });
@@ -241,7 +243,7 @@ mod tests {
         let none = json!({});
         assert_eq!(text("results.touchstone", &none, &none, &s), "Wrote .");
         assert_eq!(text("file.open", &none, &none, &s), "Opened the project.");
-        assert_eq!(text("mesh.adapt", &none, &none, &s), "Adaptive mesh: 0 passes, 0 tetrahedra, last ΔS —, not converged.");
+        assert_eq!(text("mesh.adapt", &none, &none, &s), "Adaptive mesh: 0 passes, 0 tetrahedra, last ΔS –, not converged.");
         assert_eq!(
             text("mesh.adapt", &none, &json!({"passes": [{"delta_s": 0.5}, {"delta_s": 0.01}], "converged": true}), &s),
             "Adaptive mesh: 2 passes, 0 tetrahedra, last ΔS 1.00e-2, converged."

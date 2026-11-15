@@ -33,6 +33,12 @@ fn prefix(values: impl Iterator<Item = f64>) -> (f64, &'static str) {
     PREFIXES.iter().copied().find(|(f, _)| most >= *f).unwrap_or((1e-15, "f"))
 }
 
+/// A time (s) in nanoseconds, the charts' time axis's unit.
+fn ns(t: f64) -> f64 {
+    use emcraft_model::units::Unit;
+    emcraft_model::units::Time::Nanosecond.from_si(t)
+}
+
 /// `series` with their values scaled to the prefix their largest takes, and its symbol.
 fn scaled(series: Vec<Series>) -> (Vec<Series>, &'static str) {
     let (factor, symbol) = prefix(series.iter().flat_map(|s| s.points.iter().map(|p| p[1])));
@@ -42,7 +48,7 @@ fn scaled(series: Vec<Series>) -> (Vec<Series>, &'static str) {
 
 /// A chart of `series` over the run's time (ns), its words translated.
 fn over_time(title: &str, y_label: &str, series: Vec<Series>, r: &PicResult) -> Chart {
-    let end = r.steps as f64 * r.dt * 1e9;
+    let end = ns(r.steps as f64 * r.dt);
     let (lo, hi) = span(series.iter().flat_map(|s| s.points.iter().map(|p| p[1])));
     let mut chart = Chart::new(title, Axis::new("time (ns)", 0.0, end.max(1e-12)), Axis::new(y_label, lo, hi), series);
     crate::chart_words::translate_chart(&mut chart);
@@ -51,7 +57,7 @@ fn over_time(title: &str, y_label: &str, series: Vec<Series>, r: &PicResult) -> 
 
 /// The energy in the field and in the particles (J) over time.
 pub fn energy(r: &PicResult) -> Chart {
-    let at = |f: fn(&emcraft_engine::particles::Record) -> f64| r.history.iter().map(|h| [h.t * 1e9, f(h)]).collect();
+    let at = |f: fn(&emcraft_engine::particles::Record) -> f64| r.history.iter().map(|h| [ns(h.t), f(h)]).collect();
     let series = vec![
         Series::new("field", "field", Pen::Series(1), Style::Line, at(|h| h.field)),
         Series::new("kinetic", "particles", Pen::Series(2), Style::Line, at(|h| h.kinetic)),
@@ -67,7 +73,7 @@ pub fn currents(r: &PicResult) -> Option<Chart> {
         .flat_map(|axis| [false, true].map(|high| Face { axis, high }))
         .enumerate()
         .filter_map(|(k, face)| {
-            let points: Vec<[f64; 2]> = r.history.iter().map(|h| [h.t * 1e9, h.collected[face.axis][usize::from(face.high)]]).collect();
+            let points: Vec<[f64; 2]> = r.history.iter().map(|h| [ns(h.t), h.collected[face.axis][usize::from(face.high)]]).collect();
             points
                 .iter()
                 .any(|p| p[1] != 0.0)
@@ -113,7 +119,7 @@ pub fn probes(r: &PicResult) -> Option<Chart> {
         .map(|(k, p)| {
             let spread = |c: usize| p.e.iter().map(|e| e[c] * e[c]).sum::<f64>();
             let c = (0..3).max_by(|a, b| spread(*a).total_cmp(&spread(*b))).unwrap_or(0);
-            let points = p.e.iter().enumerate().map(|(n, e)| [(n + 1) as f64 * p.every as f64 * r.dt * 1e9, e[c]]).collect();
+            let points = p.e.iter().enumerate().map(|(n, e)| [ns((n + 1) as f64 * p.every as f64 * r.dt), e[c]]).collect();
             Series::new(
                 &format!("probe{k}"),
                 format!("E{} {}", AXES[c], k + 1),
@@ -142,7 +148,7 @@ pub fn summary(s: &Session) -> Option<Table> {
     let mut rows = vec![
         vec![tr(t!("Grid")).to_owned(), format!("{} × {} × {}", r.cells[0], r.cells[1], r.cells[2])],
         vec![tr(t!("Cell")).to_owned(), format!("{} {}", crate::number::value(lu.from_si(r.h.iter().copied().fold(0.0, f64::max))), lu.symbol())],
-        vec![tr(t!("Time")).to_owned(), format!("{} ns ({} steps)", crate::number::value(r.steps as f64 * r.dt * 1e9), r.steps)],
+        vec![tr(t!("Time")).to_owned(), format!("{} ns ({} steps)", crate::number::value(ns(r.steps as f64 * r.dt)), r.steps)],
         vec![tr(t!("Particles")).to_owned(), format!("{}", r.particles)],
     ];
     for axis in (0..3).filter(|a| r.walls[*a] == Wall::Conductor) {

@@ -16,7 +16,101 @@ pub enum Head {
     /// A step of the workflow: a click opens its panel.
     Step(Step),
     /// A section of its own: the variables, a system's or a board's sections.
-    Section(&'static str),
+    Section(Section),
+}
+
+emcraft_macros::named_enum! {
+    /// A section of the browser ([`crate::browser::tree`]): its id the name it folds by (kept
+    /// with the window's state), its heading what it shows.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Section {
+        Parameters = "Parameters",
+        Bodies = "Bodies",
+        Materials = "Materials",
+        Domain = "Domain",
+        Excitation = "Excitation",
+        Mesh = "Mesh",
+        Results = "Results",
+        Pcb = "PCB",
+        Source = "Source",
+        Stages = "Stages",
+        Receiver = "Receiver",
+        Measurements = "Measurements",
+    }
+}
+
+impl Section {
+    /// The step it belongs to; none for a section of its own.
+    ///
+    /// ```
+    /// use emcraft_ui_core::outline::Section;
+    /// use emcraft_engine::workflow::Step;
+    /// assert_eq!(Section::Materials.step(), Some(Step::Geometry));
+    /// assert_eq!(Section::Domain.step(), Some(Step::Boundaries));
+    /// assert_eq!(Section::Parameters.step(), None);
+    /// ```
+    pub const fn step(self) -> Option<Step> {
+        match self {
+            Section::Bodies | Section::Materials => Some(Step::Geometry),
+            Section::Excitation => Some(Step::Excitation),
+            Section::Domain => Some(Step::Boundaries),
+            Section::Mesh => Some(Step::Mesh),
+            Section::Results => Some(Step::Results),
+            Section::Parameters | Section::Pcb | Section::Source | Section::Stages | Section::Receiver | Section::Measurements => None,
+        }
+    }
+
+    /// Its heading.
+    pub const fn heading(self) -> crate::lang::Text {
+        match self {
+            Section::Parameters => t!("Parameters"),
+            Section::Bodies => t!("Bodies"),
+            Section::Materials => t!("Materials"),
+            Section::Domain => t!("Domain"),
+            Section::Excitation => t!("Excitation"),
+            Section::Mesh => t!("Mesh"),
+            Section::Results => t!("Results"),
+            Section::Pcb => t!("PCB"),
+            Section::Source => t!("Source"),
+            Section::Stages => t!("Stages"),
+            Section::Receiver => t!("Receiver"),
+            Section::Measurements => t!("Measurements"),
+        }
+    }
+
+    /// What its ＋ adds when it is a part of its own: the variables', a board's and a system
+    /// chain's.
+    const fn adds(self) -> &'static [&'static str] {
+        match self {
+            Section::Parameters => &["project.variable"],
+            Section::Pcb => &["pcb.import", "pcb.sample", "pcb.segment", "pcb.via", "pcb.pour", "pcb.element", "units.set"],
+            Section::Source => &["system.source", "units.set"],
+            Section::Receiver => &["system.receiver"],
+            Section::Measurements => &["results.import"],
+            _ => &[],
+        }
+    }
+
+    /// What its last, dim row adds to it (FieldCraft's ghost row): a design imported to the
+    /// bodies, a material, a port; none for the other sections, or when the job's kind has no
+    /// use for it (no ports on a resonator).
+    ///
+    /// ```
+    /// use emcraft_engine::workflow::Analysis;
+    /// use emcraft_ui_core::outline::Section;
+    /// assert_eq!(Section::Materials.ghost(Analysis::Frequency), Some("model.material.create"));
+    /// assert_eq!(Section::Excitation.ghost(Analysis::Frequency), Some("model.port.create"));
+    /// assert_eq!(Section::Results.ghost(Analysis::Frequency), None);
+    /// ```
+    pub fn ghost(self, kind: Analysis) -> Option<&'static str> {
+        let id = match self {
+            Section::Bodies => "geometry.import",
+            Section::Materials => "model.material.create",
+            Section::Excitation => "model.port.create",
+            _ => return None,
+        };
+        fits(kind, id).then_some(id)
+    }
 }
 
 /// A part of the tree: its head and its groups of rows, each group a browser section (its
@@ -24,7 +118,7 @@ pub enum Head {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Part {
     pub head: Head,
-    pub groups: Vec<(&'static str, Vec<Row>)>,
+    pub groups: Vec<(Section, Vec<Row>)>,
 }
 
 impl Part {
@@ -32,7 +126,7 @@ impl Part {
     pub fn key(&self) -> &'static str {
         match self.head {
             Head::Step(s) => s.id(),
-            Head::Section(name) => name,
+            Head::Section(section) => section.id(),
         }
     }
 
@@ -47,37 +141,17 @@ impl Part {
     }
 }
 
-/// The step a browser section belongs to; none for a section of its own.
-///
-/// ```
-/// use emcraft_ui_core::outline::step_of_section;
-/// use emcraft_engine::workflow::Step;
-/// assert_eq!(step_of_section("Materials"), Some(Step::Geometry));
-/// assert_eq!(step_of_section("Domain"), Some(Step::Boundaries));
-/// assert_eq!(step_of_section("Parameters"), None);
-/// ```
-pub fn step_of_section(section: &str) -> Option<Step> {
-    match section {
-        "Bodies" | "Materials" => Some(Step::Geometry),
-        "Excitation" => Some(Step::Excitation),
-        "Domain" => Some(Step::Boundaries),
-        "Mesh" => Some(Step::Mesh),
-        "Results" => Some(Step::Results),
-        _ => None,
-    }
-}
-
 /// The tree of a job of kind `kind` from the browser's `sections`: the sections of their own,
 /// then a node a step from the geometry on, each holding its sections; a board's and a system's
 /// sections each a part of its own (their work is not stepped).
-pub fn outline(sections: Vec<(&'static str, Vec<Row>)>, kind: Analysis) -> Vec<Part> {
-    let own = |(name, rows): (&'static str, Vec<Row>)| Part { head: Head::Section(name), groups: vec![(name, rows)] };
+pub fn outline(sections: Vec<(Section, Vec<Row>)>, kind: Analysis) -> Vec<Part> {
+    let own = |(section, rows): (Section, Vec<Row>)| Part { head: Head::Section(section), groups: vec![(section, rows)] };
     if matches!(kind, Analysis::Pcb | Analysis::System) {
         return sections.into_iter().map(own).collect();
     }
-    let (stepped, apart): (Vec<_>, Vec<_>) = sections.into_iter().partition(|(name, _)| step_of_section(name).is_some());
+    let (stepped, apart): (Vec<_>, Vec<_>) = sections.into_iter().partition(|(section, _)| section.step().is_some());
     let steps = Step::ALL.into_iter().filter(|s| *s != Step::Intent).map(|step| {
-        let groups = stepped.iter().filter(|(name, _)| step_of_section(name) == Some(step)).cloned().collect();
+        let groups = stepped.iter().filter(|(section, _)| section.step() == Some(step)).cloned().collect();
         Part { head: Head::Step(step), groups }
     });
     apart.into_iter().map(own).chain(steps).collect()
@@ -136,15 +210,6 @@ const STEP_ADDS: &[(Step, &[&str])] = &[
     ),
 ];
 
-/// What the ＋ of a section of its own adds: the variables', a board's and a system chain's.
-const SECTION_ADDS: &[(&str, &[&str])] = &[
-    ("Parameters", &["project.variable"]),
-    ("PCB", &["pcb.import", "pcb.sample", "pcb.segment", "pcb.via", "pcb.pour", "pcb.element", "units.set"]),
-    ("Source", &["system.source", "units.set"]),
-    ("Receiver", &["system.receiver"]),
-    ("Measurements", &["results.import"]),
-];
-
 /// An entry of a part's ＋ list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Add {
@@ -174,7 +239,7 @@ pub enum Add {
 pub fn adds(head: Head, kind: Analysis) -> Vec<Add> {
     let listed: &[&str] = match head {
         Head::Step(step) => STEP_ADDS.iter().find(|(s, _)| *s == step).map_or(&[], |(_, ids)| ids),
-        Head::Section(name) => SECTION_ADDS.iter().find(|(n, _)| *n == name).map_or(&[], |(_, ids)| ids),
+        Head::Section(section) => section.adds(),
     };
     let design = matches!(head, Head::Step(Step::Geometry)).then_some(Add::NewDesign);
     let commands = listed.iter().copied().filter(|id| fits(kind, id)).map(Add::Command);
@@ -185,27 +250,6 @@ pub fn adds(head: Head, kind: Analysis) -> Vec<Add> {
         _ => Vec::new(),
     };
     design.into_iter().chain(commands).chain(tools).collect()
-}
-
-/// What a group's last, dim row adds to it (FieldCraft's ghost row): a design imported to the
-/// bodies, a material, a port; none for the other groups, or when the job's kind has no use for
-/// it.
-///
-/// ```
-/// use emcraft_engine::workflow::Analysis;
-/// use emcraft_ui_core::outline::ghost;
-/// assert_eq!(ghost("Materials", Analysis::Frequency), Some("model.material.create"));
-/// assert_eq!(ghost("Excitation", Analysis::Frequency), Some("model.port.create"));
-/// assert_eq!(ghost("Results", Analysis::Frequency), None);
-/// ```
-pub fn ghost(group: &str, kind: Analysis) -> Option<&'static str> {
-    let id = match group {
-        "Bodies" => "geometry.import",
-        "Materials" => "model.material.create",
-        "Excitation" => "model.port.create",
-        _ => return None,
-    };
-    fits(kind, id).then_some(id)
 }
 
 /// The commands that make shapes: the language of scripts, templates, the oracle and agents,
@@ -354,12 +398,12 @@ mod tests {
         let all = sections.iter().map(|(_, r)| r.len()).sum::<usize>();
         let parts = outline(sections, s.model().analysis());
         let steps = [Step::Geometry, Step::Excitation, Step::Setup, Step::Boundaries, Step::Mesh, Step::Run, Step::Results];
-        let want: Vec<Head> = std::iter::once(Head::Section("Parameters")).chain(steps.map(Head::Step)).collect();
+        let want: Vec<Head> = std::iter::once(Head::Section(Section::Parameters)).chain(steps.map(Head::Step)).collect();
         assert_eq!(heads(&parts), want);
         let names: Vec<&str> = parts[0].rows().map(|r| r.id.as_str()).collect();
         assert!(["variable:a", "variable:b", "variable:er"].iter().all(|n| names.contains(n)), "{names:?}");
-        let groups: Vec<&str> = parts[1].groups.iter().map(|(n, _)| *n).collect();
-        assert_eq!(groups, ["Bodies", "Materials"]);
+        let groups: Vec<Section> = parts[1].groups.iter().map(|(n, _)| *n).collect();
+        assert_eq!(groups, [Section::Bodies, Section::Materials]);
         assert!(parts[1].count() > 0 && parts[2].count() > 0);
         assert_eq!((parts[3].count(), parts[6].count()), (0, 0));
         assert_eq!(parts.iter().map(Part::count).sum::<usize>(), all);
@@ -369,9 +413,9 @@ mod tests {
     /// A system's tree is its own sections, none stepped.
     #[test]
     fn a_systems_tree_is_its_sections() {
-        let sections = vec![("Source", Vec::new()), ("Stages", Vec::new())];
+        let sections = vec![(Section::Source, Vec::new()), (Section::Stages, Vec::new())];
         let parts = outline(sections, Analysis::System);
-        assert_eq!(heads(&parts), [Head::Section("Source"), Head::Section("Stages")]);
+        assert_eq!(heads(&parts), [Head::Section(Section::Source), Head::Section(Section::Stages)]);
     }
 
     /// Every command a ＋ offers is a command with a glyph and a label, each in one place; every
@@ -379,7 +423,7 @@ mod tests {
     #[test]
     fn every_command_added_is_one_with_a_glyph_in_one_place() {
         let all: Vec<&str> =
-            STEP_ADDS.iter().flat_map(|(_, ids)| ids.iter()).chain(SECTION_ADDS.iter().flat_map(|(_, ids)| ids.iter())).copied().collect();
+            STEP_ADDS.iter().flat_map(|(_, ids)| ids.iter()).chain(Section::ALL.iter().flat_map(|s| s.adds().iter())).copied().collect();
         for id in &all {
             let c = crate::commands::find(id).unwrap_or_else(|| panic!("{id}: no command"));
             assert!(c.glyph.is_some() && !crate::commands::button_label(id).is_empty(), "{id}");
@@ -389,7 +433,7 @@ mod tests {
         assert!(once, "a command on two steps' ＋");
         assert!(all.iter().all(|id| offered(id)), "a shape command offered");
         for kind in Analysis::ALL {
-            let heads = [Head::Step(Step::Geometry), Head::Section("PCB"), Head::Section("Source")];
+            let heads = [Head::Step(Step::Geometry), Head::Section(Section::Pcb), Head::Section(Section::Source)];
             assert!(heads.iter().any(|h| adds(*h, kind).iter().any(|a| matches!(a, Add::Command(_)))), "{kind:?}");
         }
     }

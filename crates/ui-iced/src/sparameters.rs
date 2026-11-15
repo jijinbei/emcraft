@@ -113,7 +113,7 @@ impl App {
             .into_iter()
             .map(|(name, x)| {
                 let kept = self.planes.remove(&name).filter(|(_, seen)| *seen == x);
-                let entry = kept.unwrap_or_else(|| (emcraft_ui_core::tools::trimmed(x, 4), x));
+                let entry = kept.unwrap_or_else(|| (emcraft_ui_core::number::trimmed(x, 4), x));
                 (name, entry)
             })
             .collect();

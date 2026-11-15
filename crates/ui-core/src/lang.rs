@@ -337,6 +337,26 @@ pub struct Both {
     pub shown: String,
 }
 
+impl Both {
+    /// A text the same in every language (a name the user gave, a number).
+    pub fn same(text: impl Into<String>) -> Both {
+        let en = text.into();
+        Both { shown: en.clone(), en }
+    }
+
+    /// `self` and `other` joined by `sep`, in both languages.
+    #[must_use]
+    pub fn join(&self, sep: &str, other: &Both) -> Both {
+        Both { en: format!("{}{sep}{}", self.en, other.en), shown: format!("{}{sep}{}", self.shown, other.shown) }
+    }
+
+    /// `f` applied to both.
+    #[must_use]
+    pub fn map(&self, f: impl Fn(&str) -> String) -> Both {
+        Both { en: f(&self.en), shown: f(&self.shown) }
+    }
+}
+
 /// [`trf`], with the English filled too.
 pub fn both(english: Text, args: &[(&str, &dyn Display)]) -> Both {
     let en = fill(english.en(), args);

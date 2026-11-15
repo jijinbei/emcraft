@@ -55,7 +55,7 @@ impl RefPlane {
 
     /// The distance from the port's face as shown by the grip, in `l`.
     pub fn label(&self, l: Length) -> String {
-        format!("{} {}", super::trimmed(l.from_si(self.deembed), 3), l.symbol())
+        format!("{} {}", crate::number::trimmed(l.from_si(self.deembed), 3), l.symbol())
     }
 }
 
