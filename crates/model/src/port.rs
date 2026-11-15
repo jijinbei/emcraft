@@ -119,6 +119,12 @@ emcraft_macros::named_enum! {
 
 emcraft_macros::named_serde!(Terminals);
 
+/// The share of a region's box cross-section its end faces must cover to be a guide's flat caps
+/// ([`Model::long_end`]): a rectangle covers all of it, a circle π/4 of it; a slanted side none.
+pub const CAP_SHARE: f64 = 0.6;
+/// How near a box's plane a face lies to be on it, as a share of the box's size.
+const CAP_TOLERANCE: f64 = 1e-6;
+
 /// The most conductors a terminal port may hold.
 pub const MAX_TERMINALS: usize = 8;
 
@@ -457,6 +463,66 @@ impl Model {
             out.push((end, PortFace { axis, at, u0: b.min[u], v0: b.min[v], a, b: h }));
         }
         out
+    }
+
+    /// An imported region's end face across the axis it runs along, when that is x or y: the
+    /// whole cross-section of its bounding box at its low (`start`) or high (`end`) side. The axis
+    /// it runs along is the longest of those whose two ends are flat caps (faces on the box's two
+    /// planes across it covering at least [`CAP_SHARE`] of its cross-section): a guide drawn along
+    /// y in a design ends across y, not on its broad walls across z (where its posts' footprints
+    /// would read as conductors), while a short taper wider than long still ends across z (its
+    /// slanted sides are no caps). None when that axis is z (the end faces across z are the
+    /// ports' as for any region), for an imported cavity (its openings are its ports',
+    /// [`Model::openings`]) and for any other shape.
+    ///
+    /// ```
+    /// use emcraft_model::{Model, Shape, Solid, Point3, End, Axis};
+    /// // A 22.86 × 60 × 10.16 mm guide along y.
+    /// let positions = (0..8).map(|i| Point3::new([0.0, 0.02286][i & 1], [0.0, 0.06][(i >> 1) & 1], [0.0, 0.01016][(i >> 2) & 1])).collect();
+    /// let quads = [[0, 4, 6, 2], [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3], [0, 2, 3, 1], [4, 5, 7, 6]];
+    /// let triangles = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
+    /// let mut m = Model::new();
+    /// let shape = Shape::Surface { name: "guide".into(), positions, triangles, tags: vec![0; 12], surfaces: Vec::new() };
+    /// m.set_solid(Solid { shape, material: "vacuum".into() })?;
+    /// let f = m.long_end(End::End).unwrap();
+    /// assert_eq!(f.axis, Axis::Y);
+    /// assert!((f.at - 0.06).abs() < 1e-12 && (f.a.get() - 0.02286).abs() < 1e-12);
+    /// # Ok::<(), emcraft_model::ModelError>(())
+    /// ```
+    pub fn long_end(&self, end: End) -> Option<PortFace> {
+        let Some(Solid { shape: shape @ Shape::Surface { name, positions, triangles, .. }, .. }) = &self.domain.solid else { return None };
+        if name == CAVITY {
+            return None;
+        }
+        let b = shape.bounds();
+        let extent = |d: usize| b.max[d] - b.min[d];
+        let tol = CAP_TOLERANCE * (0..3).map(extent).fold(0.0, f64::max);
+        // The area of the faces lying on the plane `at` across axis `d`.
+        let cap = |d: usize, at: f64| -> f64 {
+            triangles
+                .iter()
+                .filter_map(|t| Some([*positions.get(t[0] as usize)?, *positions.get(t[1] as usize)?, *positions.get(t[2] as usize)?]))
+                .filter(|c| c.iter().all(|p| (p[d] - at).abs() <= tol))
+                .map(|[p, q, r]| 0.5 * (q - p).cross(r - p).norm())
+                .sum()
+        };
+        let capped = |a: &Axis| {
+            let d = a.index();
+            let section = extent((d + 1) % 3) * extent((d + 2) % 3);
+            section > 0.0 && [b.min[d], b.max[d]].iter().all(|&at| cap(d, at) >= CAP_SHARE * section)
+        };
+        let axis = [Axis::X, Axis::Y, Axis::Z].into_iter().filter(capped).max_by(|p, q| extent(p.index()).total_cmp(&extent(q.index())))?;
+        // Along z (or a tie with it), the end faces across z are the ports' as for any region.
+        if axis == Axis::Z || extent(axis.index()) <= extent(Axis::Z.index()) {
+            return None;
+        }
+        let FrameAxes { u, v, .. } = Frame::new(axis).axes();
+        let (Ok(a), Ok(h)) = (Metres::new(extent(u)), Metres::new(extent(v))) else { return None };
+        let at = match end {
+            End::Start => b.min[axis.index()],
+            End::End => b.max[axis.index()],
+        };
+        Some(PortFace { axis, at, u0: b.min[u], v0: b.min[v], a, b: h })
     }
 
     /// The port named `name` and its index.

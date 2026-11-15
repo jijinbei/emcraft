@@ -351,3 +351,41 @@ fn a_design_lies_in_the_box_its_corner_gives() {
         assert!(matches!(&e, EngineError::Params(_)), "{bad}: {e}");
     }
 }
+
+/// A guide imported along y takes its ports on its ends across y, not on its broad walls across
+/// z (where they made a cross-section of the wrong guide, its metal posts' footprints read as
+/// conductors of a terminal port): an empty WR-90 box 60 mm along y, its ports at `start` and
+/// `end`, carries TE10 through. Evidence: an empty matched guide transmits fully, |S21| = 1
+/// (Pozar, Microwave Engineering, 4th ed., §3.3), its ports across y at y = 0 and 60 mm.
+#[test]
+fn a_guide_imported_along_y_takes_its_ports_on_its_ends() {
+    let (a, l, b) = (22.86, 60.0, 10.16);
+    let corner = |i: usize| [[0.0, a][i & 1], [0.0, l][(i >> 1) & 1], [0.0, b][(i >> 2) & 1]];
+    let quads = [[0, 4, 6, 2], [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3], [0, 2, 3, 1], [4, 5, 7, 6]];
+    let facets: String = quads
+        .iter()
+        .flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]])
+        .map(|t| {
+            let v: String = t
+                .iter()
+                .map(|&i| {
+                    let p = corner(i);
+                    format!("vertex {} {} {}\n", p[0], p[1], p[2])
+                })
+                .collect();
+            format!("facet normal 0 0 0\nouter loop\n{v}endloop\nendfacet\n")
+        })
+        .collect();
+    let path = super::scratch("guide.stl");
+    std::fs::write(&path, format!("solid guide\n{facets}endsolid guide\n")).unwrap();
+    let mut s = Session::new();
+    s.execute("geometry.import", &json!({"path": path, "region": "guide.stl"})).unwrap();
+    s.execute("model.port.create", &json!({"name": "1", "end": "start"})).unwrap();
+    s.execute("model.port.create", &json!({"name": "2", "end": "end"})).unwrap();
+    let faces: Vec<_> = s.model.ports.iter().map(|p| p.face.map(|f| (f.axis, f.at * 1e3))).collect();
+    assert_eq!(faces, [Some((emcraft_model::Axis::Y, 0.0)), Some((emcraft_model::Axis::Y, 60.0))]);
+    s.execute("mesh.generate", &json!({"size": 4})).unwrap();
+    let r = s.execute("solve.frequency", &json!({"frequencies": [10.0], "order": 2})).unwrap();
+    let s21 = r["points"][0]["s21"]["mag"].as_f64().unwrap();
+    approx::assert_abs_diff_eq!(s21, 1.0, epsilon = 0.02);
+}

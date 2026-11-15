@@ -941,10 +941,11 @@ pub fn port(s: &mut Session, p: &Params) -> Result<Value> {
         (None, Some(f)) => guide_side(&s.model, &f),
         (None, None) => return Err(p.error("end", "required: `start` or `end`")),
     };
-    // An imported cavity's channel along x or y: its end is its opening there.
+    // An imported cavity's channel along x or y: its end is its opening there; an imported
+    // region running along x or y: its end face across that axis.
     let face = match face {
         Some(f) => Some(f),
-        None => opening(&s.model, end).map_err(|why| p.error("end", why))?,
+        None => opening(&s.model, end).map_err(|why| p.error("end", why))?.or_else(|| s.model.long_end(end)),
     };
     let port = Port {
         name: name.to_owned(),
