@@ -1,8 +1,14 @@
-# EMCraft
+<p align="center">
+  <img src="docs/media/emcraft-logo.png" width="128" height="128" alt="EMCraft" />
+</p>
 
-An open-source electromagnetic field simulator in pure Rust for microwave, RF and PCB work:
-finite element and time-domain solvers, S-parameters, fields and far fields, every capability
-checked against exact solutions or published benchmarks.
+<h1 align="center">EMCraft</h1>
+
+<p align="center">
+  An open-source electromagnetic field simulator in pure Rust for microwave, RF and PCB work:
+  finite element and time-domain solvers, S-parameters, fields and far fields, every capability
+  checked against exact solutions or published benchmarks.
+</p>
 
 ![The desktop app: the high-pass filter's field in the 3D view](docs/media/app-results-3d.png)
 

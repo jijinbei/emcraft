@@ -58,7 +58,7 @@ commands:
                   cite their sources, citations name works of docs/solvers/literature.md, no
                   dbg! or prints left in library code, no commented-out code, comments within
                   150 columns
-  icon            write apps/emcraft/assets/emcraft.ico (the app icon, drawn by
+  icon            write apps/emcraft/assets/emcraft.ico and docs/media/emcraft-logo.png (drawn by
                   emcraft_render::icon)
   desktop [--exec CMD]
                   write emcraft.desktop and its icon into the user's data directory, so a

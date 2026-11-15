@@ -32,7 +32,7 @@ third-party material under an open licence.
 | crates/engine/tests/fixtures/post-and-puck.3mf | EMCraft contributors | Original: a post and a puck modelled in SolidCraft and exported as 3MF with face tags | MIT OR Apache-2.0 |
 | tests/oracle/imported-iris-cavity/block.3mf | EMCraft contributors | Original: a WR-90 block with its channel and two iris plates, written by SolidCraft's CLI from `tests/oracle/imported-iris-cavity/block.solidcraft.json` (3MF with face tags) | MIT OR Apache-2.0 |
 | tests/oracle/imported-iris-touching/iris.3mf | EMCraft contributors | Original: a WR-90 guide and two iris plates as three bodies, written by SolidCraft's CLI from `tests/oracle/imported-iris-touching/iris.solidcraft.json` (3MF with face tags) | MIT OR Apache-2.0 |
-| apps/emcraft/assets/emcraft.ico (and the window icon) | EMCraft contributors | Original: drawn by `emcraft_render::icon` (`cargo xtask icon`) | MIT OR Apache-2.0 |
+| apps/emcraft/assets/emcraft.ico, docs/media/emcraft-logo.png (and the window icon) | EMCraft contributors | Original: drawn by `emcraft_render::icon` (`cargo xtask icon`), in the style of the sibling project SolidCraft's mark (isometric blue blocks, parted faces); no SolidCraft file used | MIT OR Apache-2.0 |
 | apps/emcraft/installer/emcraft.nsi | EMCraft contributors | Original: the Windows installer script, written for NSIS 3's Modern UI (NSIS itself is a build tool, not shipped; its installer stub is under the zlib/libpng licence) | MIT OR Apache-2.0 |
 | locales/ja.json | EMCraft contributors | Original: the window's Japanese translation | MIT OR Apache-2.0 |
 

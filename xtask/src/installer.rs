@@ -12,6 +12,11 @@ use std::process::Command;
 /// The icon file, relative to the workspace root (checked in; `cargo xtask icon` writes it).
 pub const ICON: &str = "apps/emcraft/assets/emcraft.ico";
 
+/// The logo the README shows, and its side (pixels: sharp on a high-density screen at 128
+/// points).
+const LOGO: &str = "docs/media/emcraft-logo.png";
+const LOGO_SIDE: u32 = 256;
+
 /// The installer script, relative to the workspace root.
 const SCRIPT: &str = "apps/emcraft/installer/emcraft.nsi";
 
@@ -26,15 +31,18 @@ pub const NIX_PACKAGES: &[&str] = &["pkgsCross.mingwW64.buildPackages.gcc", "pkg
 /// Set when the command runs inside the `nix-shell` it started, so it does not start another.
 const IN_NIX: &str = "EMCRAFT_INSTALLER_NIX";
 
-/// Writes [`ICON`] from `emcraft_render::icon`.
+/// Writes [`ICON`] and the README's [`LOGO`] from `emcraft_render::icon`.
 pub fn icon(root: &Path) -> Result<(), String> {
-    let bytes = emcraft_render::icon::ico().ok_or("icon: the PNG encoder failed")?;
-    let path = root.join(ICON);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let ico = emcraft_render::icon::ico().ok_or("icon: the .ico could not be made")?;
+    let logo = emcraft_render::icon::png(LOGO_SIDE).ok_or("icon: the PNG encoder failed")?;
+    for (file, bytes) in [(ICON, ico), (LOGO, logo)] {
+        let path = root.join(file);
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+        }
+        std::fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+        println!("icon: wrote {} ({} bytes)", path.display(), bytes.len());
     }
-    std::fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
-    println!("icon: wrote {} ({} bytes)", path.display(), bytes.len());
     Ok(())
 }
 
