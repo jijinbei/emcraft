@@ -369,10 +369,13 @@ impl<'a> Sweep<'a> {
     {
         let d: &'t Driven = self.d;
         let pending: Vec<usize> = (0..self.full.len()).filter(|&i| !self.full[i]).collect();
-        for &i in &pending {
-            if terms[i].is_none() {
-                terms[i] = Some(d.checked_terms(self.frequencies[i])?);
-            }
+        // Each frequency's terms on its own (a numeric port solves its cross-section's modes at
+        // every frequency): in parallel, each the same bits as alone; the first refusal in the
+        // frequencies' order is the one reported, as one after another would.
+        let missing: Vec<usize> = pending.iter().copied().filter(|&i| terms[i].is_none()).collect();
+        let made: Vec<Result<Vec<Vec<PortTerm<'t>>>>> = missing.par_iter().map(|&i| d.checked_terms(self.frequencies[i])).collect();
+        for (i, t) in missing.into_iter().zip(made) {
+            terms[i] = Some(t?);
         }
         let mut worst: Option<(usize, f64)> = None;
         let chunk = 4 * rayon::current_num_threads().max(1);
