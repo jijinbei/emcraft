@@ -44,10 +44,16 @@ impl App {
     /// Carries on with `then`, the changes dealt with.
     fn go(&mut self, then: Then) -> Task<Message> {
         match then {
-            Then::New => self.opened("file.new", &json!({})),
-            Then::Blank(kind) => self.opened("file.new", &json!({ "analysis": kind.id() })),
+            Then::New => {
+                self.opened("file.new", &json!({}));
+            }
+            Then::Blank(kind) => {
+                self.opened("file.new", &json!({ "analysis": kind.id() }));
+            }
             Then::Open => return self.pick(Purpose::Open),
-            Then::OpenPath(path) => self.opened("file.open", &json!({ "path": path })),
+            Then::OpenPath(path) => {
+                self.opened("file.open", &json!({ "path": path }));
+            }
             Then::Sample { name, values, purpose } => {
                 // Its parameters as changed, and the analysis chosen for it.
                 let mut params = json!({ "name": name });
@@ -69,9 +75,8 @@ impl App {
                     Some(o) => json!({ "path": file, "original": o }),
                     None => json!({ "path": file }),
                 };
-                self.opened("file.open", &params);
                 // The copy is this project's from now on: a save deletes it.
-                if self.error.is_none() {
+                if self.opened("file.open", &params) {
                     self.autosave.file = Some(file.into());
                 }
             }
@@ -89,19 +94,21 @@ impl App {
         Task::none()
     }
 
-    /// Runs `id` (a project opened or begun; it shows as a new window would, [`App::after`]).
     /// Project file `path` opened, as Open would.
     pub(crate) fn open_path(&mut self, path: &str) {
         self.opened("file.open", &json!({ "path": path }));
     }
 
-    fn opened(&mut self, id: &str, params: &Value) {
+    /// Runs `id` (a project opened or begun; it shows as a new window would, [`App::after`]);
+    /// whether it ran.
+    fn opened(&mut self, id: &str, params: &Value) -> bool {
         // The changes before were saved or let go: their copy goes.
         self.autosave.drop_copy();
-        self.run_now(id, params);
-        if let Some(path) = params.get("path").and_then(Value::as_str).filter(|_| self.error.is_none() && id == "file.open") {
+        let ran = self.run_now(id, params);
+        if let Some(path) = params.get("path").and_then(Value::as_str).filter(|_| ran && id == "file.open") {
             self.remember(path);
         }
+        ran
     }
 
     /// Whether the project has a file of its own to save to (not an autosaved copy it was
@@ -121,9 +128,9 @@ impl App {
         }
     }
 
-    /// After a save: its copy goes and the file joins the recent projects.
-    fn saved(&mut self) {
-        if self.error.is_none() && !self.session.is_dirty() {
+    /// After a save that `ran`: its copy goes and the file joins the recent projects.
+    fn saved(&mut self, ran: bool) {
+        if ran && !self.session.is_dirty() {
             self.autosave.drop_copy();
             if let Some(p) = self.session.path().map(str::to_owned) {
                 self.remember(&p);
@@ -136,15 +143,16 @@ impl App {
         if !self.has_file() {
             return self.pick(Purpose::SaveAs);
         }
-        self.run_now("file.save", &json!({}));
-        self.saved();
-        self.after_saved()
+        let ran = self.run_now("file.save", &json!({}));
+        self.saved(ran);
+        self.after_saved(ran)
     }
 
-    /// After a save that `asking` waited for: what it waited for, when the save went well.
-    fn after_saved(&mut self) -> Task<Message> {
+    /// After a save that `asking` waited for (`ran` or not): what it waited for, when the save
+    /// went well.
+    fn after_saved(&mut self, ran: bool) -> Task<Message> {
         match self.after_save.take() {
-            Some(then) if self.error.is_none() && !self.session.is_dirty() => self.go(then),
+            Some(then) if ran && !self.session.is_dirty() => self.go(then),
             _ => Task::none(),
         }
     }
@@ -178,9 +186,9 @@ impl App {
                 Task::none()
             }
             (Purpose::SaveAs, Some(p)) => {
-                self.run_now("file.save", &json!({ "path": p }));
-                self.saved();
-                self.after_saved()
+                let ran = self.run_now("file.save", &json!({ "path": p }));
+                self.saved(ran);
+                self.after_saved(ran)
             }
             // Cancelled: what waited for the save waits no more.
             _ => {

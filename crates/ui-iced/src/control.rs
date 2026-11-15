@@ -251,7 +251,7 @@ impl App {
     pub(crate) fn control(&mut self, req: Arc<ControlRequest>) -> Task<Message> {
         let p = &req.params;
         let reply = match req.method.as_str() {
-            "engine.execute" => self.execute(&req),
+            "engine.execute" => self.engine_execute(&req),
             "engine.script" => self.script(&req),
             "engine.commands" => Some(ok(emcraft_ui_core::commands::catalogue())),
             "ui.inspect" => Some(ok(inspect(self))),
@@ -339,7 +339,7 @@ impl App {
 
     /// `engine.execute`: a quick command run now, a long one on the worker, answered when its
     /// job ends (`wait`, the default) or at once.
-    fn execute(&mut self, req: &ControlRequest) -> Option<Value> {
+    fn engine_execute(&mut self, req: &ControlRequest) -> Option<Value> {
         let p = &req.params;
         let Some(id) = p.get("command").and_then(Value::as_str) else { return Some(err("missing `command`")) };
         let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or_else(|| json!({}));
@@ -357,13 +357,8 @@ impl App {
                 (None, _) => Some(err(self.error.clone().unwrap_or_default())),
             };
         }
-        self.note_run(id, &params);
-        Some(match self.session.execute(id, &params) {
-            Ok(reply) => {
-                self.error = None;
-                self.after(id, &params, &reply);
-                ok(reply)
-            }
+        Some(match self.execute(id, &params) {
+            Ok(reply) => ok(reply),
             Err(e) => err(e),
         })
     }

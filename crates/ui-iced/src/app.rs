@@ -40,7 +40,6 @@ pub fn first_page(s: &Session) -> View {
     }
 }
 
-/// The browser's sections (their English names) and rows.
 /// The browser's tree: its rows under the workflow's steps ([`emcraft_ui_core::outline`]).
 pub type Tree = Vec<emcraft_ui_core::outline::Part>;
 
@@ -437,7 +436,6 @@ impl App {
         App { autosave: emcraft_ui_core::autosave::Autosave::at(dir), ..self }
     }
 
-    /// On the PCB page, a net picked in 3D: the command that makes it the route.
     /// A command picked from the search: opened as its ＋ entry would (`None`: Enter — a
     /// command written with its parameters runs, else the first match opens); the query cleared.
     fn search_pick(&mut self, pick: Option<&'static str>) {
@@ -465,6 +463,7 @@ impl App {
         matches!(self.page, View::Model | View::Pcb) && form && self.asking.is_none() && !self.home && !self.settings
     }
 
+    /// On the PCB page, a net picked in 3D: the command that makes it the route.
     fn picked_route(&mut self) -> Option<Command> {
         let Some(emcraft_ui_core::scene3d::Pick::Net(i)) = self.selection.single().filter(|_| self.page == View::Pcb) else { return None };
         let board = self.session.model().pcb()?;
@@ -535,9 +534,47 @@ impl App {
         App { shoot: path.map(|p| (p, 0)), ..self }
     }
 
-    /// What is drawn from the project made again where it changed: the 3D view's scene and the
-    /// charts, in the window's theme.
+    /// After every message: what the window does on its own, then what it shows made again
+    /// from the project and the window as they now are.
     fn settle(&mut self) {
+        self.follow_up();
+        self.derive();
+    }
+
+    /// What the window does on its own after a message, each from its own rule: the steps'
+    /// confirmed settings, devices and estimate asked again; a file dropped for import looked
+    /// into; a template's own pulse and electrons run once their results are there; the
+    /// project's copy written when due; the designs read again when SolidCraft saved them.
+    fn follow_up(&mut self) {
+        self.refresh_steps();
+        self.probe_import();
+        self.own_pulse();
+        self.own_track();
+        self.autosave();
+        self.watch_designs();
+    }
+
+    /// The project's copy written when it is due ([`emcraft_ui_core::autosave`]), a new failure
+    /// said once.
+    fn autosave(&mut self) {
+        let (dirty, busy) = (self.session.is_dirty(), self.job.is_some());
+        if !self.autosave.due(self.began.elapsed().as_secs_f64(), dirty, busy) {
+            return;
+        }
+        let (r, new_failure) = self.autosave.write(&mut self.session);
+        // The crash journal begins again from the project the copy holds.
+        if r.is_ok() {
+            self.restart_journal();
+        }
+        if let (Err(e), true) = (r, new_failure) {
+            self.fail(emcraft_ui_core::lang::trf(t!("Autosave failed: {error}"), emcraft_ui_core::args!(error = e)));
+        }
+    }
+
+    /// What the window shows, made again where the project or the window changed: the board's
+    /// overlay on its page, the reference planes and the chart's style as the model has them,
+    /// the reference plane's number, the 3D view, the tree, the selection's rows, the charts.
+    fn derive(&mut self) {
         // The PCB page shows the board; the model page leaves it.
         use emcraft_ui_core::scene3d::Overlay;
         let board = self.page == View::Pcb;
@@ -545,11 +582,7 @@ impl App {
             let overlay = if board { Overlay::Board } else { Overlay::Plain };
             self.view3d = std::mem::take(&mut self.view3d).navigated(Nav::Overlay(overlay));
         }
-        self.refresh_steps();
-        self.probe_import();
         self.sync_planes();
-        self.own_pulse();
-        self.own_track();
         self.sync_style();
         self.sview = std::mem::take(&mut self.sview).kept(&self.session);
         // The reference plane's number follows the port and a drag until it is edited.
@@ -558,17 +591,6 @@ impl App {
             (Some((port, now)), _) => Some((port, emcraft_ui_core::number::trimmed(now, 3), now)),
             (None, _) => None,
         };
-        let (dirty, busy) = (self.session.is_dirty(), self.job.is_some());
-        if self.autosave.due(self.began.elapsed().as_secs_f64(), dirty, busy) {
-            let (r, new_failure) = self.autosave.write(&mut self.session);
-            // The crash journal begins again from the project the copy holds.
-            if r.is_ok() {
-                self.restart_journal();
-            }
-            if let (Err(e), true) = (r, new_failure) {
-                self.fail(emcraft_ui_core::lang::trf(t!("Autosave failed: {error}"), emcraft_ui_core::args!(error = e)));
-            }
-        }
         let src = crate::view3d::Source {
             session: &self.session,
             generation: self.generation,
@@ -584,7 +606,6 @@ impl App {
             self.tree = Some((self.generation, emcraft_ui_core::outline::outline(sections, self.solver())));
         }
         self.follow_selection();
-        self.watch_designs();
         let charts = crate::charts::Source {
             session: &self.session,
             replies: &self.replies,
@@ -743,10 +764,7 @@ impl App {
     fn command(&mut self, id: &str) {
         match emcraft_engine::find_command(id) {
             Some(spec) if spec.params.is_empty() => self.start(id, serde_json::json!({})),
-            Some(_) => match self.open(id, &serde_json::json!({})) {
-                Ok(d) => self.dialog = Some(d),
-                Err(e) => self.fail(e),
-            },
+            Some(_) => self.open_dialog(id, &serde_json::json!({})),
             None => self.fail(format!("no command `{id}`")),
         }
     }
@@ -755,6 +773,14 @@ impl App {
     pub(crate) fn open(&mut self, id: &str, values: &serde_json::Value) -> Result<Dialog, String> {
         let spec = emcraft_engine::find_command(id).ok_or_else(|| format!("no command `{id}`"))?;
         Ok(dialogs::open(spec, &mut self.session, values, false))
+    }
+
+    /// Command `id`'s dialog shown ([`App::open`]), or why not said.
+    pub(crate) fn open_dialog(&mut self, id: &str, values: &serde_json::Value) {
+        match self.open(id, values) {
+            Ok(d) => self.dialog = Some(d),
+            Err(e) => self.fail(e),
+        }
     }
 
     /// The items selected deleted (their rows' delete commands), the selection cleared.
@@ -783,11 +809,8 @@ impl App {
             }
             return;
         }
-        self.note_run(id, &params);
-        match self.session.execute(id, &params) {
-            Ok(reply) => {
-                self.error = None;
-                self.after(id, &params, &reply);
+        match self.execute(id, &params) {
+            Ok(_) => {
                 // An item's form stays, on the item as it is now.
                 if d.item.is_some() {
                     self.followed.row = None;
@@ -795,7 +818,7 @@ impl App {
             }
             // Shown under the field it names, and said in the message area.
             Err(e) => {
-                d.refused(&e.to_string());
+                d.refused(&e);
                 self.log = std::mem::take(&mut self.log).with(&format!("{}: {e}", emcraft_ui_core::lang::command_label(id)), true);
                 self.dialog = Some(d);
             }
@@ -945,7 +968,7 @@ impl App {
 
     pub fn update(&mut self, message: Message) {
         if let Some(command) = self.next(message) {
-            self.run(command);
+            self.start(command.id, command.params);
         }
         self.settle();
     }
@@ -1180,10 +1203,7 @@ impl App {
                 None
             }
             Message::Open(id, values) => {
-                match self.open(id, &values) {
-                    Ok(d) => self.dialog = Some(d),
-                    Err(e) => self.fail(e),
-                }
+                self.open_dialog(id, &values);
                 None
             }
             Message::RefText(s) => {
@@ -1354,18 +1374,6 @@ impl App {
         let (canvas, command) = std::mem::take(&mut self.canvas).step(input, &layout);
         self.canvas = canvas;
         command
-    }
-
-    /// Runs `command` on the project; the chain read again after a change.
-    fn run(&mut self, command: Command) {
-        self.note_run(command.id, &command.params);
-        match self.session.execute(command.id, &command.params) {
-            Ok(reply) => {
-                self.error = None;
-                self.after(command.id, &command.params, &reply);
-            }
-            Err(e) => self.fail(e.to_string()),
-        }
     }
 
     /// Reads the chain again (`solve.system`, a moment), when it has stages: what keeps it from

@@ -79,7 +79,8 @@ impl Toasts {
 /// ```
 pub fn wrote(id: &str, reply: &serde_json::Value) -> bool {
     reply.get("path").is_some_and(serde_json::Value::is_string)
-        && !matches!(id, "file.open" | "file.sample" | "file.new" | "geometry.import" | "results.import")
+        && !crate::after::opens_project(id)
+        && !matches!(id, "geometry.import" | "results.import")
 }
 
 /// Whether a job running command `id` says how it ended on a toast: not one that opens or
@@ -91,5 +92,5 @@ pub fn wrote(id: &str, reply: &serde_json::Value) -> bool {
 /// assert!(!ends_aloud("file.sample") && !ends_aloud("file.open"));
 /// ```
 pub fn ends_aloud(id: &str) -> bool {
-    !matches!(id, "file.open" | "file.sample" | "file.new" | "pcb.sample")
+    !crate::after::opens_project(id)
 }

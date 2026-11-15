@@ -26,9 +26,8 @@ use crate::parts::{action, note as small};
 /// The points a band may add, to choose from.
 const POINTS: [usize; 6] = [5, 11, 21, 51, 101, 201];
 
-/// The chart's height (points), and how far the pointer may move for a click.
+/// The chart's height (points).
 const CHART_H: f32 = 460.0;
-const CLICK_SLOP: f32 = 4.0;
 
 /// What the page's controls ask for.
 #[derive(Clone, Debug)]
@@ -169,7 +168,7 @@ impl canvas::Program<Message> for SChart<'_> {
             iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
                 let (x0, dragging) = press.0?;
                 let x = position.x - bounds.x;
-                if !dragging && (x - x0).abs() <= CLICK_SLOP {
+                if !dragging && (x - x0).abs() <= crate::parts::CLICK_SLOP {
                     return None;
                 }
                 press.0 = Some((x0, true));

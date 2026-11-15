@@ -84,10 +84,10 @@ fn send(edit: Edit) -> Message {
     Message::Dialog(edit)
 }
 
-/// A text field sending `edit` with what is typed; Enter is OK.
 /// A vector's part's field's width (points): a number of a few digits.
 const VECTOR_PART: f32 = 72.0;
 
+/// A text field sending `edit` with what is typed; Enter is OK.
 fn input<'a>(t: Tokens, value: &'a str, edit: impl Fn(String) -> Edit + 'a) -> Element<'a, Message> {
     text_input("", value)
         .size(t.font_body)

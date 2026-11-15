@@ -62,6 +62,8 @@ fn solved(id: &str, s: &Session, step: Option<Step>) -> Option<View> {
         // The Excitation step tabulates them in its panel, beside the 3D view.
         "solve.port_modes" if step == Some(Step::Excitation) => None,
         "solve.port_modes" => Some(View::PortModes),
+        // The confirmed run, whatever it solves: its results'.
+        "solve.run" | "solve.rerun" => Some(results_view(s)),
         _ => None,
     }
 }
@@ -95,6 +97,8 @@ pub fn next_view(id: &str, s: &Session, replies: &Replies, now: View, step: Opti
         id if id.starts_with("system.") => Some(View::System),
         "filter.synthesize" | "results.coupling" => Some(View::SParameters),
         "study.sweep" | "study.optimize" => Some(View::Study),
+        // The electrons' trajectories are drawn in the model.
+        "results.track" => Some(View::Model),
         "edit.undo" | "edit.redo" if s.model().pcb().is_some() => Some(View::Pcb),
         "edit.undo" | "edit.redo" => (now == View::Pcb).then_some(View::Model),
         // A system's chain is its own view's; away from the PCB diagnosis or a system, the model's.
@@ -103,6 +107,18 @@ pub fn next_view(id: &str, s: &Session, replies: &Replies, now: View, step: Opti
         _ if id.starts_with("geometry.") => Some(View::Model),
         _ => None,
     }
+}
+
+/// Whether command `id` replaces the project with another (opened, begun or a sample's): the
+/// window then shows it as a new window would.
+///
+/// ```
+/// use emcraft_ui_core::after::opens_project;
+/// assert!(opens_project("file.open") && opens_project("pcb.sample"));
+/// assert!(!opens_project("file.save") && !opens_project("geometry.import"));
+/// ```
+pub fn opens_project(id: &str) -> bool {
+    matches!(id, "file.new" | "file.open" | "file.sample" | "pcb.sample")
 }
 
 /// Whether command `id` leaves the start page for the project.
@@ -125,6 +141,8 @@ mod tests {
     #[case("solve.port_modes", View::Model, None, Some(View::PortModes))]
     #[case("solve.port_modes", View::Model, Some(Step::Excitation), None)]
     #[case("solve.device", View::Field, None, None)]
+    #[case("solve.run", View::Field, None, Some(View::Model))]
+    #[case("results.track", View::Eigenmodes, None, Some(View::Model))]
     #[case("results.import", View::Model, None, Some(View::SParameters))]
     #[case("results.material", View::Model, None, Some(View::Analyses))]
     #[case("system.stage.add", View::Model, None, Some(View::System))]

@@ -39,10 +39,7 @@ impl App {
                 self.selection = Selection::of(vec![pick], row);
             }
             Some(Outcome::Run(id, params)) => self.start(id, params),
-            Some(Outcome::Dialog(id, params)) => match self.open(id, &params) {
-                Ok(d) => self.dialog = Some(d),
-                Err(e) => self.fail(e),
-            },
+            Some(Outcome::Dialog(id, params)) => self.open_dialog(id, &params),
             Some(Outcome::Refused(why)) => self.fail(tr(why).to_owned()),
             Some(Outcome::Measure(picks)) => {
                 // A question of the model: answered at once, nothing changed.

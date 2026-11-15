@@ -120,9 +120,7 @@ pub struct Grip {
     over: bool,
 }
 
-/// How far the pointer may move between press and release for a click, and between two clicks
-/// of a double click (points); how soon the second must follow.
-const CLICK_SLOP: f32 = 4.0;
+/// How far apart (points) and how soon two clicks make a double click.
 const DOUBLE_SLOP: f32 = 6.0;
 const DOUBLE_WITHIN: std::time::Duration = std::time::Duration::from_millis(400);
 
@@ -245,7 +243,7 @@ impl shader::Program<Message> for Viewer {
             iced::Event::Mouse(mouse::Event::CursorMoved { position }) if grip.boxing.is_some() => {
                 let (start, add, out) = grip.boxing?;
                 let at = *position - iced::Vector::new(bounds.x, bounds.y);
-                let out = out || start.distance(at) > CLICK_SLOP;
+                let out = out || start.distance(at) > crate::parts::CLICK_SLOP;
                 grip.boxing = Some((start, add, out));
                 out.then(|| Action::publish(Message::View3d(Nav::Box(Some(BoxSel::from_drag(crate::geom::shared(start), crate::geom::shared(at)))))))
             }
@@ -284,7 +282,9 @@ impl shader::Program<Message> for Viewer {
                 let at = cursor.position_in(bounds);
                 let pressed = grip.pressed.take().filter(|_| *b == mouse::Button::Left);
                 match (pressed, at) {
-                    (Some(p), Some(at)) if p.distance(at) <= CLICK_SLOP => Some(Action::publish(Message::Click(clicked(grip, at))).and_capture()),
+                    (Some(p), Some(at)) if p.distance(at) <= crate::parts::CLICK_SLOP => {
+                        Some(Action::publish(Message::Click(clicked(grip, at))).and_capture())
+                    }
                     _ => Some(Action::request_redraw()),
                 }
             }

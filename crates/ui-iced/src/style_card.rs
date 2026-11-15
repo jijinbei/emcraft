@@ -42,7 +42,9 @@ impl App {
                     self.run_now("view.chart.style", &params);
                 }
             }
-            StyleAct::Send(params) => self.run_now("view.chart.style", &params),
+            StyleAct::Send(params) => {
+                self.run_now("view.chart.style", &params);
+            }
         }
     }
 

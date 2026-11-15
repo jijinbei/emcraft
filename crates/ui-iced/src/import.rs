@@ -47,10 +47,7 @@ impl App {
         } else {
             self.page = emcraft_ui_core::view::View::Pcb;
         }
-        match self.open(id, &values) {
-            Ok(d) => self.dialog = Some(d),
-            Err(e) => self.fail(e),
-        }
+        self.open_dialog(id, &values);
     }
 
     /// What the open import dialog's file holds, read again when the file (or its unit)

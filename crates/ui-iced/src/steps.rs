@@ -109,7 +109,10 @@ impl App {
         let v = self.session.execute("solve.devices", &json!({})).unwrap_or_else(|e| json!({"error": e.to_string()}));
         if self.workflow.selection == DeviceSelection::Pending {
             let (device, precision) = emcraft_ui_core::steps::devices::recommended(&v, self.solver());
-            let _ = self.session.execute("solve.device", &json!({"device": device.id(), "precision": precision.id()}));
+            // Noted (a replay picks the same device), not said: the window chose it, not the user.
+            let params = json!({"device": device.id(), "precision": precision.id()});
+            self.note_run("solve.device", &params);
+            let _ = self.session.execute("solve.device", &params);
             self.workflow.selection = DeviceSelection::Automatic;
         }
         self.workflow.devices = Some(v);
@@ -160,10 +163,7 @@ impl App {
                     self.open_step(step);
                 }
                 if dialog {
-                    match self.open(&command, &json!({})) {
-                        Ok(d) => self.dialog = Some(d),
-                        Err(e) => self.fail(e),
-                    }
+                    self.open_dialog(&command, &json!({}));
                 }
             }
             Act::Typed(name, s) => self.workflow.fields = std::mem::take(&mut self.workflow.fields).typed(name, &s),
@@ -175,13 +175,10 @@ impl App {
                 self.run_now("solve.device", &json!({"device": device.id(), "precision": precision.id()}));
             }
             Act::PreviewModes if self.session.model().job.range().is_some() => self.start("solve.port_modes", json!({})),
-            Act::PreviewModes => match self.open("solve.port_modes", &json!({})) {
-                Ok(d) => self.dialog = Some(d),
-                Err(e) => self.fail(e),
-            },
-            Act::CheckResults => match self.session.execute("results.check", &json!({})) {
+            Act::PreviewModes => self.open_dialog("solve.port_modes", &json!({})),
+            Act::CheckResults => match self.execute("results.check", &json!({})) {
                 Ok(v) => self.workflow.check = Some(v),
-                Err(e) => self.fail(e.to_string()),
+                Err(e) => self.fail(e),
             },
             Act::Export => self.export_touchstone(),
         }
@@ -193,7 +190,9 @@ impl App {
         let (params, f) = emcraft_ui_core::steps::form::checked(self.solver(), self.session.limits().frequencies as u64, f);
         self.workflow.fields = f;
         match params {
-            Ok(p) => self.run_now("project.setup", &p),
+            Ok(p) => {
+                self.run_now("project.setup", &p);
+            }
             Err(e) => self.fail(e),
         }
     }
@@ -224,9 +223,7 @@ impl App {
         let error = if path.is_empty() {
             Some(tr(t!("give a file")).to_owned())
         } else {
-            let params = json!({"path": path, "format": format});
-            self.note_run("results.touchstone", &params);
-            self.session.execute("results.touchstone", &params).err().map(|e| e.to_string())
+            self.execute("results.touchstone", &json!({"path": path, "format": format})).err()
         };
         self.workflow.fields = std::mem::take(&mut self.workflow.fields).with_error("touchstone", error);
     }
@@ -275,8 +272,7 @@ impl App {
     /// calls for; a board's steps are its PCB page, a system's its chain, the kind (step 0) the
     /// model with no panel. A dialog of another step closes.
     pub(crate) fn open_step(&mut self, step: Option<Step>) {
-        let (home, settings) = (false, false);
-        (self.home, self.settings) = (home, settings);
+        (self.home, self.settings) = (false, false);
         // A step's node shows its panel: an item's form gives way, its row let go.
         if self.dialog.as_ref().is_some_and(|d| d.item.is_some()) {
             self.dialog = None;

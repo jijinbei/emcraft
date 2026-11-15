@@ -34,7 +34,8 @@ impl App {
             return;
         }
         if !emcraft_ui_core::commands::is_long(id) {
-            return self.run_now(id, &params);
+            self.run_now(id, &params);
+            return;
         }
         self.note_run(id, &params);
         let asked = if matches!(id, "solve.rerun" | "solve.run") { json!({}) } else { json!({"command": id, "params": params}) };
@@ -45,17 +46,26 @@ impl App {
         self.job = Some(job);
     }
 
-    /// Runs `id` at once on the project.
-    pub(crate) fn run_now(&mut self, id: &str, params: &Value) {
+    /// Runs `id` at once on the project: noted for the recording, and on success what follows
+    /// it done ([`App::after`]); the refusal, as the engine words it, left to the caller to show.
+    /// Every command the window runs at once goes this way.
+    pub(crate) fn execute(&mut self, id: &str, params: &Value) -> Result<Value, String> {
         self.note_run(id, params);
-        match self.session.execute(id, params) {
-            Ok(reply) => {
-                self.error = None;
-                self.after(id, params, &reply);
-            }
+        let reply = self.session.execute(id, params).map_err(|e| e.to_string())?;
+        self.error = None;
+        self.after(id, params, &reply);
+        Ok(reply)
+    }
+
+    /// Runs `id` at once on the project, a refusal said in the message area and on the
+    /// workflow; whether it ran.
+    pub(crate) fn run_now(&mut self, id: &str, params: &Value) -> bool {
+        match self.execute(id, params) {
+            Ok(_) => true,
             Err(e) => {
                 self.fail(format!("{}: {e}", command_label(id)));
-                self.workflow.failure = Some((id.to_owned(), e.to_string()));
+                self.workflow.failure = Some((id.to_owned(), e));
+                false
             }
         }
     }
@@ -72,44 +82,21 @@ impl App {
         }
         self.replies = std::mem::take(&mut self.replies).after(id, params, reply, &self.session);
         self.generation += 1;
-        // A project opened or begun shows as a new window would: nothing selected, on its first
-        // page, the start page and the settings left.
         // A solve started from Run shows its results' step.
         if emcraft_ui_core::job::is_solve(id) && self.workflow.step == Some(emcraft_engine::workflow::Step::Run) {
             self.open_step(Some(emcraft_engine::workflow::Step::Results));
         }
-        if matches!(id, "file.new" | "file.open" | "file.sample" | "pcb.sample") {
-            // Another project: its own workflow, the machine's devices kept.
-            self.workflow = std::mem::take(&mut self.workflow).for_another_project();
-            self.selection = Default::default();
-            self.pinned = None;
-            self.pulse = Default::default();
-            self.dialog = None;
-            (self.home, self.settings) = (false, false);
-            self.page = crate::app::first_page(&self.session);
-            self.adding = None;
-            // The last project's field view (an eigenmode's index, a frequency it solved, the
-            // field shown and playing) is not this one's: as a new window starts.
-            self.view3d.field = crate::view3d::field::start();
-            self.view3d.overlay = emcraft_ui_core::scene3d::Overlay::Plain;
-            self.playing = None;
+        if emcraft_ui_core::after::opens_project(id) {
+            self.for_another_project();
         } else if emcraft_ui_core::after::leaves_start(id) {
             self.home = false;
         }
         self.read();
-        // A solve shows its results' page; a study (its solves of other models) its own.
-        let results = if job::is_solve(id) {
-            Some(emcraft_ui_core::after::results_view(&self.session))
-        } else if matches!(id, "study.sweep" | "study.optimize") {
-            Some(emcraft_ui_core::view::View::Study)
-        } else if id == "results.track" {
-            // The electrons' trajectories are drawn in the model.
-            Some(emcraft_ui_core::view::View::Model)
-        } else {
-            None
-        };
-        if let Some(results) = results.filter(|r| PAGES.contains(r)) {
-            self.page = results;
+        // The page the command calls for (the shared rules: a solve its results', a study its
+        // own, the electrons tracked the model).
+        let next = emcraft_ui_core::after::next_view(id, &self.session, &self.replies, self.page, self.workflow.step);
+        if let Some(page) = next.filter(|p| PAGES.contains(p)) {
+            self.page = page;
         }
         // The electrons inside the cavity are seen through its walls with the mode they crossed
         // shown: its field, as the eigenmodes page's Field shows it.
@@ -118,6 +105,24 @@ impl App {
         {
             self.update(crate::app::Message::Mode(mode));
         }
+    }
+
+    /// Another project opened or begun, shown as a new window would show it: its own workflow
+    /// (the machine's devices kept), nothing selected, on its first page, the start page and
+    /// the settings left, the last project's field view (an eigenmode's index, a frequency it
+    /// solved, the field shown and playing) let go.
+    fn for_another_project(&mut self) {
+        self.workflow = std::mem::take(&mut self.workflow).for_another_project();
+        self.selection = Default::default();
+        self.pinned = None;
+        self.pulse = Default::default();
+        self.dialog = None;
+        (self.home, self.settings) = (false, false);
+        self.page = crate::app::first_page(&self.session);
+        self.adding = None;
+        self.view3d.field = crate::view3d::field::start();
+        self.view3d.overlay = emcraft_ui_core::scene3d::Overlay::Plain;
+        self.playing = None;
     }
 
     /// A frame at `now`: the field's phase moved on while it plays, the running job looked at.

@@ -10,6 +10,10 @@ use iced::{Color, Element, Fill, Widget};
 use crate::app::{App, Message};
 use crate::look::{self, Tokens};
 
+/// How far the pointer may move between press and release for a click, and between two clicks
+/// of a double click (points), on the charts and in the 3D view alike.
+pub(crate) const CLICK_SLOP: f32 = 4.0;
+
 /// A heading of a panel's part: small, dim, in capitals.
 pub fn heading<'a>(t: Tokens, title: Text) -> Element<'a, Message> {
     text(tr(title).to_uppercase()).size(t.font_small).color(t.text_dim).boxed()
