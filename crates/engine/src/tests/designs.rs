@@ -359,25 +359,7 @@ fn a_design_lies_in_the_box_its_corner_gives() {
 /// (Pozar, Microwave Engineering, 4th ed., §3.3), its ports across y at y = 0 and 60 mm.
 #[test]
 fn a_guide_imported_along_y_takes_its_ports_on_its_ends() {
-    let (a, l, b) = (22.86, 60.0, 10.16);
-    let corner = |i: usize| [[0.0, a][i & 1], [0.0, l][(i >> 1) & 1], [0.0, b][(i >> 2) & 1]];
-    let quads = [[0, 4, 6, 2], [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3], [0, 2, 3, 1], [4, 5, 7, 6]];
-    let facets: String = quads
-        .iter()
-        .flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]])
-        .map(|t| {
-            let v: String = t
-                .iter()
-                .map(|&i| {
-                    let p = corner(i);
-                    format!("vertex {} {} {}\n", p[0], p[1], p[2])
-                })
-                .collect();
-            format!("facet normal 0 0 0\nouter loop\n{v}endloop\nendfacet\n")
-        })
-        .collect();
-    let path = super::scratch("guide.stl");
-    std::fs::write(&path, format!("solid guide\n{facets}endsolid guide\n")).unwrap();
+    let path = guide_along_y();
     let mut s = Session::new();
     s.execute("geometry.import", &json!({"path": path, "region": "guide.stl"})).unwrap();
     s.execute("model.port.create", &json!({"name": "1", "end": "start"})).unwrap();
@@ -388,4 +370,41 @@ fn a_guide_imported_along_y_takes_its_ports_on_its_ends() {
     let r = s.execute("solve.frequency", &json!({"frequencies": [10.0], "order": 2})).unwrap();
     let s21 = r["points"][0]["s21"]["mag"].as_f64().unwrap();
     approx::assert_abs_diff_eq!(s21, 1.0, epsilon = 0.02);
+}
+
+/// An empty WR-90 box 22.86 × 60 × 10.16 mm along y as an STL file (its one body `guide.stl`).
+fn guide_along_y() -> String {
+    let (a, l, b) = (22.86, 60.0, 10.16);
+    let corner = |i: usize| [[0.0, a][i & 1], [0.0, l][(i >> 1) & 1], [0.0, b][(i >> 2) & 1]];
+    let quads = [[0, 4, 6, 2], [1, 3, 7, 5], [0, 1, 5, 4], [2, 6, 7, 3], [0, 2, 3, 1], [4, 5, 7, 6]];
+    let facet = |t: [usize; 3]| {
+        let v: String = t.iter().map(|&i| corner(i)).map(|p| format!("vertex {} {} {}\n", p[0], p[1], p[2])).collect();
+        format!("facet normal 0 0 0\nouter loop\n{v}endloop\nendfacet\n")
+    };
+    let facets: String = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).map(facet).collect();
+    let path = super::scratch("guide.stl");
+    std::fs::write(&path, format!("solid guide\n{facets}endsolid guide\n")).unwrap();
+    path
+}
+
+/// A port put on a wall of a guide imported along y (a face across z, as `end` alone once put
+/// it) is warned of in the Excitation step, the fix in the message; the ports `end` puts on the
+/// guide's ends are not.
+#[test]
+fn a_port_on_a_wall_of_an_imported_guide_is_warned_of() {
+    let path = guide_along_y();
+    let mut s = Session::new();
+    s.execute("geometry.import", &json!({"path": path, "region": "guide.stl"})).unwrap();
+    s.execute("model.port.create", &json!({"name": "1", "end": "start"})).unwrap();
+    s.execute("model.port.create", &json!({"name": "2", "end": "end"})).unwrap();
+    let warned = |s: &Session| -> Vec<String> {
+        let steps = crate::workflow::steps(s);
+        steps.iter().flat_map(|st| st.messages.iter().map(|m| m.text.clone())).filter(|t| t.contains("wall of the imported region")).collect()
+    };
+    assert!(warned(&s).is_empty(), "{:?}", warned(&s));
+    // A port on the broad wall across z: [z, x0, y0, a, b].
+    s.execute("model.port.create", &json!({"name": "3", "end": "start", "face": [0, 0, 0, 22.86, 60]})).unwrap();
+    let w = warned(&s);
+    assert_eq!(w.len(), 1, "{w:?}");
+    assert!(w[0].contains("`3`") && w[0].contains("along y"), "{}", w[0]);
 }

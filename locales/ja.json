@@ -988,6 +988,7 @@
     "nothing drives the open problem yet: a lumped port, a dipole or a plane wave": "開放問題の励振がまだありません：集中定数ポート、ダイポール、または平面波",
     "nothing puts particles in the box yet: an emitter or a plasma": "箱に粒子を入れるものがまだありません：放出面またはプラズマ",
     "one port: S11 only (a closed guide usually has two)": "ポートが 1 つです：S11 だけになります（閉じた導波管ならふつう 2 つ）",
+    "port `{port}` lies across {axis} on a wall of the imported region, which runs along {along}: the solve would take that wall's cross-section for the guide (metal bodies cut by it turn into conductors of a terminal port); create the port again with only `end`, which puts it on the end across {along}": "ポート `{port}` は取り込んだ領域の壁（{axis} に垂直な面）の上にあり、領域は {along} 方向に伸びています。解析はその壁の断面を導波管の断面とみなします（そこを切る金属ボディは端子ポートの導体になります）。`end` だけを指定してポートを作り直すと、{along} 方向の端に置かれます",
     "port `{port}`: below its TE10 cut-off ({cutoff} {unit}) the wave decays (evanescent): S there shows the decay": "ポート `{port}`：TE10 の遮断周波数（{cutoff} {unit}）より下では波が減衰します（エバネッセント）。そこの S は減衰を表します",
     "port `{port}`: several strips in a lossy or dispersive cross-section, where terminal ports are not supported yet (its lossy modes are not power-orthogonal): set the port's `terminals` modal": "ポート `{port}`：損失や分散のある断面に複数のストリップがあります。ここでは端子ポートはまだ使えません（損失のあるモードは電力直交しません）。ポートの `terminals` を modal にしてください",
     "put {steps} right first": "先に {steps} を直してください",

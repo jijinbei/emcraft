@@ -442,6 +442,19 @@ fn geometry(s: &Session) -> StepState {
     st
 }
 
+/// The axis a port's face lies across: its face's, else z (an end of the region across z).
+fn port_axis(p: &emcraft_model::Port) -> emcraft_model::Axis {
+    p.face.map_or(emcraft_model::Axis::Z, |f| f.axis)
+}
+
+/// The axis an imported region runs along, when port `p` lies across another one: a wall of
+/// the guide taken for its cross-section (the region's ends across that axis are its caps,
+/// `Model::long_end`).
+fn across_the_guide(m: &emcraft_model::Model, p: &emcraft_model::Port) -> Option<emcraft_model::Axis> {
+    let along = m.long_end(p.end)?.axis;
+    (along != port_axis(p)).then_some(along)
+}
+
 /// Whether a port asks for terminals at an end of a guide where two or more strips reach it and
 /// a material of its cross-section is lossy or dispersive (refused when solving).
 fn lossy_terminal_port(m: &emcraft_model::Model, p: &emcraft_model::Port) -> bool {
@@ -477,6 +490,16 @@ fn excitation(s: &Session) -> StepState {
             Status::Warning,
             emcraft_i18n::text!("port `{port}`: several strips in a lossy or dispersive cross-section, where terminal ports are not supported yet (its lossy modes are not power-orthogonal): set the port's `terminals` modal"),
             &[("port", p.name.clone())],
+            Some("model.port.create"),
+        );
+    }
+    if let Some((p, along)) = m.ports.iter().find_map(|p| across_the_guide(m, p).map(|a| (p, a))) {
+        st.note_with(
+            Status::Warning,
+            emcraft_i18n::text!(
+                "port `{port}` lies across {axis} on a wall of the imported region, which runs along {along}: the solve would take that wall's cross-section for the guide (metal bodies cut by it turn into conductors of a terminal port); create the port again with only `end`, which puts it on the end across {along}"
+            ),
+            &[("port", p.name.clone()), ("axis", port_axis(p).id().to_owned()), ("along", along.id().to_owned())],
             Some("model.port.create"),
         );
     }
