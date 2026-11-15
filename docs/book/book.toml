@@ -1,4 +1,4 @@
-# The book of the site (https://jijinbei.github.io/emcraft/book/): for people who use EMCraft.
+# The book of the site (https://site.jijinbei.jp/emcraft/book/): for people who use EMCraft.
 # `cargo xtask book` writes its generated pages and builds it into target/site/book.
 [book]
 title = "EMCraft"

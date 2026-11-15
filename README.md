@@ -11,11 +11,11 @@
 </p>
 
 <p align="center">
-  <a href="https://jijinbei.github.io/emcraft/">Website</a> ·
-  <a href="https://jijinbei.github.io/emcraft/book/start/install.html">Install</a> ·
-  <a href="https://jijinbei.github.io/emcraft/book/start/first-solve.html">Your first solve</a> ·
-  <a href="https://jijinbei.github.io/emcraft/book/">Documentation</a> ·
-  <a href="https://jijinbei.github.io/emcraft/book/verification/results.html">Verification</a>
+  <a href="https://site.jijinbei.jp/emcraft/">Website</a> ·
+  <a href="https://site.jijinbei.jp/emcraft/book/start/install.html">Install</a> ·
+  <a href="https://site.jijinbei.jp/emcraft/book/start/first-solve.html">Your first solve</a> ·
+  <a href="https://site.jijinbei.jp/emcraft/book/">Documentation</a> ·
+  <a href="https://site.jijinbei.jp/emcraft/book/verification/results.html">Verification</a>
 </p>
 
 <p align="center">
@@ -32,40 +32,15 @@
 ```
 cargo run --release -p emcraft -- --sample highpass                 # the desktop app
 cargo run --release -p emcraft-cli -- sample highpass --out pictures  # S-parameters against the exact solution, field pictures
-cargo run --release -p emcraft-cli -- commands                      # every command and its parameters
 ```
 
-On Windows, use the installer: [docs/install-windows.md](docs/install-windows.md). Every push to
-`main` also builds the app and the CLI for Linux (x86_64), Windows (x86_64) and macOS (Apple
-silicon): the **Build** workflow's artifacts (`.github/workflows/build.yml`).
-
-Samples (the start page's templates, their dimensions variables):
-
-- **S-parameters**, by what they model (the start page's headings):
-  - *Filters:* `highpass`, `iris-bandpass`, `coupled-filter` (stripline), `pcb-stub-filter`,
-    `pcb-lowpass`.
-  - *Guides and lines:* `straight`, `circular-guide`, `coaxial-line`, `taper`,
-    `pcb-quarter-wave`.
-  - *Bends, tees and steps:* `h-bend`, `e-bend`, `h-bend-radius`, `e-bend-radius`, `h-tee`,
-    `e-tee`, `magic-tee`, `inductive-post`, `pcb-bend`.
-  - *Couplers and dividers:* `cross-guide-coupler`, `pcb-branch-line`, `pcb-coupled-line`,
-    `pcb-wilkinson` (its isolating resistor a lumped element).
-  - *Loads, materials and ferrites:* `termination`, `material-sample`, `ferrite-phase-shifter`.
-  - *Periodic guides and compressors:* `corrugated-guide`, `pulse-compressor`,
-    `helical-compressor`.
-  - *Resonators:* `pcb-ring`.
-- **Resonators:** `cavity`, `cylinder-cavity`, `sphere-cavity`, `coaxial-cavity`, `slab-cavity`,
-  `loaded-sphere`, `dielectric-resonator`, `combline-resonator`, `reentrant-cavity`.
-- **Dispersion diagrams:** `dispersion-guide`, `dispersion-loaded`, `dispersion-iris`,
-  `dispersion-corrugated`.
-- **Antennas and scattering:** `dipole`, `halfwave-dipole`, `yagi`, `monopole`, `heart-loop`, `patch-antenna`,
-  `open-waveguide`, `horn`, `sphere-scattering`, `metal-sphere-scattering`.
-- **Time domain:** `td-dielectric-slab`, `td-quarter-wave`, `td-lossy-slab`,
-  `td-dispersive-slab`, `td-eplane-step`, `td-wall-loss`; on solids `td-h-bend`, `td-e-bend`,
-  `td-h-bend-radius`, `td-e-bend-radius`, `td-inductive-post`, `td-termination`, `td-h-tee`,
-  `td-e-tee`, `td-magic-tee`, `td-cross-guide-coupler`; the antenna `td-dipole`; plane waves on
-  `td-sphere-scattering` and `td-metal-sphere-scattering`.
-- **Boards:** `pcb-microstrip`, `pcb-split-ground`, `pcb-parallel`, `pcb-board` (four layers).
+[Install](https://site.jijinbei.jp/emcraft/book/start/install.html) (from source, a ready build
+of any commit, the Windows installer), then
+[your first solve](https://site.jijinbei.jp/emcraft/book/start/first-solve.html). The
+[documentation](https://site.jijinbei.jp/emcraft/book/) has tutorials (a waveguide filter, a
+cavity, a patch antenna, a microstrip filter, a part drawn in SolidCraft), how-to pages, the
+[samples](https://site.jijinbei.jp/emcraft/book/reference/samples.html) the start page opens
+and every [command](https://site.jijinbei.jp/emcraft/book/reference/commands.html).
 
 ## What it does
 

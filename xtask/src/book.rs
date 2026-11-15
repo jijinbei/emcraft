@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Where the site is served, without a trailing slash.
-const SITE: &str = "https://jijinbei.github.io/emcraft";
+const SITE: &str = "https://site.jijinbei.jp/emcraft";
 
 /// The book's folder, relative to the workspace root.
 const BOOK: &str = "docs/book";

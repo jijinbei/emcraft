@@ -1,4 +1,4 @@
-# The site on GitHub Pages (https://jijinbei.github.io/emcraft/): the landing page and the book
+# The site on GitHub Pages (https://site.jijinbei.jp/emcraft/): the landing page and the book
 # (docs/book), built by `cargo xtask book`. Needs Settings → Pages → Source = GitHub Actions.
 # After SolidCraft's pages.yml (MIT OR Apache-2.0; see ATTRIBUTION.md).
 name: Pages
