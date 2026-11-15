@@ -34,7 +34,7 @@ use crate::{FdtdError, Result, invalid};
 
 mod absorb;
 mod deposit;
-mod emit;
+pub(crate) mod emit;
 mod fields;
 mod filter;
 mod grid;

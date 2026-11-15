@@ -169,6 +169,12 @@ impl Emitter {
     }
 }
 
+/// The radius (m) at `s` ∈ [0, 1] of the ring between `inner` and `outer` (m), placing points
+/// evenly over its area: r² runs linearly from inner² to outer².
+pub(crate) fn annulus_radius(inner: f64, outer: f64, s: f64) -> f64 {
+    (inner * inner + s * (outer * outer - inner * inner)).sqrt()
+}
+
 /// How much a bunch or beam sends in, in time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pulse {
@@ -182,7 +188,7 @@ pub enum Pulse {
 impl Pulse {
     /// The charge (C) it sends over the step from `t` of `dt` (s): the current at the step's
     /// middle times Δt; none past six σ of a Gaussian's peak.
-    fn charge(self, t: f64, dt: f64) -> f64 {
+    pub(crate) fn charge(self, t: f64, dt: f64) -> f64 {
         let mid = t + 0.5 * dt;
         match self {
             Pulse::Gaussian { charge, t0, sigma } if (mid - t0).abs() <= BUNCH_SIGMAS * sigma => {
@@ -193,7 +199,8 @@ impl Pulse {
         }
     }
 
-    fn valid(self) -> bool {
+    /// Its charge or current, times and length finite numbers ≥ 0, a Gaussian's length > 0.
+    pub(crate) fn valid(self) -> bool {
         let ok = |x: f64| x.is_finite() && x >= 0.0;
         match self {
             Pulse::Gaussian { charge, t0, sigma } => ok(charge) && ok(t0) && sigma.is_finite() && sigma > 0.0,
@@ -266,7 +273,7 @@ impl Bunch {
                 *count += 1;
                 let n = *count as f64;
                 let [s1, s2] = R2.map(|r| (0.5 + n * r).fract());
-                let r = (self.inner * self.inner + s1 * (self.radius * self.radius - self.inner * self.inner)).sqrt();
+                let r = annulus_radius(self.inner, self.radius, s1);
                 let phi = 2.0 * std::f64::consts::PI * s2;
                 let mut x = [0.0; 3];
                 x[self.axis] = wall;

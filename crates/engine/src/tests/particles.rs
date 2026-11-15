@@ -128,6 +128,13 @@ fn a_run_saved_opens_with_its_sources_and_result() {
     let mut bad = (*s.results.particles.clone().unwrap()).clone();
     bad.dt = f64::NAN;
     assert!(bad.check().is_err());
+    // Every number is checked, not only the grid's (a probe's sample was once let through).
+    let mut bad = (*s.results.particles.clone().unwrap()).clone();
+    bad.probes[0].e[0][0] = f64::INFINITY;
+    assert!(bad.check().is_err());
+    let mut bad = (*s.results.particles.clone().unwrap()).clone();
+    bad.history[0].field = f64::NAN;
+    assert!(bad.check().is_err());
 }
 
 #[test]

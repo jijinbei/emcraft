@@ -354,10 +354,17 @@ impl AxiPic {
                 && injection.inner <= injection.radius
                 && injection.radius <= self.grid.radius()
                 && ok(injection.energy))
+            || !injection.pulse.valid()
             || injection.per_step == 0
             || injection.per_step > crate::pic::MAX_PER_NODE
         {
-            return Err(invalid("injection", format!("{injection:?}: through a conducting end, a ring inside the wall, 1 to 64 a step")));
+            let most = crate::pic::MAX_PER_NODE;
+            return Err(invalid(
+                "injection",
+                format!(
+                    "{injection:?}: through a conducting end, finite charges and times (a Gaussian's length > 0), a ring inside the wall, 1 to {most} a step"
+                ),
+            ));
         }
         self.injections.push(injection);
         Ok(())
@@ -450,7 +457,11 @@ impl AxiPic {
     pub fn absorb(&mut self, high: bool, cells: usize) -> Result<()> {
         let g = self.grid;
         if g.z_wall != Wall::Conductor || cells == 0 || cells > crate::pic::MAX_LAYER {
-            return Err(invalid("absorber", "a layer of 1 to 64 cells inside a conducting end"));
+            return Err(invalid("absorber", format!("a layer of 1 to {} cells inside a conducting end", crate::pic::MAX_LAYER)));
+        }
+        let other = self.layers.as_ref().map_or(0, |l| l.cells[usize::from(!high)]);
+        if cells + other >= g.nz {
+            return Err(invalid("absorber", "the layers longer than the grid"));
         }
         let mut layers = match self.layers.take() {
             Some(l) => l,
@@ -462,10 +473,6 @@ impl AxiPic {
             },
         };
         layers.cells[usize::from(high)] = cells;
-        if layers.cells[0] + layers.cells[1] >= g.nz {
-            self.layers = Some(layers);
-            return Err(invalid("absorber", "the layers longer than the grid"));
-        }
         let [lo, hi] = layers.cells.map(|n| n as f64 * g.dz);
         let length = g.length();
         let fc = C0 / length;
@@ -632,13 +639,7 @@ impl AxiPic {
         for inj in self.injections.clone() {
             let Some(pop) = self.populations.get(inj.population) else { continue };
             let species = pop.species;
-            let q = match inj.pulse {
-                Pulse::Gaussian { charge, t0, sigma } => {
-                    let mid = t + 0.5 * self.dt - t0;
-                    if mid.abs() > 6.0 * sigma { 0.0 } else { charge * self.dt * (-0.5 * (mid / sigma).powi(2)).exp() / (sigma * (2.0 * PI).sqrt()) }
-                }
-                Pulse::Steady { current, rise } => current * self.dt * if rise > 0.0 { ((t + 0.5 * self.dt) / rise).min(1.0) } else { 1.0 },
-            };
+            let q = inj.pulse.charge(t, self.dt);
             if q <= 0.0 {
                 continue;
             }
@@ -650,7 +651,7 @@ impl AxiPic {
             for _ in 0..inj.per_step {
                 self.count += 1;
                 let s = (0.5 + self.count as f64 * R3[0]).fract();
-                let r = (inj.inner * inj.inner + s * (inj.radius * inj.radius - inj.inner * inj.inner)).sqrt();
+                let r = crate::pic::emit::annulus_radius(inj.inner, inj.radius, s);
                 if self.metal_cell((r / self.grid.dr).floor() as isize, if inj.high { self.grid.nz as isize - 1 } else { 0 }) {
                     continue;
                 }

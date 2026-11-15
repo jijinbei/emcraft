@@ -106,7 +106,12 @@ pub struct PicResult {
 impl PicResult {
     /// The result checked when read: finite numbers, its lists within their bounds.
     pub(crate) fn check(&self) -> std::result::Result<(), String> {
-        let finite = self.origin.iter().chain(&self.h).all(|x| x.is_finite()) && self.dt.is_finite();
+        let records =
+            self.history.iter().all(|r| [r.t, r.field, r.kinetic, r.emitted].iter().chain(r.collected.iter().flatten()).all(|x| x.is_finite()));
+        let probes_finite =
+            self.probes.iter().all(|p| p.at.iter().chain(p.e.iter().flatten()).chain(&p.frequency).all(|x| x.is_finite()) && p.every >= 1);
+        let snapshot = self.snapshot.iter().all(|p| p.x.iter().chain(&p.u).chain([&p.energy]).all(|x| x.is_finite()));
+        let finite = self.origin.iter().chain(&self.h).all(|x| x.is_finite()) && self.dt.is_finite() && records && probes_finite && snapshot;
         let sized = self.history.len() <= HISTORY + 1 && self.probes.len() <= emcraft_model::particles::MAX_PROBES && self.snapshot.len() <= SNAPSHOT;
         let probes = self.probes.iter().all(|p| p.e.len() <= PROBE_SAMPLES + 1);
         (finite && sized && probes && self.cells.iter().all(|n| *n >= 1)).then_some(()).ok_or_else(|| "a particle run out of its bounds".to_owned())

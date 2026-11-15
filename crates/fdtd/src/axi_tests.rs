@@ -232,10 +232,16 @@ fn hostile_axisymmetric_settings_are_refused() {
         Injection { inner: 0.006, ..base },
         Injection { radius: 0.5, ..base },
         Injection { per_step: 0, ..base },
+        // A pulse that is not a number would push rings of NaN weight (once accepted unchecked).
+        Injection { pulse: Pulse::Steady { current: f64::NAN, rise: 0.0 }, ..base },
+        Injection { pulse: Pulse::Gaussian { charge: 1e-9, t0: 1e-9, sigma: 0.0 }, ..base },
     ] {
         assert!(pic.inject(bad).is_err(), "{bad:?}");
     }
     assert!(pic.absorb(true, 0).is_err() && pic.absorb(true, 25).is_err());
+    // A refused layer leaves none behind: the low end's layer of 12 then fits (once the 25 cells
+    // were kept and 12 + 25 refused too).
+    assert!(pic.absorb(false, 12).is_ok());
     let periodic = AxiGrid::new(10, 20, 1e-3, 1e-3, Wall::Periodic).unwrap();
     let mut p = AxiPic::new(periodic, periodic.time_step(0.9), Pusher::Boris).unwrap();
     assert!(p.absorb(false, 4).is_err());

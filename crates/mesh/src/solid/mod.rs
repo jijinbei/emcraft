@@ -388,7 +388,7 @@ fn upright(positions: &[Point3], triangles: &[[u32; 3]], Cut { d, at, tol }: Cut
 /// vertices there would cut the moved end's triangles).
 fn brought_down(positions: &[Point3], Cut { d, at, tol }: Cut, hi: f64) -> Option<Welded> {
     let moved: Vec<Point3> = positions.iter().map(|p| if p[d] > at { p.with(d, at) } else { *p }).collect();
-    let down = welded(&moved, tol);
+    let down = welded(&moved, tol)?;
     let far: std::collections::BTreeSet<u32> = positions.iter().zip(&down.index).filter(|(p, _)| (p[d] - hi).abs() <= tol).map(|(_, i)| *i).collect();
     let met = positions.iter().zip(&down.index).all(|(p, i)| p[d] < at - tol || far.contains(i));
     met.then_some(down)
@@ -414,26 +414,31 @@ struct Welded {
     index: Vec<u32>,
 }
 
-/// `points` with those within `tol` of one another made one.
-fn welded(points: &[Point3], tol: f64) -> Welded {
+/// `points` with each one within `tol` (m) of a point kept before it made that one; none for a
+/// `tol` that is not a positive number (every point would fall into one cell).
+fn welded(points: &[Point3], tol: f64) -> Option<Welded> {
+    if !(tol > 0.0 && tol.is_finite()) {
+        return None;
+    }
     let key = |p: Point3| p.to_array().map(|c| (c / tol).round() as i64);
-    let mut seen: std::collections::BTreeMap<[i64; 3], u32> = std::collections::BTreeMap::new();
-    let mut kept = Vec::new();
+    let mut seen: std::collections::BTreeMap<[i64; 3], Vec<u32>> = std::collections::BTreeMap::new();
+    let mut kept: Vec<Point3> = Vec::new();
     let index = points
         .iter()
         .map(|p| {
             let k = key(*p);
-            // A point rounded across a key's edge: its neighbours' keys count too.
-            let found = (0..27).find_map(|n| seen.get(&[k[0] + n % 3 - 1, k[1] + n / 3 % 3 - 1, k[2] + n / 9 - 1]).copied());
+            // A point within `tol` may round into a neighbouring cell: those count too.
+            let near = |n: i64| [k[0] + n % 3 - 1, k[1] + n / 3 % 3 - 1, k[2] + n / 9 - 1];
+            let found = (0..27).flat_map(|n| seen.get(&near(n)).into_iter().flatten()).find(|&&i| (kept[i as usize] - *p).norm() <= tol).copied();
             found.unwrap_or_else(|| {
                 let i = kept.len() as u32;
                 kept.push(*p);
-                seen.insert(k, i);
+                seen.entry(k).or_default().push(i);
                 i
             })
         })
         .collect();
-    Welded { points: kept, index }
+    Some(Welded { points: kept, index })
 }
 
 /// Whether every edge of `triangles` is shared by exactly two of them.
@@ -1564,5 +1569,20 @@ mod tests {
         positions[5].x = 0.9;
         let moved = Shape::Surface { name: "cube".into(), positions, triangles, tags, surfaces: Vec::new() };
         assert!(shortened(&moved, 2, 0.5, 1e-9).is_none());
+        // A cut of no tolerance (a box of no size) stops nothing rather than welding every vertex.
+        assert!(shortened(&moved, 2, 0.5, 0.0).is_none());
+    }
+
+    /// Points weld only within the tolerance: two in neighbouring cells 1.4 tol apart stay two
+    /// (the neighbours' cells were once taken whole, merging points up to 3.5 tol apart).
+    #[test]
+    fn points_weld_only_within_the_tolerance() {
+        let p = |x: f64| Point3::new(x, 0.0, 0.0);
+        let w = welded(&[p(0.0), p(0.4), p(1.4), p(2.2)], 1.0).unwrap();
+        assert_eq!(w.index, vec![0, 0, 1, 1]);
+        assert_eq!(w.points.len(), 2);
+        let far = welded(&[p(0.0), p(1.4)], 1.0).unwrap();
+        assert_eq!(far.index, vec![0, 1]);
+        assert!(welded(&[p(0.0)], 0.0).is_none() && welded(&[p(0.0)], f64::NAN).is_none());
     }
 }

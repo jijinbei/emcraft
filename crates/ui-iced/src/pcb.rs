@@ -33,8 +33,9 @@ const FIELDS: [(&str, emcraft_ui_core::lang::Text, &str); 3] =
 /// The panel's width (points).
 const PANEL_W: f32 = 420.0;
 
-fn run(id: &str, params: serde_json::Value) -> Message {
-    Message::Run(emcraft_ui_core::system::gesture::Command { id: emcraft_engine::find_command(id).map_or("view.pcb", |c| c.id), params })
+/// Runs command `id` (once looked up and, when unknown, silently replaced by `view.pcb`).
+fn run(id: &'static str, params: serde_json::Value) -> Message {
+    Message::Run(emcraft_ui_core::system::gesture::Command { id, params })
 }
 
 /// A field of the conditions form as it stands: what is typed, else the confirmed value, else
