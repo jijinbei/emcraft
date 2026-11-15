@@ -1,0 +1,10 @@
+{
+ "title": "Two 3 mm posts 20 mm apart across WR-90, drawn along y in SolidCraft as bodies of their own, the ports put by `end` on the guide's ends: adaptive passes from 6 mm until ΔS < 3e-3, at 10 GHz",
+ "kind": "theory",
+ "source": "Full-height posts are a two-dimensional problem: the parallel-plate Green's function in modes with its static part summed in closed form (Marcuvitz, Waveguide Handbook, 1951, §5.11; Lewin, Theory of Waveguides, 1975, ch. 6), the first-kind integral equation on both posts' circles solved by Kress's log-split Nyström method, the blocks between the posts by the trapezoidal rule (Kress, Linear Integral Equations, 3rd ed., 2014, ch. 12–13), evaluated at 128 nodes per post (emcraft-theory::post::Posts, independent of the finite elements; checked against the cascade of single posts when far apart; `cargo run -p emcraft-theory --example posts_reference -- 10`)",
+ "quantities": [
+  {"id": "s11_mag", "quantity": "|S11| at 10 GHz, the last pass", "measure": {"step": "adapt", "pointer": "/s11/mag"}, "value": 0.9545463641974575, "tolerance": {"absolute": 0.0001}, "reason": "the loop stops at pass 3: −7e-5; five passes (no ΔS stop, 12.6 GB, 21 min) reach −1e-5, so what is left is discretisation"},
+  {"id": "s11_phase", "quantity": "phase of S11 at 10 GHz (degrees)", "measure": {"step": "adapt", "pointer": "/s11/deg"}, "value": -173.11199542587795, "tolerance": {"absolute": 0.08}, "reason": "as |S11|: +0.040° at pass 3, +0.002° at pass 5"},
+  {"id": "s21_mag", "quantity": "|S21| at 10 GHz", "measure": {"step": "adapt", "pointer": "/s21/mag"}, "value": 0.29806247431941885, "tolerance": {"absolute": 0.0004}, "reason": "as |S11|; on the resonance's flank |S21| moves three times as fast: +2.0e-4 at pass 3, +2e-5 at pass 5"}
+ ]
+}

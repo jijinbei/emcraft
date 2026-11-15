@@ -225,7 +225,11 @@ overlap tests).
   Integral Equations*, 3rd ed., Springer 2014, ch. 12–13, and D. Colton, R. Kress, *Inverse
   Acoustic and Electromagnetic Scattering Theory*, 3rd ed., Springer 2013, §3.6 — the Nyström
   method with logarithmic-split weights, exponentially convergent on a smooth boundary
-  (`emcraft-theory::post`, the reference of the oracle's inductive post).
+  (`emcraft-theory::post`, the reference of the oracle's inductive post); on several posts the
+  same equation on the union of their circles, the log split in each post's own block and the
+  trapezoidal rule between posts (Kress §12.3), checked against the cascade of single posts
+  (D. M. Pozar, *Microwave Engineering*, 4th ed., Wiley 2012, §4.4) when far apart
+  (`emcraft-theory::post::Posts`, the reference of `design-two-posts`).
 - A. Sieverding, F. Arndt, *Field theoretic CAD of open or aperture matched T-junction coupled
   rectangular waveguide structures*, IEEE Trans. MTT 40(2):353–362, 1992; J. Uher, J.
   Bornemann, U. Rosenberg, *Waveguide Components for Antenna Feed Systems: Theory and CAD*,

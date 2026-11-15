@@ -41,8 +41,13 @@
 //! S₁₁ = −(1/aγ₁) ∫ sin(πx′/a) e^{−γ₁z′} σ dτ and S₂₁ = (1 − (1/aγ₁) ∫ sin(πx′/a) e^{γ₁z′} σ dτ)
 //! e^{−γ₁L}, referred to the planes z = 0 and z = L (time dependence e^{jωt}).
 //!
+//! **Several posts** ([`Posts`]): the same equation on every circle, each post's density radiating
+//! through G onto the others; the logarithm lives only in a post's own block, the blocks between
+//! posts are smooth and taken by the trapezoidal rule (Kress §12.3 for a union of curves). Far
+//! apart, the result is the cascade of the single posts' S-matrices.
+//!
 //! Nothing here shares code with the finite element solver: it is the independent reference of
-//! the oracle's inductive post.
+//! the oracle's inductive posts.
 
 use std::f64::consts::PI;
 
@@ -81,20 +86,64 @@ pub struct PostSolution {
     pub s12: C,
 }
 
+/// One post of a [`Posts`]: its centre and radius (m).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Post {
+    pub x: f64,
+    pub z: f64,
+    pub radius: f64,
+}
+
+/// Several posts across one empty guide between the port planes z = 0 and z = `length` (a
+/// resonator or filter of posts). Each post's equation now carries the others' fields too: the
+/// blocks between two posts are the smooth G at their node pairs, by the trapezoidal rule.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Posts {
+    /// The broad wall a (m).
+    pub width: f64,
+    /// The guide's length between the port planes (m).
+    pub length: f64,
+    pub posts: Vec<Post>,
+}
+
+/// The most posts in a [`Posts`].
+pub const MAX_POSTS: usize = 16;
+
 impl InductivePost {
+    /// The post's S-parameters at `frequency` (Hz) on `nodes` Nyström nodes (even, 8 to
+    /// [`MAX_NODES`]; 64 converge to rounding for posts up to a tenth of the guide's width).
+    pub fn solve(&self, frequency: f64, nodes: usize) -> Result<PostSolution, TheoryError> {
+        let post = Post { x: self.x, z: self.z, radius: self.radius };
+        Posts { width: self.width, length: self.length, posts: vec![post] }.solve(frequency, nodes)
+    }
+}
+
+impl Posts {
     fn check(&self, frequency: f64, nodes: usize) -> Result<(f64, C), TheoryError> {
         let ok = |v: f64| v.is_finite() && v > 0.0;
-        if !(ok(self.width) && ok(self.length) && ok(self.radius) && self.x.is_finite() && self.z.is_finite()) {
-            return Err(TheoryError::Invalid("post: dimensions must be finite, the width, length and radius positive".into()));
+        if !(ok(self.width) && ok(self.length)) {
+            return Err(TheoryError::Invalid("post: the width and length must be finite and positive".into()));
         }
-        if !(self.x - self.radius > 0.0 && self.x + self.radius < self.width && self.z - self.radius > 0.0 && self.z + self.radius < self.length) {
-            return Err(TheoryError::Invalid("post: it must lie inside the guide, clear of the side walls and the port planes".into()));
+        if self.posts.is_empty() || self.posts.len() > MAX_POSTS {
+            return Err(TheoryError::Invalid(format!("post: 1 to {MAX_POSTS} posts")));
+        }
+        for p in &self.posts {
+            if !(ok(p.radius) && p.x.is_finite() && p.z.is_finite()) {
+                return Err(TheoryError::Invalid("post: a centre must be finite, a radius positive".into()));
+            }
+            if !(p.x - p.radius > 0.0 && p.x + p.radius < self.width && p.z - p.radius > 0.0 && p.z + p.radius < self.length) {
+                return Err(TheoryError::Invalid("post: it must lie inside the guide, clear of the side walls and the port planes".into()));
+            }
+        }
+        let touch = |(i, p): (usize, &Post)| self.posts[i + 1..].iter().any(|q| (p.x - q.x).hypot(p.z - q.z) <= p.radius + q.radius);
+        if self.posts.iter().enumerate().any(touch) {
+            return Err(TheoryError::Invalid("post: two posts touch or overlap".into()));
         }
         if !ok(frequency) {
             return Err(TheoryError::Invalid(format!("frequency {frequency}")));
         }
-        if !(8..=MAX_NODES).contains(&nodes) || !nodes.is_multiple_of(2) {
-            return Err(TheoryError::Invalid(format!("post: nodes must be even, 8 to {MAX_NODES}")));
+        if !(8..=MAX_NODES).contains(&nodes) || !nodes.is_multiple_of(2) || nodes * self.posts.len() > MAX_NODES {
+            return Err(TheoryError::Invalid(format!("post: nodes must be even, 8 to {MAX_NODES} over all the posts")));
         }
         let k = 2.0 * PI * frequency / C0;
         if k <= PI / self.width {
@@ -102,49 +151,72 @@ impl InductivePost {
         }
         // The first-kind equation fails at the disc's interior Dirichlet resonances (k r₀ = 2.405
         // first); keep well below.
-        if k * self.radius > 2.0 {
+        if self.posts.iter().any(|p| k * p.radius > 2.0) {
             return Err(TheoryError::Invalid("post: k r₀ > 2 (near the post's interior resonance, where the integral equation is singular)".into()));
         }
         Ok((k, gamma(1, self.width, k)))
     }
 
-    /// The post's S-parameters at `frequency` (Hz) on `nodes` Nyström nodes (even, 8 to
-    /// [`MAX_NODES`]; 64 converge to rounding for posts up to a tenth of the guide's width).
+    /// The posts' S-parameters at `frequency` (Hz) on `nodes` Nyström nodes per post (even, 8
+    /// up, [`MAX_NODES`] over all the posts).
+    ///
+    /// ```
+    /// use emcraft_theory::post::{Post, Posts};
+    /// // Two 3 mm posts 20 mm apart in WR-90 (m), between port planes 60 mm apart.
+    /// let post = |z| Post { x: 11.43e-3, z, radius: 1.5e-3 };
+    /// let pair = Posts { width: 22.86e-3, length: 60e-3, posts: vec![post(20e-3), post(40e-3)] };
+    /// let s = pair.solve(10e9, 64)?;
+    /// assert!((s.s11.norm_sqr() + s.s21.norm_sqr() - 1.0).abs() < 1e-9);
+    /// // Touching posts are refused.
+    /// assert!(Posts { posts: vec![post(20e-3), post(22e-3)], ..pair }.solve(10e9, 64).is_err());
+    /// # Ok::<(), emcraft_theory::TheoryError>(())
+    /// ```
     pub fn solve(&self, frequency: f64, nodes: usize) -> Result<PostSolution, TheoryError> {
         let (k, g1) = self.check(frequency, nodes)?;
-        let (a, r0) = (self.width, self.radius);
+        let a = self.width;
         let n = nodes / 2;
+        let size = nodes * self.posts.len();
         let t: Vec<f64> = (0..nodes).map(|j| PI * j as f64 / n as f64).collect();
-        let pts: Vec<(f64, f64)> = t.iter().map(|&t| (self.x + r0 * t.cos(), self.z + r0 * t.sin())).collect();
+        let circle = |p: &Post| t.iter().map(|&t| (p.x + p.radius * t.cos(), p.z + p.radius * t.sin())).collect::<Vec<_>>();
+        let pts: Vec<(f64, f64)> = self.posts.iter().flat_map(circle).collect();
         let h = PI / n as f64;
-        // The matrix: K₁(t_i, t_j) R_j(t_i) + h K₂(t_i, t_j), K₁ = −J₀(k|r_i − r_j|)/4π.
-        let mut m = vec![C::new(0.0, 0.0); nodes * nodes];
-        for i in 0..nodes {
-            for j in 0..nodes {
-                let d = t[i] - t[j];
-                let mut r = -(PI / (n * n) as f64) * (n as f64 * d).cos();
-                for q in 1..n {
-                    r -= (2.0 * PI / n as f64) * (q as f64 * d).cos() / q as f64;
+        // A post's own block: K₁(t_i, t_j) R_j(t_i) + h K₂(t_i, t_j), K₁ = −J₀(k|r_i − r_j|)/4π;
+        // the block between two posts: h G.
+        let mut m = vec![C::new(0.0, 0.0); size * size];
+        for (pp, post) in self.posts.iter().enumerate() {
+            let r0 = post.radius;
+            for gi in pp * nodes..(pp + 1) * nodes {
+                for gj in 0..size {
+                    let (i, j) = (gi - pp * nodes, gj % nodes);
+                    if gj / nodes != pp {
+                        m[gi * size + gj] = green(a, k, pts[gi], pts[gj]) * h;
+                        continue;
+                    }
+                    let d = t[i] - t[j];
+                    let mut r = -(PI / (n * n) as f64) * (n as f64 * d).cos();
+                    for q in 1..n {
+                        r -= (2.0 * PI / n as f64) * (q as f64 * d).cos() / q as f64;
+                    }
+                    let dist = (pts[gi].0 - pts[gj].0).hypot(pts[gi].1 - pts[gj].1);
+                    let k1 = -j0(k * dist) / (4.0 * PI);
+                    let k2 = if i == j {
+                        // The limit of G − K₁ ln(4 sin²): G₀'s denominator over 4 sin² tends to
+                        // (π r₀/a)², its numerator to 4 sin²(πx/a); the remainder is continuous.
+                        let (x, _) = pts[gi];
+                        let s = (PI * x / a).sin();
+                        C::new(((4.0 * s * s).ln() - (PI * r0 / a).powi(2).ln()) / (4.0 * PI), 0.0) + remainder(a, k, pts[gi], pts[gj])
+                    } else {
+                        let s = (d / 2.0).sin();
+                        green(a, k, pts[gi], pts[gj]) - k1 * (4.0 * s * s).ln()
+                    };
+                    m[gi * size + gj] = C::new(k1 * r, 0.0) + k2 * h;
                 }
-                let dist = (pts[i].0 - pts[j].0).hypot(pts[i].1 - pts[j].1);
-                let k1 = -j0(k * dist) / (4.0 * PI);
-                let k2 = if i == j {
-                    // The limit of G − K₁ ln(4 sin²): G₀'s denominator over 4 sin² tends to
-                    // (π r₀/a)², its numerator to 4 sin²(πx/a); the remainder is continuous.
-                    let (x, _) = pts[i];
-                    let s = (PI * x / a).sin();
-                    C::new(((4.0 * s * s).ln() - (PI * r0 / a).powi(2).ln()) / (4.0 * PI), 0.0) + remainder(a, k, pts[i], pts[j])
-                } else {
-                    let s = (d / 2.0).sin();
-                    green(a, k, pts[i], pts[j]) - k1 * (4.0 * s * s).ln()
-                };
-                m[i * nodes + j] = C::new(k1 * r, 0.0) + k2 * h;
             }
         }
         let mode = |p: (f64, f64), sign: f64| (PI * p.0 / a).sin() * (-g1 * sign * p.1).exp();
         let solve_for = |inc: &dyn Fn((f64, f64)) -> C| -> Result<Vec<C>, TheoryError> {
             let b: Vec<C> = pts.iter().map(|p| inc(*p)).collect();
-            dense_solve(m.clone(), b, nodes).ok_or_else(|| TheoryError::Invalid("post: singular Nyström system".into()))
+            dense_solve(m.clone(), b, size).ok_or_else(|| TheoryError::Invalid("post: singular Nyström system".into()))
         };
         // Port 1: E_inc = sin(πx/a) e^{−γ₁z}.
         let s1 = solve_for(&|p| mode(p, 1.0))?;
@@ -312,6 +384,44 @@ mod tests {
         let off = InductivePost { x: 5e-3, ..wr90() }.solve(10e9, 48).unwrap();
         assert!(off.s11.norm() < thick.s11.norm());
         approx::assert_abs_diff_eq!(off.s11.norm_sqr() + off.s21.norm_sqr(), 1.0, epsilon = 1e-8);
+    }
+
+    /// Two posts far apart are the cascade of each alone: S₁₁ = A₁₁ + A₁₂B₁₁A₂₁/(1 − A₂₂B₁₁),
+    /// S₂₁ = A₂₁B₂₁/(1 − A₂₂B₁₁) (Pozar, Microwave Engineering, 4th ed., §4.4), only the TE₁₀ wave
+    /// between them (TE₃₀, the next mode a centred post excites, falls by e^{−γ₃·40 mm} ≈ 10⁻⁶).
+    #[test]
+    fn two_posts_far_apart_cascade_and_close_ones_conserve_power() {
+        let (a, f) = (22.86e-3, 10e9);
+        let post = |z| Post { x: a / 2.0, z, radius: 1.5e-3 };
+        let first = Posts { width: a, length: 30e-3, posts: vec![post(15e-3)] }.solve(f, 64).unwrap();
+        let second = Posts { width: a, length: 50e-3, posts: vec![post(25e-3)] }.solve(f, 64).unwrap();
+        let both = Posts { width: a, length: 80e-3, posts: vec![post(15e-3), post(55e-3)] }.solve(f, 64).unwrap();
+        let loop_gain = 1.0 - first.s22 * second.s11;
+        let s11 = first.s11 + first.s12 * second.s11 * first.s21 / loop_gain;
+        let s21 = first.s21 * second.s21 / loop_gain;
+        assert!((both.s11 - s11).norm() < 1e-5, "{:?} {s11:?}", both.s11);
+        assert!((both.s21 - s21).norm() < 1e-5, "{:?} {s21:?}", both.s21);
+        // Close posts couple through the evanescent modes too: no cascade, but lossless,
+        // reciprocal and, placed symmetrically, symmetric.
+        let pair = Posts { width: a, length: 30e-3, posts: vec![post(12e-3), post(18e-3)] };
+        let s = pair.solve(f, 64).unwrap();
+        approx::assert_abs_diff_eq!(s.s11.norm_sqr() + s.s21.norm_sqr(), 1.0, epsilon = 1e-9);
+        assert!((s.s12 - s.s21).norm() < 1e-9 && (s.s22 - s.s11).norm() < 1e-9);
+        assert!((pair.solve(f, 48).unwrap().s11 - s.s11).norm() < 1e-8, "converged");
+        // A single post through `Posts` is the `InductivePost`, bit for bit.
+        assert_eq!(Posts { width: a, length: 30e-3, posts: vec![post(15e-3)] }.solve(f, 64).unwrap(), wr90().solve(f, 64).unwrap());
+    }
+
+    #[test]
+    fn hostile_rows_of_posts_are_refused() {
+        let post = |z| Post { x: 11.43e-3, z, radius: 1.5e-3 };
+        let ok = Posts { width: 22.86e-3, length: 60e-3, posts: vec![post(20e-3), post(40e-3)] };
+        assert!(ok.solve(10e9, 64).is_ok());
+        assert!(Posts { posts: vec![], ..ok.clone() }.solve(10e9, 64).is_err());
+        assert!(Posts { posts: vec![post(20e-3); MAX_POSTS + 1], ..ok.clone() }.solve(10e9, 32).is_err());
+        assert!(Posts { posts: vec![post(20e-3), post(20e-3)], ..ok.clone() }.solve(10e9, 64).is_err(), "overlap");
+        assert!(Posts { posts: vec![post(20e-3), post(f64::NAN)], ..ok.clone() }.solve(10e9, 64).is_err());
+        assert!(ok.solve(10e9, MAX_NODES).is_err(), "too many unknowns over the posts");
     }
 
     #[test]
