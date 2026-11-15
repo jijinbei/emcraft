@@ -191,7 +191,7 @@ pub fn inspect(app: &App) -> Value {
             "options": d.options,
             "help": d.help,
             "detected": crate::import::inspect(app, d),
-            "fields": d.fields.iter().map(|f| (f.name.to_owned(), json!({"text": f.text, "on": f.on, "parts": f.parts, "error": f.error}))).collect::<serde_json::Map<_, _>>(),
+            "fields": d.fields.iter().map(|f| (f.name.to_owned(), json!({"text": f.entry.text(), "on": f.entry.on(), "parts": f.entry.parts(), "error": f.error}))).collect::<serde_json::Map<_, _>>(),
         })),
         "asking": app.asking.as_ref().map(|t| serde_json::to_value(t).unwrap_or(Value::Null)),
         "selection": app.selection.iter().map(|p| format!("{p:?}")).collect::<Vec<_>>(),

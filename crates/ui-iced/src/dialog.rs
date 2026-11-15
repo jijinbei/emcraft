@@ -6,7 +6,7 @@
 //! the worker when it is long — and a refusal comes back under the field it names; OK on the
 //! model's own values unchanged runs nothing.
 
-use emcraft_ui_core::dialogs::{self, Dialog, Field, Kind};
+use emcraft_ui_core::dialogs::{self, Dialog, Entry, Field, Kind};
 use emcraft_ui_core::lang::{self, args, tr, trf};
 use emcraft_ui_core::param_labels::{param_label, value_label};
 use iced::widget::{Column, Space, button, center, checkbox, container, opaque, pick_list, row, scrollable, text, text_input};
@@ -39,28 +39,27 @@ pub fn edited(d: Dialog, edit: &Edit) -> Dialog {
     let mut fields = d.fields;
     if let Some(f) = field_of(edit).and_then(|i| fields.get_mut(i)) {
         f.error = None;
-        match edit {
-            Edit::Text(_, s) => f.text = dialogs::bounded(s),
-            Edit::On(_, on) => f.on = *on,
-            Edit::Part(_, k, s) => {
-                if let Some(p) = f.parts.get_mut(*k) {
+        let width = match &f.kind {
+            Kind::Table(cols) => cols.len(),
+            _ => 0,
+        };
+        match (edit, &mut f.entry) {
+            (Edit::Text(_, s), Entry::Text(text)) => *text = dialogs::bounded(s),
+            (Edit::On(_, on), Entry::Bool(was)) => *was = *on,
+            (Edit::Part(_, k, s), Entry::Parts(parts)) => {
+                if let Some(p) = parts.get_mut(*k) {
                     *p = dialogs::bounded(s);
                 }
             }
-            Edit::Cell(_, r, c, s) => {
-                if let Some(cell) = f.rows.get_mut(*r).and_then(|row| row.get_mut(*c)) {
+            (Edit::Cell(_, r, c, s), Entry::Rows(rows)) => {
+                if let Some(cell) = rows.get_mut(*r).and_then(|row| row.get_mut(*c)) {
                     *cell = dialogs::bounded(s);
                 }
             }
-            Edit::AddRow(_) => {
-                let width = match &f.kind {
-                    Kind::Table(cols) => cols.len(),
-                    _ => 0,
-                };
-                f.rows.push(vec![String::new(); width]);
-            }
-            Edit::RemoveRow(_, r) if *r < f.rows.len() => {
-                f.rows.remove(*r);
+            // As many rows as a table takes from a file, no more.
+            (Edit::AddRow(_), Entry::Rows(rows)) if rows.len() < dialogs::MAX_ROWS => rows.push(vec![String::new(); width]),
+            (Edit::RemoveRow(_, r), Entry::Rows(rows)) if *r < rows.len() => {
+                rows.remove(*r);
             }
             _ => {}
         }
@@ -106,12 +105,12 @@ fn word(v: &str) -> String {
 /// Field `i`'s editor.
 fn editor<'a>(t: Tokens, i: usize, f: &'a Field) -> Element<'a, Message> {
     match &f.kind {
-        Kind::Bool => checkbox(f.on).on_toggle(move |on| send(Edit::On(i, on))).boxed(),
+        Kind::Bool => checkbox(f.entry.on()).on_toggle(move |on| send(Edit::On(i, on))).boxed(),
         Kind::Choice(list) => {
             // Empty is the command's default.
             let options: Vec<String> = std::iter::once(String::new()).chain(list.iter().cloned()).collect();
             let shown = |v: &String| if v.is_empty() { tr(t!("default")).to_owned() } else { word(v) };
-            pick_list(Some(f.text.clone()), options, shown)
+            pick_list(Some(f.entry.text().to_owned()), options, shown)
                 .on_select(move |v| send(Edit::Text(i, v)))
                 .text_size(t.font_button)
                 .style(look::choice(t))
@@ -119,7 +118,7 @@ fn editor<'a>(t: Tokens, i: usize, f: &'a Field) -> Element<'a, Message> {
         }
         Kind::Vector(names) => {
             let parts = names.iter().enumerate().map(|(k, n)| {
-                let value = f.parts.get(k).map_or("", String::as_str);
+                let value = f.entry.parts().get(k).map_or("", String::as_str);
                 let field = container(input(t, value, move |s| Edit::Part(i, k, s))).width(VECTOR_PART);
                 row![text(lang::lookup(n).to_owned()).size(t.font_small).color(t.text_dim), field]
                     .spacing(t.space_4)
@@ -136,7 +135,7 @@ fn editor<'a>(t: Tokens, i: usize, f: &'a Field) -> Element<'a, Message> {
             }))
             .push(Space::new().width(24).boxed())
             .spacing(t.space_4);
-            let rows = f.rows.iter().enumerate().map(|(r, cells)| {
+            let rows = f.entry.rows().iter().enumerate().map(|(r, cells)| {
                 let cells = cells.iter().enumerate().map(|(c, v)| container(input(t, v, move |s| Edit::Cell(i, r, c, s))).width(Fill).boxed());
                 let x = crate::parts::close(t, t!("Remove"), send(Edit::RemoveRow(i, r)));
                 row(cells).push(x).spacing(t.space_4).align_y(Alignment::Center).boxed()
@@ -147,7 +146,7 @@ fn editor<'a>(t: Tokens, i: usize, f: &'a Field) -> Element<'a, Message> {
             Column::with_children(std::iter::once(head.boxed()).chain(rows).chain(std::iter::once(add.boxed()))).spacing(t.space_4).boxed()
         }
         // Its id names it (`dialog-<parameter>`), for scenarios and agents to find.
-        Kind::Number | Kind::Integer | Kind::Text | Kind::Numbers | Kind::Json => text_input("", &f.text)
+        Kind::Number | Kind::Integer | Kind::Text | Kind::Numbers | Kind::Json => text_input("", f.entry.text())
             .id(format!("dialog-{}", f.name))
             .size(t.font_body)
             .padding([t.space_4, t.space_6])
@@ -203,7 +202,7 @@ fn body<'a>(app: &'a App, d: &'a Dialog, padding: iced::Padding) -> Element<'a, 
 /// settings, in a line), or that the settings are to confirm first.
 fn each_point<'a>(app: &'a App, d: &Dialog) -> Option<Element<'a, Message>> {
     let t = app.look.tokens;
-    let empty = d.fields.iter().find(|f| f.name == "solve")?.text.trim().is_empty();
+    let empty = d.fields.iter().find(|f| f.name == "solve")?.entry.text().trim().is_empty();
     (d.command.id.starts_with("study.") && empty).then(|| match dialogs::each_point(&app.session) {
         Ok(line) => text(format!("{} {line}", tr(t!("Each point runs:")))).size(t.font_small).color(t.text_dim).boxed(),
         Err(why) => text(why).size(t.font_small).color(t.warning).boxed(),
@@ -225,4 +224,25 @@ pub fn panel<'a>(app: &'a App, d: &'a Dialog, width: f32) -> Element<'a, Message
     let t = app.look.tokens;
     let list = body(app, d, iced::Padding { top: 12.0, right: 18.0, bottom: 12.0, left: 12.0 });
     container(scrollable(list).height(Fill)).width(width).height(Fill).style(look::ground(t)).boxed()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A table takes as many rows by its ＋ as from a file, no more (Add once grew it without
+    /// end); a row removed past the last is ignored.
+    #[test]
+    fn a_tables_rows_stop_at_the_cap() {
+        let s = emcraft_engine::Session::new();
+        let spec = emcraft_engine::find_command("geometry.waveguide").unwrap();
+        let mut d = Dialog::new(spec, &s, &dialogs::initial("geometry.waveguide", &s), false);
+        let i = d.fields.iter().position(|f| f.name == "sections").unwrap();
+        for _ in 0..dialogs::MAX_ROWS + 5 {
+            d = edited(d, &Edit::AddRow(i));
+        }
+        assert_eq!(d.fields[i].entry.rows().len(), dialogs::MAX_ROWS);
+        let d = edited(d, &Edit::RemoveRow(i, usize::MAX));
+        assert_eq!(d.fields[i].entry.rows().len(), dialogs::MAX_ROWS);
+    }
 }

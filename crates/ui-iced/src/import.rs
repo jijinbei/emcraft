@@ -24,7 +24,7 @@ const ABOVE: &[&str] = &["path", "parameters"];
 
 /// What a field of the dialog says, trimmed.
 fn text_of<'d>(d: &'d Dialog, name: &str) -> &'d str {
-    d.fields.iter().find(|f| f.name == name).map_or("", |f| f.text.trim())
+    d.fields.iter().find(|f| f.name == name).map_or("", |f| f.entry.text().trim())
 }
 
 /// What the probe of the dialog's file is keyed by: the path and the STL unit.
@@ -78,7 +78,7 @@ impl App {
     pub(crate) fn import_parameter(&mut self, name: String, value: String, saved: String) {
         let Some(field) = self.dialog.as_mut().and_then(|d| d.field_mut("parameters")) else { return };
         let mut set: Map<String, Value> =
-            serde_json::from_str(field.text.trim()).ok().and_then(|v: Value| v.as_object().cloned()).unwrap_or_default();
+            serde_json::from_str(field.entry.text().trim()).ok().and_then(|v: Value| v.as_object().cloned()).unwrap_or_default();
         let v = value.trim();
         if v.is_empty() || v == saved {
             set.remove(&name);
@@ -87,7 +87,7 @@ impl App {
         } else {
             set.insert(name, json!(v));
         }
-        field.text = if set.is_empty() { String::new() } else { Value::Object(set).to_string() };
+        field.entry = emcraft_ui_core::dialogs::Entry::Text(if set.is_empty() { String::new() } else { Value::Object(set).to_string() });
     }
 }
 
@@ -221,7 +221,7 @@ fn detected<'a>(app: &'a App, r: &'a emcraft_engine::ImportInspection) -> Elemen
         .dialog
         .as_ref()
         .and_then(|d| d.fields.iter().find(|f| f.name == "parameters"))
-        .and_then(|f| serde_json::from_str::<Value>(f.text.trim()).ok())
+        .and_then(|f| serde_json::from_str::<Value>(f.entry.text().trim()).ok())
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default();
     let params = r.parameters.iter().take(64).map(|q| {
@@ -247,7 +247,7 @@ fn detected<'a>(app: &'a App, r: &'a emcraft_engine::ImportInspection) -> Elemen
 /// What importing makes of the file, in a line, by the region chosen.
 fn outcome<'a>(app: &'a App, d: &Dialog) -> Element<'a, Message> {
     let t = app.look.tokens;
-    let open = d.fields.iter().any(|f| f.name == "open" && f.on);
+    let open = d.fields.iter().any(|f| f.name == "open" && f.entry.on());
     let line = match text_of(d, "region") {
         "cavity" => t!("Metal bodies become walls; the air they enclose is the region"),
         "box" | "" if open => t!("Metal bodies in a box of air lined by a PML"),

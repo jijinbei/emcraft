@@ -149,48 +149,79 @@ pub struct Field {
     pub required: bool,
     pub quantity: Quantity,
     pub kind: Kind,
-    /// The text of a number, text, choice, list or JSON field.
-    pub text: String,
-    pub on: bool,
-    /// A vector's components.
-    pub parts: Vec<String>,
-    /// A table's cells, row by row.
-    pub rows: Vec<Vec<String>>,
+    /// What it holds, as its kind edits it.
+    pub entry: Entry,
     /// Why the field does not parse (shown under it).
     pub error: Option<String>,
+}
+
+/// What a field holds: the text of a number, text, choice, list or JSON field; a switch; a
+/// vector's components; a table's cells, row by row.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Entry {
+    Text(String),
+    Bool(bool),
+    Parts(Vec<String>),
+    Rows(Vec<Vec<String>>),
+}
+
+impl Entry {
+    /// An empty entry for a field of `kind`.
+    fn empty(kind: &Kind) -> Entry {
+        match kind {
+            Kind::Bool => Entry::Bool(false),
+            Kind::Vector(names) => Entry::Parts(vec![String::new(); names.len()]),
+            Kind::Table(_) => Entry::Rows(Vec::new()),
+            _ => Entry::Text(String::new()),
+        }
+    }
+
+    /// The text typed (empty for a switch, a vector or a table).
+    pub fn text(&self) -> &str {
+        match self {
+            Entry::Text(t) => t,
+            _ => "",
+        }
+    }
+
+    /// Whether a switch is on.
+    pub fn on(&self) -> bool {
+        matches!(self, Entry::Bool(true))
+    }
+
+    /// A vector's components (none for other fields).
+    pub fn parts(&self) -> &[String] {
+        match self {
+            Entry::Parts(p) => p,
+            _ => &[],
+        }
+    }
+
+    /// A table's rows (none for other fields).
+    pub fn rows(&self) -> &[Vec<String>] {
+        match self {
+            Entry::Rows(r) => r,
+            _ => &[],
+        }
+    }
 }
 
 impl Field {
     /// Parameter `p`'s empty field, edited as `kind`.
     fn of(p: &ParamSpec, kind: Kind) -> Field {
-        Field {
-            name: p.name,
-            doc: p.doc,
-            required: p.required,
-            quantity: p.quantity,
-            kind,
-            text: String::new(),
-            on: false,
-            parts: Vec::new(),
-            rows: Vec::new(),
-            error: None,
-        }
+        Field { name: p.name, doc: p.doc, required: p.required, quantity: p.quantity, entry: Entry::empty(&kind), kind, error: None }
     }
 
     /// Fills the field with an initial value (JSON, display units); what does not fit its kind
     /// leaves it empty.
     fn load(&mut self, v: &Value) {
-        match &self.kind {
-            Kind::Bool => self.on = v.as_bool().unwrap_or(false),
-            Kind::Vector(names) => {
-                self.parts = (0..names.len()).map(|i| v.get(i).map_or_default(value_text)).collect();
-            }
-            Kind::Table(cols) => {
-                self.rows = v.as_array().map_or_default(|rows| rows.iter().take(MAX_ROWS).map(|r| table_row(cols, r)).collect());
-            }
-            Kind::Numbers => self.text = v.as_array().map_or_default(|a| list_text(a)),
-            _ => self.text = bounded(&value_text(v)),
-        }
+        self.entry = match &self.kind {
+            Kind::Bool => Entry::Bool(v.as_bool().unwrap_or(false)),
+            Kind::Vector(names) => Entry::Parts((0..names.len()).map(|i| v.get(i).map_or_default(value_text)).collect()),
+            Kind::Table(cols) => Entry::Rows(v.as_array().map_or_default(|rows| rows.iter().take(MAX_ROWS).map(|r| table_row(cols, r)).collect())),
+            Kind::Numbers => Entry::Text(v.as_array().map_or_default(|a| list_text(a))),
+            _ => Entry::Text(bounded(&value_text(v))),
+        };
     }
 }
 
@@ -327,11 +358,11 @@ impl Dialog {
     /// sweep's start and stop round the variable chosen, as it opened round the first one's).
     pub fn followed(mut self, changed: &str, session: &Session) -> Dialog {
         if self.command.id == "study.sweep" && changed == "variable" {
-            let chosen = self.fields.iter().find(|f| f.name == "variable").map(|f| f.text.clone());
+            let chosen = self.fields.iter().find(|f| f.name == "variable").map(|f| f.entry.text().to_owned());
             if let Some(v) = chosen.and_then(|n| session.variables().get(&n).copied()) {
                 for (name, k) in [("start", -0.2), ("stop", 0.2)] {
                     if let Some(f) = self.field_mut(name) {
-                        f.text = short_number(spread(v, k));
+                        f.entry = Entry::Text(short_number(spread(v, k)));
                         f.error = None;
                     }
                 }
@@ -343,24 +374,22 @@ impl Dialog {
     /// Sets a field from a JSON value, as typing it would (the control channel's `ui.dialog`).
     pub fn set(&mut self, name: &str, v: &Value) -> Result<(), String> {
         let f = self.field_mut(name).ok_or_else(|| format!("the dialog has no field `{}`", clip(name, 64)))?;
-        match f.kind.clone() {
-            Kind::Bool => f.on = v.as_bool().ok_or_else(|| format!("`{name}` takes true or false"))?,
+        f.entry = match f.kind.clone() {
+            Kind::Bool => Entry::Bool(v.as_bool().ok_or_else(|| format!("`{name}` takes true or false"))?),
             Kind::Vector(names) => {
                 let a = v.as_array().filter(|a| a.len() == names.len()).ok_or_else(|| format!("`{name}` takes {} numbers", names.len()))?;
-                f.parts = a.iter().map(|x| bounded(&value_text(x))).collect();
+                Entry::Parts(a.iter().map(|x| bounded(&value_text(x))).collect())
             }
             Kind::Table(cols) => {
                 let rows = v.as_array().filter(|a| a.len() <= MAX_ROWS).ok_or_else(|| format!("`{name}` takes a list of at most {MAX_ROWS} rows"))?;
-                f.rows = rows.iter().map(|r| table_row(cols, r).iter().map(|c| bounded(c)).collect()).collect();
+                Entry::Rows(rows.iter().map(|r| table_row(cols, r).iter().map(|c| bounded(c)).collect()).collect())
             }
-            Kind::Numbers => {
-                f.text = match v {
-                    Value::Array(a) => bounded(&list_text(a)),
-                    other => bounded(&value_text(other)),
-                }
-            }
-            _ => f.text = bounded(&value_text(v)),
-        }
+            Kind::Numbers => Entry::Text(match v {
+                Value::Array(a) => bounded(&list_text(a)),
+                other => bounded(&value_text(other)),
+            }),
+            _ => Entry::Text(bounded(&value_text(v))),
+        };
         Ok(())
     }
 
@@ -501,79 +530,66 @@ fn number_value(v: f64) -> Value {
 
 /// The JSON value of a field: `None` when it is left empty.
 fn field_value(f: &Field) -> Result<Option<Value>, String> {
-    let empty = f.text.trim().is_empty();
-    Ok(Some(match &f.kind {
-        Kind::Number => {
-            if empty {
-                return Ok(None);
-            }
-            numeric(&f.text)?
+    match (&f.kind, &f.entry) {
+        (Kind::Bool, Entry::Bool(on)) => Ok(Some(json!(on))),
+        (Kind::Vector(_), Entry::Parts(parts)) => vector_value(parts),
+        (Kind::Table(cols), Entry::Rows(rows)) => table_value(cols, rows),
+        (kind, Entry::Text(text)) if !text.trim().is_empty() => text_value(kind, text.trim()).map(Some),
+        _ => Ok(None),
+    }
+}
+
+/// A typed field's value from its text (trimmed, not empty), as its `kind` reads it.
+fn text_value(kind: &Kind, text: &str) -> Result<Value, String> {
+    match kind {
+        Kind::Integer if !text.starts_with('=') => {
+            Ok(json!(text.parse::<i64>().map_err(|_| trf(t!("`{text}` is not a whole number"), args!(text = clip(text, 40))))?))
         }
-        Kind::Integer => {
-            if empty {
-                return Ok(None);
-            }
-            let t = f.text.trim();
-            if t.starts_with('=') {
-                return numeric(t).map(Some);
-            }
-            json!(t.parse::<i64>().map_err(|_| trf(t!("`{text}` is not a whole number"), args!(text = clip(t, 40))))?)
-        }
-        Kind::Text | Kind::Choice(_) => {
-            if empty {
-                return Ok(None);
-            }
-            json!(f.text.trim())
-        }
-        Kind::Bool => json!(f.on),
-        Kind::Vector(_) => {
-            if f.parts.iter().all(|p| p.trim().is_empty()) {
-                return Ok(None);
-            }
-            let v = f.parts.iter().map(|p| numeric(p)).collect::<Result<Vec<_>, _>>()?;
-            Value::Array(v)
-        }
+        Kind::Number | Kind::Integer => numeric(text),
         Kind::Numbers => {
-            if empty {
-                return Ok(None);
-            }
-            let list = f.text.split([',', ' ', ';']).filter(|s| !s.trim().is_empty()).take(100_000);
-            Value::Array(list.map(numeric).collect::<Result<Vec<_>, _>>()?)
+            let list = text.split([',', ' ', ';']).filter(|s| !s.trim().is_empty()).take(MAX_LIST);
+            Ok(Value::Array(list.map(numeric).collect::<Result<Vec<_>, _>>()?))
         }
-        Kind::Table(cols) => {
-            if f.rows.is_empty() {
-                return Ok(None);
-            }
-            let mut rows = Vec::with_capacity(f.rows.len());
-            for (i, r) in f.rows.iter().enumerate() {
-                let mut o = Map::new();
-                for (c, cell) in cols.iter().zip(r) {
-                    let cell = cell.trim();
-                    if cell.is_empty() {
-                        if c.required {
-                            return Err(trf(t!("row {n}: `{column}` is required"), args!(n = (i + 1), column = c.name)));
-                        }
-                        continue;
-                    }
-                    let v = match c.cell {
-                        Cell::Number => {
-                            numeric(cell).map_err(|e| trf(t!("row {n}, {column}: {error}"), args!(n = (i + 1), column = c.name, error = e)))?
-                        }
-                        Cell::Material => json!(cell),
-                    };
-                    o.insert(c.name.to_owned(), v);
+        Kind::Json => serde_json::from_str(text).map_err(|e| trf(t!("not JSON: {error}"), args!(error = e))),
+        Kind::Text | Kind::Choice(_) | Kind::Bool | Kind::Vector(_) | Kind::Table(_) => Ok(json!(text)),
+    }
+}
+
+/// The most numbers a list field reads.
+const MAX_LIST: usize = 100_000;
+
+/// A vector's value: none when every component is left empty.
+fn vector_value(parts: &[String]) -> Result<Option<Value>, String> {
+    if parts.iter().all(|p| p.trim().is_empty()) {
+        return Ok(None);
+    }
+    Ok(Some(Value::Array(parts.iter().map(|p| numeric(p)).collect::<Result<Vec<_>, _>>()?)))
+}
+
+/// A table's value, a record per row (an empty cell left out unless its column requires it):
+/// none without rows.
+fn table_value(cols: &[Column], rows: &[Vec<String>]) -> Result<Option<Value>, String> {
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let record = |i: usize, r: &[String]| -> Result<Value, String> {
+        let mut o = Map::new();
+        for (c, cell) in cols.iter().zip(r).map(|(c, cell)| (c, cell.trim())) {
+            if cell.is_empty() {
+                if c.required {
+                    return Err(trf(t!("row {n}: `{column}` is required"), args!(n = (i + 1), column = c.name)));
                 }
-                rows.push(Value::Object(o));
+                continue;
             }
-            Value::Array(rows)
+            let v = match c.cell {
+                Cell::Number => numeric(cell).map_err(|e| trf(t!("row {n}, {column}: {error}"), args!(n = (i + 1), column = c.name, error = e)))?,
+                Cell::Material => json!(cell),
+            };
+            o.insert(c.name.to_owned(), v);
         }
-        Kind::Json => {
-            if empty {
-                return Ok(None);
-            }
-            serde_json::from_str(f.text.trim()).map_err(|e| trf(t!("not JSON: {error}"), args!(error = e)))?
-        }
-    }))
+        Ok(Value::Object(o))
+    };
+    Ok(Some(Value::Array(rows.iter().enumerate().map(|(i, r)| record(i, r)).collect::<Result<Vec<_>, _>>()?)))
 }
 
 /// The commands whose dialogs open on the model's current state (`project.values`) when it has
@@ -892,7 +908,7 @@ mod tests {
             s.execute("project.variable", &json!({"name": name, "value": value, "quantity": "length"})).unwrap();
         }
         let mut d = Dialog::new(spec("study.sweep"), &s, &initial("study.sweep", &s), false);
-        let text = |d: &Dialog, n: &str| d.fields.iter().find(|f| f.name == n).map_or_default(|f| f.text.clone());
+        let text = |d: &Dialog, n: &str| d.fields.iter().find(|f| f.name == n).map_or_default(|f| f.entry.text().to_owned());
         assert_eq!((text(&d, "start"), text(&d, "stop")), ("18.288".to_owned(), "27.432".to_owned()));
         d.set("variable", &json!("r_post")).unwrap();
         let d = d.followed("variable", &s);
@@ -909,7 +925,7 @@ mod tests {
         let mut s = Session::new();
         s.execute("file.sample", &json!({"name": "highpass"})).unwrap();
         let d = Dialog::new(spec("study.sweep"), &s, &initial("study.sweep", &s), false);
-        assert!(d.fields.iter().any(|f| f.name == "solve" && f.text.is_empty()));
+        assert!(d.fields.iter().any(|f| f.name == "solve" && f.entry.text().is_empty()));
         assert!(d.clone().params().is_ok_and(|p| p.get("solve").is_none()));
         assert!(each_point(&s).is_ok_and(|line| line.contains("101")), "{:?}", each_point(&s));
         assert!(folded("study.sweep").contains(&"solve") && !folded("study.sweep").contains(&"variable"));
@@ -973,9 +989,11 @@ mod tests {
     fn fields_that_do_not_parse_are_marked() {
         let s = Session::new();
         let mut d = Dialog::new(spec("geometry.waveguide"), &s, &initial("geometry.waveguide", &s), false);
-        d.field_mut("width").unwrap().text = "1e999".into();
-        d.field_mut("height").unwrap().text = "abc".into();
-        d.field_mut("sections").unwrap().rows[0][0] = "NaN".into();
+        d.field_mut("width").unwrap().entry = Entry::Text("1e999".into());
+        d.field_mut("height").unwrap().entry = Entry::Text("abc".into());
+        if let Some(Entry::Rows(rows)) = d.field_mut("sections").map(|f| &mut f.entry) {
+            rows[0][0] = "NaN".into();
+        }
         let e = d.params().unwrap_err();
         assert!(e.starts_with("width"), "{e}");
         assert!(d.fields.iter().filter(|f| f.error.is_some()).count() >= 3);
@@ -986,11 +1004,11 @@ mod tests {
         assert!(d.set("nope", &json!(1)).is_err());
         assert!(d.set("sections", &json!("x")).is_err());
         let mut d = Dialog::new(spec("solve.frequency"), &s, &json!({}), false);
-        d.field_mut("frequencies").unwrap().text = "8, 9 10;11".into();
+        d.field_mut("frequencies").unwrap().entry = Entry::Text("8, 9 10;11".into());
         assert_eq!(d.params().unwrap()["frequencies"], json!([8.0, 9.0, 10.0, 11.0]));
-        d.field_mut("points").unwrap().text = "2.5".into();
+        d.field_mut("points").unwrap().entry = Entry::Text("2.5".into());
         assert!(d.params().is_err());
-        d.field_mut("points").unwrap().text = "x".repeat(MAX_FIELD * 2);
+        d.field_mut("points").unwrap().entry = Entry::Text("x".repeat(MAX_FIELD * 2));
         assert!(d.params().unwrap_err().len() < 200);
     }
 }

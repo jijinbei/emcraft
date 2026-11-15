@@ -469,7 +469,7 @@ fn a_dialog_edits_an_item_and_delete_takes_one_away() {
     app.update(Message::Edit);
     let field = |app: &App| app.dialog.as_ref().and_then(|d| d.fields.iter().position(|f| f.name == "eps_r"));
     let Some(k) = field(&app) else { panic!("the material's dialog with its εr") };
-    assert_eq!(app.dialog.as_ref().map(|d| d.fields[k].text.clone()), Some("2".into()));
+    assert_eq!(app.dialog.as_ref().map(|d| d.fields[k].entry.text().to_owned()), Some("2".into()));
     let revision = app.session.revision();
     app.update(Message::Dialog(Edit::Ok));
     assert!(app.dialog.is_none() && app.session.revision() == revision, "unchanged: nothing ran");
@@ -482,7 +482,7 @@ fn a_dialog_edits_an_item_and_delete_takes_one_away() {
     app.update(Message::Dialog(Edit::Ok));
     assert_eq!(eps(&app), Some(2.5));
     // The item's form stays in the properties panel, on the value set.
-    assert_eq!(app.dialog.as_ref().map(|d| d.fields[k].text.clone()), Some("2.5".into()));
+    assert_eq!(app.dialog.as_ref().map(|d| d.fields[k].entry.text().to_owned()), Some("2.5".into()));
     // A port deleted from the card.
     let ports = app.session.model().ports.len();
     let port = app.rows().find(|r| r.pick == Some(emcraft_ui_core::scene3d::Pick::Port(1))).map_or_default(|r| r.id.clone());
