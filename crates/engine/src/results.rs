@@ -268,9 +268,6 @@ pub fn tdr(s: &mut Session, p: &Params) -> Result<Value> {
     Ok(json!({"port": port, "mode": t.mode.id(), "time_unit": "ns", "resolution": t.resolution * 1e9, "reference": z0, "points": points}))
 }
 
-/// Below this V₀²/(ωU) (Ω) a mode has no field along the line to speak of.
-pub(crate) const MIN_FIELD_R_OVER_Q: f64 = 1e-3;
-
 /// The most intervals `results.cavity` integrates along its line in.
 const MAX_CAVITY_POINTS: usize = 20_000;
 
@@ -298,10 +295,8 @@ pub(crate) fn cavity_line(s: &Session, p: &Params) -> Result<(emcraft_model::Poi
 pub fn cavity(s: &mut Session, p: &Params) -> Result<Value> {
     let e = s.results.eigen.as_ref().ok_or(EngineError::NotSolved { what: "eigenmodes", run: "solve.eigenmodes" })?;
     let index = p.integer("mode", 1..=e.modes.len().max(1)).or(1)?;
-    let m = e.modes.get(index - 1).ok_or_else(|| p.error("mode", format!("must be 1 to {}", e.modes.len())))?;
-    if s.model.domain.rotation.is_some() || s.model.domain.periodic.is_some() {
-        return Err(EngineError::failed("not supported yet: a cavity's voltage on a rotational sector or a periodic cell"));
-    }
+    let m = crate::accelerating::mode_at(p, e, index)?;
+    crate::accelerating::whole_cavity(&s.model)?;
     let beta = p.number("beta").or(1.0)?;
     if !(beta > 0.0 && beta <= 1.0) {
         return Err(p.error("beta", "must be greater than 0 and at most 1 (v/c)"));
@@ -312,30 +307,27 @@ pub fn cavity(s: &mut Session, p: &Params) -> Result<Value> {
     let (x, f) = (&m.vector, m.frequency);
     let omega = 2.0 * std::f64::consts::PI * f;
     let k = omega / (beta * emcraft_model::units::C0);
-    let field = driven.line_integral(x, f, line, n, |_| C::new(1.0, 0.0))?;
+    let own = crate::accelerating::OwnField::of(driven, m, line, n, crate::accelerating::images(&s.model))?;
     let felt = driven.line_integral(x, f, line, n, |z| C::from_polar(1.0, k * z))?;
-    // Each symmetry plane halves the region solved; its image holds as much energy again.
-    let images = 2f64.powi(i32::try_from(s.model.domain.symmetry.len()).unwrap_or(0));
-    let energy = driven.stored_energy(x, f)? * images;
+    let energy = own.energy;
     if !(energy > 0.0 && energy.is_finite()) {
         return Err(EngineError::failed("the mode stores no energy"));
     }
-    let (v0, v) = (field.norm(), felt.norm());
+    let (v0, v) = (own.voltage.norm(), felt.norm());
     let r_over_q = v * v / (omega * energy);
     let q = m.q();
     let per_joule = 1.0 / energy.sqrt();
-    let show = |pt: emcraft_model::Point3| json!([s.show_length(pt.x), s.show_length(pt.y), s.show_length(pt.z)]);
     Ok(json!({
         "mode": index,
         "frequency": s.show_frequency(f),
-        "from": show(line.0),
-        "to": show(line.1),
+        "from": s.show_point(line.0.to_array()),
+        "to": s.show_point(line.1.to_array()),
         "beta": beta,
         "voltage": v * per_joule,
         "field_voltage": v0 * per_joule,
         // A mode with (next to) no field along the line (a TE mode on the axis) has no
         // transit time: V and V₀ are both its numerical noise there.
-        "transit": (v0 * v0 / (omega * energy) >= MIN_FIELD_R_OVER_Q).then(|| v / v0),
+        "transit": own.accelerates().then(|| v / v0),
         "r_over_q": r_over_q,
         "q": q,
         "shunt": q.map(|q| r_over_q * q),

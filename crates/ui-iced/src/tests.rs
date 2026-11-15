@@ -705,7 +705,7 @@ fn tracked_electrons_are_drawn_and_charted() {
     let colours = emcraft_ui_core::scene3d::Colours::of(&app.look.theme);
     assert!(!emcraft_ui_core::scene3d::trajectories(&colours, &app.session).scene.lines.is_empty());
     assert!(crate::eigenmodes::gains(&app).is_some_and(|c| c.series.len() == 2));
-    assert_eq!(app.session.views().tracked.as_ref().map(|r| r["mode"].clone()), Some(json!(3)));
+    assert_eq!(app.session.views().tracked.as_ref().map(|r| r.mode), Some(3));
     // Seen with the mode they crossed: its field (the walls see-through), TM010's Ez.
     assert_eq!((app.view3d.overlay, app.view3d.field.mode), (emcraft_ui_core::scene3d::Overlay::Field, Some(2)));
 }

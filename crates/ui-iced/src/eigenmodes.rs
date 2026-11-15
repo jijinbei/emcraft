@@ -47,15 +47,9 @@ fn resonances(modes: &[Mode], fu: emcraft_model::units::Frequency) -> Option<Cha
 /// over the constant-speed gain qV₀T cos φ (docs/adr/0012-particles.md); none while nothing was
 /// tracked on the modes solved now (the 3D view's trajectories go by the same rule).
 pub(crate) fn gains(app: &App) -> Option<Chart> {
-    use serde_json::Value;
-    let reply = emcraft_ui_core::scene3d::tracking(&app.session)?;
-    let particles = reply.get("particles").and_then(Value::as_array)?;
-    let tracked: Vec<[f64; 2]> = particles
-        .iter()
-        .filter(|p| p.get("end").and_then(Value::as_str) == Some("through"))
-        .filter_map(|p| Some([p.get("phase")?.as_f64()?.rem_euclid(360.0), p.get("gain")?.as_f64()? / 1e3]))
-        .collect();
-    let amplitude = reply.get("voltage").and_then(Value::as_f64)? * reply.get("transit").and_then(Value::as_f64)? / 1e3;
+    let t = emcraft_ui_core::scene3d::tracking(&app.session)?;
+    let tracked: Vec<[f64; 2]> = t.particles.iter().filter(|p| p.went_through()).map(|p| [p.phase.rem_euclid(360.0), p.gain / 1e3]).collect();
+    let amplitude = t.voltage * t.transit / 1e3;
     let closed: Vec<[f64; 2]> = (0..=72).map(|k| f64::from(k) * 5.0).map(|d| [d, amplitude * d.to_radians().cos()]).collect();
     let top = tracked.iter().map(|p| p[1].abs()).fold(amplitude.abs(), f64::max).max(1e-9);
     let x = Axis::new("entry phase (°)", 0.0, 360.0);

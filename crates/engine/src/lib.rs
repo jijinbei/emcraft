@@ -28,6 +28,7 @@
 /// cargo builds the engine again when they change.
 const _TRANSLATIONS: &[u8] = include_bytes!("../../../locales/ja.json");
 
+mod accelerating;
 mod active;
 mod adapt;
 pub mod archive;
@@ -92,6 +93,7 @@ pub use script::Step;
 pub use sdata::SData;
 pub use session::{Bloch, BlochWave, Change, Limits, ResultKind, Results, Revolution, Session, Sweep};
 pub use solve::{Compute, Device, LinearSolver, PortModeList, PortModeRow, PortModes};
+pub use track::{TrackPoint, Tracked, Tracking};
 pub use view::field_view;
 
 /// results.tdr's chart, for the UI.

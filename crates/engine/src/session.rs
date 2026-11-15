@@ -741,6 +741,11 @@ impl Session {
         self.display.length.from_si(m)
     }
 
+    /// A point (m) in the display's length unit.
+    pub fn show_point(&self, p: [f64; 3]) -> [f64; 3] {
+        p.map(|c| self.show_length(c))
+    }
+
     /// A short summary of the model and results.
     pub fn summary(&self) -> Value {
         let l = self.display.length;

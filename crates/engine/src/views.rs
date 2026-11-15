@@ -253,7 +253,7 @@ pub struct Views {
     pub track: Option<serde_json::Value>,
     /// That run's reply (its trajectories), for the 3D view: not saved, made again by running it.
     #[serde(skip)]
-    pub tracked: Option<std::sync::Arc<serde_json::Value>>,
+    pub tracked: Option<std::sync::Arc<crate::track::Tracking>>,
     /// S-parameters read from files (`results.import`), drawn over the S-parameter chart.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub measured: Vec<crate::network::Measured>,
