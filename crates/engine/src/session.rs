@@ -228,21 +228,30 @@ impl ResultKind {
 }
 
 impl Results {
+    /// Where the result of `kind` held lies (none: not held): what tells one solve's result
+    /// from another's, and whether there is one.
+    fn held(&self, kind: ResultKind) -> Option<*const ()> {
+        fn at<T>(a: Option<&Arc<T>>) -> Option<*const ()> {
+            a.map(|a| Arc::as_ptr(a).cast())
+        }
+        match kind {
+            ResultKind::Sweep => at(self.sweep.as_ref()),
+            ResultKind::Eigen => at(self.eigen.as_ref()),
+            ResultKind::TimeDomain => at(self.time_domain.as_ref()),
+            ResultKind::Radiation => at(self.radiation.as_ref()),
+            ResultKind::TdRadiation => at(self.td_radiation.as_ref()),
+            ResultKind::Dispersion => at(self.dispersion.as_ref()),
+            ResultKind::Study => at(self.study.as_ref()),
+            ResultKind::Revolution => at(self.revolution.as_ref()),
+            ResultKind::Bloch => at(self.bloch.as_ref()),
+            ResultKind::System => at(self.system.as_ref()),
+            ResultKind::Particles => at(self.particles.as_ref()),
+        }
+    }
+
     /// Whether the session holds a result of `kind`.
     pub fn has(&self, kind: ResultKind) -> bool {
-        match kind {
-            ResultKind::Sweep => self.sweep.is_some(),
-            ResultKind::Eigen => self.eigen.is_some(),
-            ResultKind::TimeDomain => self.time_domain.is_some(),
-            ResultKind::Radiation => self.radiation.is_some(),
-            ResultKind::TdRadiation => self.td_radiation.is_some(),
-            ResultKind::Dispersion => self.dispersion.is_some(),
-            ResultKind::Study => self.study.is_some(),
-            ResultKind::Revolution => self.revolution.is_some(),
-            ResultKind::Bloch => self.bloch.is_some(),
-            ResultKind::System => self.system.is_some(),
-            ResultKind::Particles => self.particles.is_some(),
-        }
+        self.held(kind).is_some()
     }
 
     /// Whether the result of `kind` is held and stale: the model changed after it was solved.
@@ -274,28 +283,8 @@ impl Results {
     /// The kinds this holds that `before` did not hold as they are, those a solve just made,
     /// are fresh.
     pub(crate) fn solved_since(&mut self, before: &Results) {
-        fn same<T>(a: Option<&Arc<T>>, b: Option<&Arc<T>>) -> bool {
-            match (a, b) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
-        }
         for kind in ResultKind::ALL {
-            let unchanged = match kind {
-                ResultKind::Sweep => same(self.sweep.as_ref(), before.sweep.as_ref()),
-                ResultKind::Eigen => same(self.eigen.as_ref(), before.eigen.as_ref()),
-                ResultKind::TimeDomain => same(self.time_domain.as_ref(), before.time_domain.as_ref()),
-                ResultKind::Radiation => same(self.radiation.as_ref(), before.radiation.as_ref()),
-                ResultKind::TdRadiation => same(self.td_radiation.as_ref(), before.td_radiation.as_ref()),
-                ResultKind::Dispersion => same(self.dispersion.as_ref(), before.dispersion.as_ref()),
-                ResultKind::Study => same(self.study.as_ref(), before.study.as_ref()),
-                ResultKind::Revolution => same(self.revolution.as_ref(), before.revolution.as_ref()),
-                ResultKind::Bloch => same(self.bloch.as_ref(), before.bloch.as_ref()),
-                ResultKind::System => same(self.system.as_ref(), before.system.as_ref()),
-                ResultKind::Particles => same(self.particles.as_ref(), before.particles.as_ref()),
-            };
-            if !unchanged {
+            if self.held(kind) != before.held(kind) {
                 self.stale.remove(&kind);
             }
         }

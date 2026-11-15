@@ -28,7 +28,7 @@ fn main() -> ExitCode {
     };
     // The control channel; its token file lives as long as the app (the window looks at its
     // requests every frame).
-    let (requests, token_file) = match control.map(|p| emcraft_control::server::start(p, || {})) {
+    let (requests, token_file) = match control.map(emcraft_control::server::start) {
         Some(Ok(started)) => {
             eprintln!("emcraft: {}", started.note);
             (Some(started.requests), started.token_file)

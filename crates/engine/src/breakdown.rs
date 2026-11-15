@@ -45,7 +45,7 @@ pub fn breakdown(s: &mut Session, p: &Params) -> Result<Value> {
             .ok_or_else(|| EngineError::failed("the port's mode carries no power at this frequency (below its cut-off)"))?;
         let field = peak.value / watts.sqrt();
         let power = (eb * 1e6 / field).powi(2);
-        let at = [peak.at.x, peak.at.y, peak.at.z].map(|c| s.show_length(c));
+        let at = s.show_point(peak.at.to_array());
         points.push(json!({"frequency": s.show_frequency(r.frequency), "peak_field": field, "at": at, "max_power": power}));
     }
     Ok(json!({"excitation": entry, "breakdown": eb, "points": points}))

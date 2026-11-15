@@ -160,7 +160,7 @@ fn change(s: &mut Session, f: impl FnOnce(&mut Particles) -> Result<()>) -> Resu
 /// The sources in display units.
 pub(crate) fn sources_reply(s: &Session) -> Value {
     let m = &s.model.particles;
-    let probes: Vec<Value> = m.probes.iter().map(|x| json!(x.map(|c| s.show_length(c)))).collect();
+    let probes: Vec<Value> = m.probes.iter().map(|x| json!(s.show_point(*x))).collect();
     json!({
         "walls": {"x": m.walls[0].id(), "y": m.walls[1].id(), "z": m.walls[2].id()},
         "emitters": m.emitters,
@@ -189,8 +189,7 @@ pub fn walls(s: &mut Session, p: &Params) -> Result<Value> {
 
 /// `particles.emitter`: a wall emitting electrons.
 pub fn emitter(s: &mut Session, p: &Params) -> Result<Value> {
-    let name = p.string("face").required()?;
-    let face = Face::parse(name).ok_or_else(|| p.error("face", "x-, x+, y-, y+, z- or z+"))?;
+    let face = face_of(p)?;
     let emission = match p.number("current").optional()? {
         Some(density) => Emission::Current { density },
         None => Emission::Limited,
@@ -244,8 +243,7 @@ pub fn voltage(s: &mut Session, p: &Params) -> Result<Value> {
 
 /// `particles.open`: a face left open (or, `closed`, closed again).
 pub fn open(s: &mut Session, p: &Params) -> Result<Value> {
-    let name = p.string("face").required()?;
-    let face = Face::parse(name).ok_or_else(|| p.error("face", "x-, x+, y-, y+, z- or z+"))?;
+    let face = face_of(p)?;
     let closed = p.flag("closed").or(false)?;
     change(s, |m| {
         m.open.retain(|f| *f != face);
@@ -299,6 +297,12 @@ pub(crate) fn settings(p: &Params, confirmed: Option<&ParticleRun>) -> Result<Pa
     let fine = p.integer("fine", 1..=MAX_FINE).or(confirmed.map_or(1, |c| c.grid.fine()))?;
     let grid = RunGrid::new(axisymmetric, fine).map_err(|e| p.error("fine", e))?;
     Ok(ParticleRun { time, cell, pusher: if vay { Pusher::Vay } else { Pusher::Boris }, grid })
+}
+
+/// The face parameter `face` names.
+fn face_of(p: &Params) -> Result<Face> {
+    let name = p.string("face").required()?;
+    Face::parse(name).ok_or_else(|| p.error("face", format!("must be one of {}", Face::IDS.join(", "))))
 }
 
 /// The steps of `dt` (s) a run of `time` (s) takes, within the solver's bound.
@@ -718,8 +722,7 @@ impl Injected {
 
 /// `particles.beam`: a steady beam of electrons sent in through a conducting face.
 pub fn beam_command(s: &mut Session, p: &Params) -> Result<Value> {
-    let name = p.string("face").required()?;
-    let face = Face::parse(name).ok_or_else(|| p.error("face", "x-, x+, y-, y+, z- or z+"))?;
+    let face = face_of(p)?;
     let current = p.number("current").required()?;
     let energy = p.positive("energy").required()?;
     let radius = p.length("radius").or(0.0)?;
@@ -735,8 +738,7 @@ pub fn beam_command(s: &mut Session, p: &Params) -> Result<Value> {
 
 /// `particles.bunch`: a Gaussian bunch of electrons sent in through a conducting face.
 pub fn bunch_command(s: &mut Session, p: &Params) -> Result<Value> {
-    let name = p.string("face").required()?;
-    let face = Face::parse(name).ok_or_else(|| p.error("face", "x-, x+, y-, y+, z- or z+"))?;
+    let face = face_of(p)?;
     let charge = p.positive("charge").required()? * 1e-9;
     let length = p.positive_length("length").required()?;
     let energy = p.positive("energy").or(1e9)?;
@@ -759,13 +761,14 @@ fn frequency(values: &[[f64; 3]], dt: f64) -> Option<f64> {
     let spread = |c: usize| values.iter().map(|v| (v[c] - mean(c)).powi(2)).sum::<f64>();
     let c = (0..3).max_by(|a, b| spread(*a).total_cmp(&spread(*b)))?;
     let m = mean(c);
-    let mut crossings = Vec::new();
-    for (k, w) in values.windows(2).enumerate() {
-        let (a, b) = (w[0][c] - m, w[1][c] - m);
-        if a < 0.0 && b >= 0.0 {
-            crossings.push((k as f64 + a / (a - b)) * dt);
-        }
-    }
+    let crossings: Vec<f64> = values
+        .windows(2)
+        .enumerate()
+        .filter_map(|(k, w)| {
+            let (a, b) = (w[0][c] - m, w[1][c] - m);
+            (a < 0.0 && b >= 0.0).then(|| (k as f64 + a / (a - b)) * dt)
+        })
+        .collect();
     let (first, last) = (*crossings.first()?, *crossings.last()?);
     (crossings.len() >= 3 && last > first).then(|| (crossings.len() - 1) as f64 / (last - first))
 }
@@ -824,7 +827,7 @@ pub(crate) fn reply(s: &Session, r: &PicResult) -> Value {
         }
     }
     let probes: Vec<Value> =
-        r.probes.iter().map(|p| json!({"at": p.at.map(|c| s.show_length(c)), "frequency": p.frequency.map(|f| s.show_frequency(f))})).collect();
+        r.probes.iter().map(|p| json!({"at": s.show_point(p.at), "frequency": p.frequency.map(|f| s.show_frequency(f))})).collect();
     let last = r.history.last();
     let fastest = r.snapshot.iter().map(|p| p.energy).fold(0.0, f64::max);
     json!({

@@ -135,6 +135,9 @@ impl Face {
         Some(Face { axis, high })
     }
 
+    /// The faces' names, as [`Face::parse`] reads them.
+    pub const IDS: [&'static str; 6] = ["x-", "x+", "y-", "y+", "z-", "z+"];
+
     /// Its name, as [`Face::parse`] reads it.
     pub fn name(self) -> String {
         format!("{}{}", ["x", "y", "z"].get(self.axis).copied().unwrap_or("?"), if self.high { '+' } else { '-' })

@@ -72,7 +72,7 @@ pub fn thermal(s: &mut Session, p: &Params) -> Result<Value> {
         .filter(|(_, h)| h.is_finite())
         .map(|(m, h)| json!({"material": m.name, "max_temperature": sink + h}))
         .collect();
-    let at = [rise.at.x, rise.at.y, rise.at.z].map(|c| s.show_length(c));
+    let at = s.show_point(rise.at.to_array());
     Ok(json!({
         "frequency": s.show_frequency(r.frequency),
         "excitation": entry.name,

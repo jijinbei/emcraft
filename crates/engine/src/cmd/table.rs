@@ -717,7 +717,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Electron emitter",
         doc: "A conducting face of the particle run's box that emits electrons: as many as the field there draws (space-charge limited: each step the charge that brings the normal field at the wall to zero, by Gauss's law; Birdsall & Langdon §16-5), or a given `current` density. The electrons leave at `energy` along the face's normal, spread over each node of the face. Undo goes back.",
         params: &[
-            req("face", K::String, "the face: x-, x+, y-, y+, z- or z+").one_of(&["x-", "x+", "y-", "y+", "z-", "z+"]),
+            req("face", K::String, "the face: x-, x+, y-, y+, z- or z+").one_of(&emcraft_model::particles::Face::IDS),
             opt("current", K::Number, "the current density in A/m² (default: space-charge limited)"),
             opt("energy", K::Number, "the electrons' energy as they leave, in eV (default 0)"),
             opt("per_node", K::Integer, "macro-particles from each node a step, 1 to 64 (default 4)"),
@@ -747,7 +747,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Electron bunch",
         doc: "A Gaussian bunch of electrons sent in through a conducting face of the particle run's box, along its normal: `charge`, rms `length` along the way (its duration that over its speed), `energy`, spread over a disc of `radius` about `at` (a point of the face; default its centre), its peak entering `delay` after the start (default five of its durations). With bunches the run's only source, its reply gives the loss factor: the field's energy gained per charge squared, what the bunch leaves in a closed cavity once it has gone, q² Σ k_n e^{−(ω_n σ_t)²} over the modes, k_n = ω_n (R/Q)_n /4 (Wilson, SLAC-PUB-4547). Undo goes back.",
         params: &[
-            req("face", K::String, "the face it enters through: x-, x+, y-, y+, z- or z+").one_of(&["x-", "x+", "y-", "y+", "z-", "z+"]),
+            req("face", K::String, "the face it enters through: x-, x+, y-, y+, z- or z+").one_of(&emcraft_model::particles::Face::IDS),
             req("charge", K::Number, "the bunch's charge in nC"),
             req("length", K::Number, "its rms length").of(L),
             opt("energy", K::Number, "the electrons' energy in eV (default 1e9)"),
@@ -765,7 +765,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Electron beam",
         doc: "A steady beam of electrons sent in through a conducting face of the particle run's box, along its normal: `current` at `energy`, spread evenly over the ring between `inner` and `radius` about `at` (a point of the face; default its centre; a disc when `inner` is 0), reached linearly over `rise`. With a strong axial magnetic field (particles.magnetic) and the box's conductors a drift tube, its own charge slows it to the γ_b of I = I₀(γ₀ − γ_b)β_b/(2 ln(R/r_b)) and no more than the limiting current passes (Bogdankevich & Rukhadze, Sov. Phys. Usp. 14:163, 1971); the reply's `mid_gamma` is the beam's γ in the middle third of the box. Undo goes back.",
         params: &[
-            req("face", K::String, "the face it enters through: x-, x+, y-, y+, z- or z+").one_of(&["x-", "x+", "y-", "y+", "z-", "z+"]),
+            req("face", K::String, "the face it enters through: x-, x+, y-, y+, z- or z+").one_of(&emcraft_model::particles::Face::IDS),
             req("current", K::Number, "its current in A"),
             req("energy", K::Number, "the electrons' energy in eV"),
             opt("radius", K::Number, "its outer radius (default 0: on a line)").of(L),
@@ -795,7 +795,7 @@ pub static COMMANDS: &[CommandSpec] = &[
         label: "Open face",
         doc: "Leaves a face of the particle run's box open: a convolutional perfectly matched layer of 10 cells beyond it (Roden & Gedney, Microw. Opt. Technol. Lett. 27(5), 2000) absorbs the waves that reach it, the geometry carried on into it as it is at the face (a guide stays a guide: its end matched), and particles leaving through it are counted on the wall behind the layer. Its axis must be closed by walls; nothing is emitted through it. Keep a smooth stretch of guide (a few of its radii) between a periodic structure and an open face: the layer amplifies the backward and evanescent waves of a corrugation that reaches it. With `closed`, the face is closed again. Undo goes back.",
         params: &[
-            req("face", K::String, "the face: x-, x+, y-, y+, z- or z+").one_of(&["x-", "x+", "y-", "y+", "z-", "z+"]),
+            req("face", K::String, "the face: x-, x+, y-, y+, z- or z+").one_of(&emcraft_model::particles::Face::IDS),
             opt("closed", K::Boolean, "close it again (default false)"),
         ],
         effect: Effect::Record,

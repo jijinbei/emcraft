@@ -21,6 +21,10 @@ use serde_json::{Value, json};
 use crate::theme::Colour;
 use crate::{EngineError, Params, Result, Session};
 
+/// The most bytes of a command's parameters kept in the views for later (a tracking's: a
+/// few fields, far below this).
+const MAX_KEPT_PARAMETERS: usize = 16_384;
+
 emcraft_macros::named_enum! {
     /// A chart a style belongs to (`chart`).
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -336,8 +340,8 @@ impl Views {
             return Err(EngineError::failed("invalid PCB victim"));
         }
         // The last tracking's parameters: an object of a few fields, as results.track takes it.
-        if self.track.as_ref().is_some_and(|t| !t.is_object() || t.to_string().len() > 16_384) {
-            return Err(EngineError::failed("views: the tracking's parameters are not an object of at most 16 kB"));
+        if self.track.as_ref().is_some_and(|t| !t.is_object() || t.to_string().len() > MAX_KEPT_PARAMETERS) {
+            return Err(EngineError::failed(format!("views: the tracking's parameters are not an object of at most {MAX_KEPT_PARAMETERS} bytes")));
         }
         Ok(Views {
             pcb_illustration: self.pcb_illustration,

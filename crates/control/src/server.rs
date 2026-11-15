@@ -13,7 +13,7 @@ use std::time::Duration;
 use crate::ControlRequest;
 use serde_json::{Value, json};
 
-use crate::auth as control_auth;
+use crate::auth;
 
 /// Longest request line (bytes).
 pub const MAX_LINE: usize = 16 * 1024 * 1024;
@@ -25,25 +25,23 @@ const MAX_BAD_LINES: usize = 8;
 const SHORT: Duration = Duration::from_secs(60);
 const LONG: Duration = Duration::from_secs(3600);
 
-static OPEN: AtomicUsize = AtomicUsize::new(0);
-
 /// A started control channel: its requests, its token file (removed when dropped) and where
 /// clients find the token, for the app to tell.
 pub struct Started {
     pub requests: Receiver<ControlRequest>,
-    pub token_file: Option<control_auth::TokenFile>,
+    pub token_file: Option<auth::TokenFile>,
     pub note: String,
 }
 
 /// Listens on 127.0.0.1:`port`; requests go to [`Started::requests`], each answered through its
-/// sender. `wake` repaints the window when a request arrives.
-pub fn start(port: u16, wake: impl Fn() + Send + Sync + 'static) -> Result<Started, String> {
-    let token = control_auth::env_token().or_else(control_auth::new_token).ok_or("no random token available")?;
+/// sender (the window takes them as it draws).
+pub fn start(port: u16) -> Result<Started, String> {
+    let token = auth::env_token().or_else(auth::new_token).ok_or("no random token available")?;
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| format!("cannot listen on 127.0.0.1:{port}: {e}"))?;
     let port = listener.local_addr().map_or(port, |a| a.port());
-    let (token_file, note) = match control_auth::token_path(port) {
-        Some(path) => match control_auth::write_token_file(&path, &token) {
-            Ok(()) => (Some(control_auth::TokenFile(path.clone())), format!("control channel on 127.0.0.1:{port} (token in {})", path.display())),
+    let (token_file, note) = match auth::token_path(port) {
+        Some(path) => match auth::write_token_file(&path, &token) {
+            Ok(()) => (Some(auth::TokenFile(path.clone())), format!("control channel on 127.0.0.1:{port} (token in {})", path.display())),
             Err(e) => (
                 None,
                 format!(
@@ -56,19 +54,20 @@ pub fn start(port: u16, wake: impl Fn() + Send + Sync + 'static) -> Result<Start
     };
     let (tx, rx) = channel::<ControlRequest>();
     let token = std::sync::Arc::new(token);
-    let wake = std::sync::Arc::new(wake);
+    // This channel's connections open now (not every server's in the process).
+    let open = std::sync::Arc::new(AtomicUsize::new(0));
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            if OPEN.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
-                OPEN.fetch_sub(1, Ordering::Relaxed);
+            if open.fetch_add(1, Ordering::Relaxed) >= MAX_CONNECTIONS {
+                open.fetch_sub(1, Ordering::Relaxed);
                 let mut refused = stream;
                 let _ = writeln!(refused, "{}", json!({"ok": false, "error": "too many connections"}));
                 continue;
             }
-            let (tx, token, wake) = (tx.clone(), token.clone(), wake.clone());
+            let (tx, token, open) = (tx.clone(), token.clone(), open.clone());
             std::thread::spawn(move || {
-                serve(stream, &token, &tx, &*wake);
-                OPEN.fetch_sub(1, Ordering::Relaxed);
+                serve(stream, &token, &tx);
+                open.fetch_sub(1, Ordering::Relaxed);
             });
         }
     });
@@ -120,7 +119,31 @@ fn refuse(out: &mut TcpStream, reader: &mut BufReader<TcpStream>) {
     let _ = std::io::copy(&mut reader.by_ref().take(64 * 1024), &mut std::io::sink());
 }
 
-pub(crate) fn serve(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>, wake: &dyn Fn()) {
+/// Whether a connection's first request carries the token.
+fn authenticates(msg: &Value, token: &str) -> bool {
+    msg.get("token").and_then(Value::as_str).is_some_and(|t| auth::tokens_match(t, token))
+}
+
+/// Request `msg` handed to the app and its reply waited for (an engine request as long as a
+/// solve); none when the app is gone.
+fn dispatch(msg: &Value, tx: &Sender<ControlRequest>) -> Option<Value> {
+    let id = msg.get("id").cloned().unwrap_or(Value::Null);
+    let method = msg.get("method").and_then(Value::as_str).unwrap_or("").to_owned();
+    let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
+    let wait = if method.starts_with("engine.") { LONG } else { SHORT };
+    let (req, rrx) = ControlRequest::new(method.clone(), params);
+    tx.send(req).ok()?;
+    let mut r = rrx.recv_timeout(wait).unwrap_or_else(|_| json!({"ok": false, "error": format!("timeout: `{method}` did not answer")}));
+    if let Some(o) = r.as_object_mut() {
+        o.insert("id".into(), id);
+    }
+    Some(r)
+}
+
+/// Serves one connection: nothing runs until a request carries `token`; each request line is
+/// handed to the app through `tx` and its reply written back; too many lines that are not JSON
+/// close it.
+pub(crate) fn serve(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>) {
     let Ok(read) = stream.try_clone() else { return };
     let mut out = stream;
     let mut reader = BufReader::new(read);
@@ -138,45 +161,25 @@ pub(crate) fn serve(stream: TcpStream, token: &str, tx: &Sender<ControlRequest>,
         if line.trim().is_empty() {
             continue;
         }
-        let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(msg) => {
-                if !authenticated {
-                    match msg.get("token").and_then(Value::as_str) {
-                        Some(t) if control_auth::tokens_match(t, token) => authenticated = true,
-                        _ => {
-                            refuse(&mut out, &mut reader);
-                            break;
-                        }
-                    }
-                }
-                let id = msg.get("id").cloned().unwrap_or(Value::Null);
-                let method = msg.get("method").and_then(Value::as_str).unwrap_or("").to_owned();
-                let params = msg.get("params").cloned().unwrap_or_else(|| json!({}));
-                let wait = if method.starts_with("engine.") { LONG } else { SHORT };
-                let (req, rrx) = ControlRequest::new(method.clone(), params);
-                if tx.send(req).is_err() {
-                    break;
-                }
-                wake();
-                let mut r = rrx.recv_timeout(wait).unwrap_or_else(|_| json!({"ok": false, "error": format!("timeout: `{method}` did not answer")}));
-                if let Some(o) = r.as_object_mut() {
-                    o.insert("id".into(), id);
-                }
-                r
-            }
-            Err(_) if !authenticated => {
+        let msg = serde_json::from_str::<Value>(&line);
+        if !authenticated {
+            if !msg.as_ref().is_ok_and(|m| authenticates(m, token)) {
                 refuse(&mut out, &mut reader);
                 break;
             }
+            authenticated = true;
+        }
+        let reply = match msg {
+            Ok(msg) => match dispatch(&msg, tx) {
+                Some(reply) => reply,
+                None => break,
+            },
             Err(e) => {
                 bad += 1;
                 json!({"ok": false, "error": format!("bad JSON: {e}")})
             }
         };
-        if writeln!(out, "{reply}").is_err() {
-            break;
-        }
-        if bad >= MAX_BAD_LINES {
+        if writeln!(out, "{reply}").is_err() || bad >= MAX_BAD_LINES {
             break;
         }
     }
@@ -206,7 +209,7 @@ mod tests {
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
                 let tx = tx.clone();
-                std::thread::spawn(move || serve(stream, token, &tx, &|| {}));
+                std::thread::spawn(move || serve(stream, token, &tx));
             }
         });
         let session = |lines: &[String]| {
