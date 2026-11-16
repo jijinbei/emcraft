@@ -171,6 +171,13 @@ impl Symmetry {
         Ok(())
     }
 
+    /// The share of a gap from `from` to `to` that the half below this plane holds: ½ when the
+    /// gap lies in the plane (its current split evenly between the two halves), else 1.
+    pub fn share(&self, from: Point3, to: Point3, tol: f64) -> f64 {
+        let d = self.axis.index();
+        if (from[d] - self.at).abs() <= tol && (to[d] - self.at).abs() <= tol { 0.5 } else { 1.0 }
+    }
+
     /// A box mirrored about the plane.
     fn mirrored(self, b: Aabb) -> Aabb {
         let d = self.axis.index();
@@ -207,8 +214,29 @@ impl Symmetry {
         if let Some(k) = unmirrored(m.inclusions().iter().map(|inc| (inc.bounds(), inc.material.is_none())).collect()) {
             return Err(format!("inclusion {} has no mirror image about the plane: the solid is not symmetric about it", k + 1));
         }
-        if m.domain.open.is_some() || !m.lumped.is_empty() || !m.sources.is_empty() {
-            return Err("not supported yet: a symmetry plane in an open problem, or with lumped ports or sources".into());
+        if !m.sources.is_empty() {
+            return Err("not supported yet: a symmetry plane with sources (dipoles, a plane wave)".into());
+        }
+        // A gap (a lumped port's, an element's) is solved on the half the plane keeps only when it
+        // lies in the plane — its current along it, an even field's, so a magnetic wall — as a
+        // line: then the half holds half its current ([`Symmetry::share`]).
+        let gaps = m.lumped.iter().map(|l| (&l.name, l.from, l.to, l.radius == 0.0 && l.across.is_none()));
+        let gaps = gaps.chain(m.elements.iter().map(|e| (&e.name, e.from, e.to, e.across.is_none())));
+        for (name, from, to, line) in gaps {
+            let on = |q: Point3| (q[d] - self.at).abs() <= tol;
+            match (on(from) && on(to), from[d] < self.at - tol && to[d] < self.at - tol, from[d] > self.at + tol && to[d] > self.at + tol) {
+                (true, _, _) if self.kind != SymmetryKind::Magnetic => {
+                    return Err(format!("`{name}` lies in the plane, where an electric wall shorts it: make the plane magnetic"));
+                }
+                (true, _, _) if !line => {
+                    return Err(format!("not supported yet: `{name}` in the plane as a band or a sheet (a line only)"));
+                }
+                (true, _, _) => {}
+                (false, true, _) | (false, _, true) => {
+                    return Err(format!("`{name}` lies off the plane: its mirror image would be a second source; put it in the plane"));
+                }
+                _ => return Err(format!("`{name}` crosses the plane: put it in the plane")),
+            }
         }
         for p in &m.ports {
             let Some(face) = &p.face else {

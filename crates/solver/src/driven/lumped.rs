@@ -27,14 +27,19 @@ pub struct LumpedData {
     pub voltage: C,
     /// (unknown, ∫ Nᵢ · ŝ dl) along the gap from `from` to `to`.
     pub c: Vec<(usize, f64)>,
+    /// The share of the gap's current the mesh holds: 1, or ½ for each symmetry plane the gap
+    /// lies in (the other half flows in the image). Its term and its source are this share of
+    /// the whole gap's: the port as an impedance R/share driven by the same voltage, so the
+    /// field, its voltage and S are the whole model's.
+    pub share: f64,
 }
 
 impl LumpedData {
-    /// The factor jωμ₀/R of the port's term (jωμ₀/R) c cᵀ at `frequency`: the current
-    /// I = (V_s + cᵀx)/R through its gap.
+    /// The factor jωμ₀ share/R of the port's term (jωμ₀/R) c cᵀ at `frequency`: the current
+    /// I = (V_s + cᵀx)/R through its gap (the mesh's share of it).
     pub(crate) fn factor(&self, frequency: f64) -> C {
         let omega = angular(frequency);
-        C::new(0.0, omega * MU0 / self.impedance)
+        C::new(0.0, omega * MU0 * self.share / self.impedance)
     }
 }
 
@@ -47,7 +52,7 @@ impl super::Driven {
             .iter()
             .map(|l| {
                 let mut b = vec![C::new(0.0, 0.0); len];
-                let f = C::new(0.0, -angular(frequency) * MU0) * (2.0 / l.impedance.sqrt());
+                let f = C::new(0.0, -angular(frequency) * MU0) * (2.0 * l.share / l.impedance.sqrt());
                 for &(i, ci) in &l.c {
                     if let Some(x) = b.get_mut(i) {
                         *x += f * ci;
@@ -79,6 +84,8 @@ impl super::Driven {
 pub struct ElementData {
     pub element: emcraft_model::LumpedElement,
     pub c: Vec<(usize, f64)>,
+    /// The share of its current the mesh holds, as a lumped port's ([`LumpedData::share`]).
+    pub share: f64,
 }
 
 impl ElementData {
@@ -86,12 +93,12 @@ impl ElementData {
     /// for the gap's voltage V = −cᵀx, as a lumped port's with no source and Y = 1/R.
     pub(crate) fn factor(&self, frequency: f64) -> C {
         let omega = angular(frequency);
-        C::new(0.0, omega * MU0) * self.element.admittance(frequency)
+        C::new(0.0, omega * MU0 * self.share) * self.element.admittance(frequency)
     }
 }
 
 /// The model's lumped element `e`: its gap's line integrals, along the line or across its sheet.
-pub(super) fn prepare_element(e: &emcraft_model::LumpedElement, space: &Space) -> Result<ElementData> {
+pub(super) fn prepare_element(e: &emcraft_model::LumpedElement, space: &Space, share: f64) -> Result<ElementData> {
     let c = match e.across {
         Some(across) => sheet_vector(space, e.from, e.to, across)?,
         None => line_vector(space, e.from, e.to)?,
@@ -99,11 +106,11 @@ pub(super) fn prepare_element(e: &emcraft_model::LumpedElement, space: &Space) -
     if c.is_empty() {
         return Err(invalid(format!("lumped element `{}`", e.name), "its gap lies outside the mesh (inside a conductor?)"));
     }
-    Ok(ElementData { element: e.clone(), c })
+    Ok(ElementData { element: e.clone(), c, share })
 }
 
 /// The model's lumped port `lp`: its gap's line integrals.
-pub(super) fn prepare(lp: &LumpedPort, space: &Space) -> Result<LumpedData> {
+pub(super) fn prepare(lp: &LumpedPort, space: &Space, share: f64) -> Result<LumpedData> {
     let c = match lp.across {
         Some(across) => sheet_vector(space, lp.from, lp.to, across)?,
         None => band_vector(space, lp.from, lp.to, lp.radius)?,
@@ -111,7 +118,7 @@ pub(super) fn prepare(lp: &LumpedPort, space: &Space) -> Result<LumpedData> {
     if c.is_empty() {
         return Err(invalid(format!("lumped port `{}`", lp.name), "its gap lies outside the mesh (inside a conductor?)"));
     }
-    Ok(LumpedData { name: lp.name.clone(), impedance: lp.impedance.get(), voltage: C::new(lp.voltage[0], lp.voltage[1]), c })
+    Ok(LumpedData { name: lp.name.clone(), impedance: lp.impedance.get(), voltage: C::new(lp.voltage[0], lp.voltage[1]), c, share })
 }
 
 /// The port's vector: the line integral along the gap, or for a band of radius r its average

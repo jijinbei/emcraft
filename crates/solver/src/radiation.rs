@@ -315,9 +315,10 @@ impl Driven {
                 }
             }
         }
-        // Lumped ports: their sources drive −jωμ₀ (V_s/R) c (see the system's rank-one terms).
+        // Lumped ports: their sources drive −jωμ₀ (V_s/R) c (see the system's rank-one terms),
+        // the mesh's share of it in a symmetry plane.
         for l in &self.lumped {
-            let f = C::new(0.0, -omega * MU0) * l.voltage / l.impedance;
+            let f = C::new(0.0, -omega * MU0) * l.voltage * l.share / l.impedance;
             for &(i, ci) in &l.c {
                 b[i] += f * ci;
             }
@@ -482,6 +483,11 @@ impl Driven {
             .rule(C0 / frequency / 12.0)
             .into_iter()
             .map(|(point, weight, normal)| {
+                // Beyond a symmetry plane, the image of the field inside (`fields`).
+                if !self.symmetry.is_empty() {
+                    let (e, h) = self.fields(x, frequency, point).ok_or_else(|| invalid("Huygens surface", "a point of it lies outside the mesh"))?;
+                    return Ok(HuygensSample { point, weight, normal, e, h });
+                }
                 let (t, _) =
                     emcraft_mesh::locate(&self.mesh, point).ok_or_else(|| invalid("Huygens surface", "a point of it lies outside the mesh"))?;
                 let el = match elements.entry(t) {

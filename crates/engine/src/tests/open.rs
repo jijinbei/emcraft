@@ -300,3 +300,45 @@ fn a_radiation_sweep_keeps_the_antennas_terminals_and_the_last_solution() {
     assert!(s.execute("solve.radiation_sweep", &json!({"start": 9, "stop": 10, "points": 65})).is_err());
     assert!(s.execute("circuit.cascade", &json!({"blocks": [{"type": "line", "length": 1}], "source": "nothing", "start": 9, "stop": 10})).is_err());
 }
+
+#[test]
+fn a_gap_in_symmetry_planes_is_solved_on_a_quarter_of_an_open_box() {
+    // A Hertzian dipole (1 mm along z on the box's axis) is mirror-symmetric about the planes
+    // x = 20 and y = 20 through it, its field even there: two magnetic walls keep a quarter of
+    // the box and its PML, the gap a quarter of its current. Re Z = 80π²(l/λ)² = 0.8785 Ω for
+    // l = 1 mm at 10 GHz (Balanis, Antenna Theory, 4th ed., §4.2) as on the whole box, and the
+    // Huygens box, sampled through the images, takes the power the gap gives.
+    let solve = |planes: &[&str]| {
+        let mut s = Session::new();
+        s.execute("geometry.solid", &json!({"shape": "box", "size": [40, 40, 40]})).unwrap();
+        s.execute("model.open", &json!({"thickness": 10})).unwrap();
+        s.execute("model.port.lumped", &json!({"name": "gap", "from": [20, 20, 19.5], "to": [20, 20, 20.5], "impedance": 1e9, "voltage": 1e9}))
+            .unwrap();
+        for axis in planes {
+            s.execute("model.symmetry", &json!({"axis": axis, "kind": "magnetic"})).unwrap();
+        }
+        s.execute("mesh.generate", &json!({"per_wavelength": 4, "frequency": 10})).unwrap();
+        let r = s.execute("solve.radiation", &json!({"frequency": 10})).unwrap();
+        (r["ports"][0]["impedance"]["re"].as_f64().unwrap(), r["radiation_efficiency"].as_f64().unwrap())
+    };
+    let (whole, _) = solve(&[]);
+    let (quarter, efficiency) = solve(&["x", "y"]);
+    assert!((quarter / 0.8785 - 1.0).abs() < 0.1, "{quarter}");
+    assert!((quarter / whole - 1.0).abs() < 0.05, "{quarter} {whole}");
+    approx::assert_abs_diff_eq!(efficiency, 1.0, epsilon = 0.05);
+}
+
+#[test]
+fn a_gap_off_a_symmetry_plane_or_on_an_electric_one_is_refused() {
+    let mut s = Session::new();
+    s.execute("geometry.solid", &json!({"shape": "box", "size": [40, 40, 40]})).unwrap();
+    s.execute("model.open", &json!({"thickness": 10})).unwrap();
+    s.execute("model.port.lumped", &json!({"name": "gap", "from": [21, 20, 19.5], "to": [21, 20, 20.5]})).unwrap();
+    // Off the plane x = 20: its image would be a second source.
+    assert!(s.execute("model.symmetry", &json!({"axis": "x", "kind": "magnetic"})).is_err());
+    // In the plane y = 20 but an electric wall there shorts it.
+    assert!(s.execute("model.symmetry", &json!({"axis": "y", "kind": "electric"})).is_err());
+    s.execute("model.symmetry", &json!({"axis": "y", "kind": "magnetic"})).unwrap();
+    // Sources still are not taken with a plane.
+    assert!(s.execute("source.dipole", &json!({"at": [20, 20, 20], "length": 1})).is_err() || s.model.symmetry_issue().is_some());
+}

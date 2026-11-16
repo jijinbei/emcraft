@@ -433,8 +433,11 @@ impl Driven {
                 }
             })
             .collect::<Result<Vec<_>>>()?;
-        let lumped = model.lumped.iter().map(|lp| lumped::prepare(lp, &space)).collect::<Result<Vec<_>>>()?;
-        let elements = model.elements.iter().map(|e| lumped::prepare_element(e, &space)).collect::<Result<Vec<_>>>()?;
+        // A gap in a symmetry plane: the mesh holds half its current per plane.
+        let tol = 1e-9 * model.bounds().map_or(1.0, |b| (b.max - b.min).norm());
+        let share = |a, b| model.domain.symmetry.iter().map(|p| p.share(a, b, tol)).product::<f64>();
+        let lumped = model.lumped.iter().map(|lp| lumped::prepare(lp, &space, share(lp.from, lp.to))).collect::<Result<Vec<_>>>()?;
+        let elements = model.elements.iter().map(|e| lumped::prepare_element(e, &space, share(e.from, e.to))).collect::<Result<Vec<_>>>()?;
         // (The ports' rank-one terms border the matrix instead of filling it: see `system`.)
         let gaps = lumped.iter().map(|l| &l.c).chain(elements.iter().map(|e| &e.c));
         let pattern = space.pattern(gaps.map(|c| c.iter().map(|(u, _)| *u).collect()))?;
