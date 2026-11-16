@@ -78,6 +78,14 @@ impl Shape {
         Shape::Line { a, b, width, color }
     }
 
+    /// The same text at size `scale` ([`crate::text`]'s); other shapes as they are.
+    pub fn sized(self, scale: usize) -> Shape {
+        match self {
+            Shape::Text { at, text, color, align, up, .. } => Shape::Text { at, text, scale, color, align, up },
+            other => other,
+        }
+    }
+
     /// A label at the charts' size, its start at `at` (top), written left to right.
     pub fn label(at: [f64; 2], text: impl Into<String>, color: Rgb) -> Shape {
         Shape::Text { at, text: text.into(), scale: LABEL_SCALE, color, align: Align::Left, up: false }

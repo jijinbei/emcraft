@@ -248,7 +248,7 @@ pub fn drawing(chart: &Chart, width: usize, height: usize, palette: &Palette) ->
     }
     // Without its frame, a chart keeps its axes' names, under it.
     let frame = if chart.look.frame {
-        axes::frame_shapes([x0, y0, pw, ph], &ax, &ay, ink, chart.look.grid.then_some(palette.grid))
+        axes::frame_shapes([x0, y0, pw, ph], &ax, &ay, ink, chart.look.grid.then_some(palette.grid), crate::shapes::LABEL_SCALE)
     } else {
         let named = [&ax.label, &ay.label].into_iter().filter(|l| !l.is_empty()).map(String::as_str).collect::<Vec<_>>().join(" · ");
         vec![Shape::label([x0 + pw / 2.0, y0 + ph + axes::X_NAME_BELOW], named, ink).aligned(Align::Center)]

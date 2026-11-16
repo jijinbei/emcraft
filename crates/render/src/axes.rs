@@ -177,15 +177,18 @@ impl Layout {
     }
 }
 
-/// Draws a frame, tick marks and labels for a plot area (x0, y0, w, h) in pixels.
-pub fn frame(c: &mut Canvas, area: [f64; 4], x: &Axis, y: &Axis, ink: Rgb, grid: Option<Rgb>) {
-    crate::shapes::paint(c, &frame_shapes(area, x, y, ink, grid));
+/// Draws a frame, tick marks and labels for a plot area (x0, y0, w, h) in pixels, no grid, its
+/// labels at text size `scale` ([`crate::shapes::LABEL_SCALE`] on the charts).
+pub fn frame(c: &mut Canvas, area: [f64; 4], x: &Axis, y: &Axis, ink: Rgb, scale: usize) {
+    crate::shapes::paint(c, &frame_shapes(area, x, y, ink, None, scale));
 }
 
 /// A plot area's frame (x0, y0, w, h in pixels) as shapes: the grid when asked, the tick marks
-/// and their numbers, the frame, and the axes' names (y's written upwards).
-pub fn frame_shapes(area: [f64; 4], x: &Axis, y: &Axis, ink: Rgb, grid: Option<Rgb>) -> Vec<Shape> {
+/// and their numbers, the frame, and the axes' names (y's written upwards), the labels at text
+/// size `scale` and set off from the frame in proportion.
+pub fn frame_shapes(area: [f64; 4], x: &Axis, y: &Axis, ink: Rgb, grid: Option<Rgb>, scale: usize) -> Vec<Shape> {
     let [x0, y0, w, h] = area;
+    let k = scale as f64 / crate::shapes::LABEL_SCALE as f64;
     let (xs, ys) = (x.span(), y.span());
     let (xl, yl) = (x.is_log(), y.is_log());
     let px = |v: f64| x0 + fraction(v, xs, xl) * w;
@@ -195,7 +198,7 @@ pub fn frame_shapes(area: [f64; 4], x: &Axis, y: &Axis, ink: Rgb, grid: Option<R
         if a.is_log() { log_ticks(lo, hi, count) } else { ticks(lo, hi, count) }
     };
     let line = Shape::line;
-    let text = |at: [f64; 2], s: String, align: Align| Shape::label(at, s, ink).aligned(align);
+    let text = |at: [f64; 2], s: String, align: Align| Shape::label(at, s, ink).sized(scale).aligned(align);
     let labelled = |ts: Vec<f64>| {
         let labels = tick_labels(&ts);
         ts.into_iter().zip(labels).collect::<Vec<_>>()
@@ -203,17 +206,17 @@ pub fn frame_shapes(area: [f64; 4], x: &Axis, y: &Axis, ink: Rgb, grid: Option<R
     let along_x = labelled(marks(x, 6)).into_iter().flat_map(|(t, label)| {
         let p = px(t);
         let ruled = grid.map(|g| line([p, y0], [p, y0 + h], 1.0, g));
-        ruled.into_iter().chain([line([p, y0 + h], [p, y0 + h + 5.0], 1.0, ink), text([p, y0 + h + 9.0], label, Align::Center)])
+        ruled.into_iter().chain([line([p, y0 + h], [p, y0 + h + 5.0 * k], k, ink), text([p, y0 + h + 9.0 * k], label, Align::Center)])
     });
     let along_y = labelled(marks(y, 5)).into_iter().flat_map(|(t, label)| {
         let p = py(t);
         let ruled = grid.map(|g| line([x0, p], [x0 + w, p], 1.0, g));
-        ruled.into_iter().chain([line([x0 - 5.0, p], [x0, p], 1.0, ink), text([x0 - 9.0, p - 7.0], label, Align::Right)])
+        ruled.into_iter().chain([line([x0 - 5.0 * k, p], [x0, p], k, ink), text([x0 - 9.0 * k, p - 7.0 * k], label, Align::Right)])
     });
-    let sides = outline([x0, y0, w, h], 1.2, ink);
+    let sides = outline([x0, y0, w, h], 1.2 * k, ink);
     let names = [
-        text([x0 + w / 2.0, y0 + h + X_NAME_BELOW], x.label.clone(), Align::Center),
-        text([x0 - Y_NAME_LEFT, y0 + h / 2.0], y.label.clone(), Align::Center).upwards(),
+        text([x0 + w / 2.0, y0 + h + X_NAME_BELOW * k], x.label.clone(), Align::Center),
+        text([x0 - Y_NAME_LEFT * k, y0 + h / 2.0], y.label.clone(), Align::Center).upwards(),
     ];
     along_x.chain(along_y).chain(sides).chain(names).collect()
 }

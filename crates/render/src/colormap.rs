@@ -3,9 +3,10 @@
 //! linearly in sRGB; and [`ColourScale`], a map with its range (and a decibel scale for a
 //! magnitude), which the 3D view's shader, its colour bar and a probe's reading all take.
 //!
-//! The diverging map runs from a deep blue through a light grey to a deep red: its ends are dark
-//! and saturated enough to stand off both a white and a dark background, its middle a grey
-//! a shade below white, so a field near zero still reads as the plane's own and not as the page.
+//! Both run from blue to red, weak or negative to strong or positive. The diverging map runs
+//! from a deep blue through a light grey to a deep red: its ends are dark and saturated enough
+//! to stand off both a white and a dark background, its middle a grey a shade below white, so a
+//! field near zero still reads as the plane's own and not as the page.
 
 use crate::Rgb;
 
@@ -22,17 +23,19 @@ const DIVERGING: [Rgb; 9] = [
     Rgb(108, 14, 30),
 ];
 
-/// The sequential map's stops, 0 to 1: dark to bright.
+/// The sequential map's stops, 0 to 1: blue (weak) through a pale middle to red (strong), the
+/// reading people take from a field picture without a key; darker at both ends than in the middle
+/// only where the hue already tells them apart.
 const SEQUENTIAL: [Rgb; 9] = [
-    Rgb(18, 14, 56),
-    Rgb(52, 22, 98),
-    Rgb(98, 30, 120),
-    Rgb(146, 44, 116),
-    Rgb(192, 64, 92),
-    Rgb(226, 98, 64),
-    Rgb(246, 144, 46),
-    Rgb(250, 196, 72),
-    Rgb(252, 240, 140),
+    Rgb(30, 50, 130),
+    Rgb(44, 96, 178),
+    Rgb(70, 150, 210),
+    Rgb(140, 200, 225),
+    Rgb(225, 232, 210),
+    Rgb(250, 205, 130),
+    Rgb(240, 140, 70),
+    Rgb(210, 70, 45),
+    Rgb(150, 20, 30),
 ];
 
 /// How many stops a map has (the shader's array).
@@ -203,13 +206,19 @@ mod tests {
         };
         let (white, dark) = (Rgb(255, 255, 255), Rgb(27, 36, 51));
         assert!(ratio(DIVERGING[0], white) >= 4.5 && ratio(DIVERGING[8], white) >= 4.5);
-        assert!(ratio(SEQUENTIAL[8], dark) >= 4.5);
+        // Both ends of the magnitudes' map read on a white page; the strong end on a dark one too.
+        assert!(ratio(SEQUENTIAL[0], white) >= 4.5 && ratio(SEQUENTIAL[8], white) >= 4.5);
+        assert!(ratio(SEQUENTIAL[8], dark) >= 1.5);
         assert_ne!(DIVERGING[4], white);
         // Every step darker or lighter in order: the map reads one way from each end.
         let l: Vec<f64> = DIVERGING.iter().map(|c| lum(*c)).collect();
         assert!(l[..5].windows(2).all(|w| w[0] < w[1]) && l[4..].windows(2).all(|w| w[0] > w[1]));
+        // The magnitudes' map: blue at the weak end, red at the strong, its hue turning one way
+        // (blue's share falling, red's rising) and lightest in the middle.
+        assert!(SEQUENTIAL[0].2 > SEQUENTIAL[0].0 && SEQUENTIAL[8].0 > SEQUENTIAL[8].2);
+        assert!(SEQUENTIAL.windows(2).all(|w| f64::from(w[1].0) / f64::from(w[1].2.max(1)) > f64::from(w[0].0) / f64::from(w[0].2.max(1))));
         let l: Vec<f64> = SEQUENTIAL.iter().map(|c| lum(*c)).collect();
-        assert!(l.windows(2).all(|w| w[0] < w[1]));
+        assert!(l[..5].windows(2).all(|w| w[0] < w[1]) && l[4..].windows(2).all(|w| w[0] > w[1]));
     }
 
     #[test]

@@ -134,15 +134,28 @@ fn wrap(text: &str, room: f64, scale: usize) -> Vec<String> {
     lines
 }
 
-/// The header of a plot drawn `width` pixels wide: the title's lines, the subtitle's.
-fn header(plot: &FieldPlot, width: f64) -> (Vec<String>, Vec<String>) {
-    let room = (width - LEFT - 10.0).max(100.0);
-    (wrap(&plot.title, room, 2), wrap(&plot.subtitle, room, 2))
+/// The text size of a plot `width` pixels wide ([`crate::text`]'s scale): larger than the
+/// charts' on a wide picture, so its words still read when it is shown smaller (a report's
+/// column, a phone).
+fn text_scale(width: usize) -> usize {
+    if width >= 1000 { 3 } else { crate::shapes::LABEL_SCALE }
 }
 
-/// The plane's top below a header of `lines` lines (two fit the usual margin).
-fn top(lines: usize) -> f64 {
-    TOP + LINE * lines.saturating_sub(2) as f64
+/// The margins and line spacing grown with the text: `k` times the charts' (k = 1 at their size).
+fn grown(width: usize) -> f64 {
+    text_scale(width) as f64 / crate::shapes::LABEL_SCALE as f64
+}
+
+/// The header of a plot drawn `width` pixels wide: the title's lines, the subtitle's.
+fn header(plot: &FieldPlot, width: f64, ts: usize) -> (Vec<String>, Vec<String>) {
+    let k = ts as f64 / crate::shapes::LABEL_SCALE as f64;
+    let room = (width - LEFT * k - 10.0).max(100.0);
+    (wrap(&plot.title, room, ts), wrap(&plot.subtitle, room, ts))
+}
+
+/// The plane's top below a header of `lines` lines (two fit the usual margin), margins grown `k` times.
+fn top(lines: usize, k: f64) -> f64 {
+    (TOP + LINE * lines.saturating_sub(2) as f64) * k
 }
 const BOTTOM: f64 = 90.0;
 
@@ -152,15 +165,16 @@ pub use crate::axes::Layout;
 /// ratio, capped at 6000 pixels high so portrait plots retain readable axes when scrolled).
 pub fn layout_of(plot: &FieldPlot, width: usize) -> Layout {
     let (x, y) = (plot.x.span(), plot.y.span());
-    let pw = (width as f64 - LEFT - RIGHT).max(100.0);
+    let k = grown(width);
+    let pw = (width as f64 - (LEFT + RIGHT) * k).max(100.0);
     let ph = (pw * (y.1 - y.0) / (x.1 - x.0)).clamp(60.0, 6000.0);
     let pw = if ph >= 6000.0 { 6000.0 * (x.1 - x.0) / (y.1 - y.0) } else { pw };
-    let (title, subtitle) = header(plot, pw + LEFT + RIGHT);
-    let top = top(title.len() + subtitle.len());
+    let (title, subtitle) = header(plot, pw + (LEFT + RIGHT) * k, text_scale(width));
+    let top = top(title.len() + subtitle.len(), k);
     Layout {
-        width: (pw + LEFT + RIGHT).ceil() as usize,
-        height: (ph + top + BOTTOM).ceil() as usize,
-        plane: [LEFT, top, pw, ph],
+        width: (pw + (LEFT + RIGHT) * k).ceil() as usize,
+        height: (ph + top + BOTTOM * k).ceil() as usize,
+        plane: [LEFT * k, top, pw, ph],
         x,
         y,
         log: [false, false],
@@ -176,11 +190,12 @@ pub fn draw(plot: &FieldPlot, width: usize, palette: &Palette) -> Canvas {
     let mut c = Canvas::new(layout.width, layout.height, palette.ground);
     let ink = palette.ink;
     let to_px = |p: [f64; 2]| layout.to_pixels(p);
+    let (ts, k) = (text_scale(width), grown(width));
 
     // The title and the subtitle, wrapped to the picture's width.
-    let (title, subtitle) = header(plot, layout.width as f64);
+    let (title, subtitle) = header(plot, layout.width as f64, ts);
     for (i, (line, colour)) in title.iter().map(|l| (l, ink)).chain(subtitle.iter().map(|l| (l, palette.ink_dim))).enumerate() {
-        c.text(LEFT, 10.0 + LINE * i as f64, line, 2, colour);
+        c.text(LEFT * k, 10.0 * k + LINE * k * i as f64, line, ts, colour);
     }
 
     if let Some(s) = &plot.scalar {
@@ -199,7 +214,7 @@ pub fn draw(plot: &FieldPlot, width: usize, palette: &Palette) -> Canvas {
             }
         }
         // The colour bar.
-        let (bx, by, bw, bh) = (x0 + pw + 22.0, y0, 18.0, ph);
+        let (bx, by, bw, bh) = (x0 + pw + 22.0 * k, y0, 18.0 * k, ph);
         for k in 0..bh.ceil() as usize {
             let t = 1.0 - k as f64 / bh.max(1.0);
             c.rect(bx, by + k as f64, bw, 1.0, scale.at(t));
@@ -209,10 +224,10 @@ pub fn draw(plot: &FieldPlot, width: usize, palette: &Palette) -> Canvas {
             c.line(a, b, 1.0, ink);
         }
         for (t, _) in scale.ticks() {
-            c.text(bx + bw + 5.0, by + (1.0 - t) * bh - 7.0, &scale.tick_text(t), 2, ink);
+            c.text(bx + bw + 5.0 * k, by + (1.0 - t) * bh - 7.0 * k, &scale.tick_text(t), ts, ink);
         }
         let title = if scale.db.is_some() { format!("{} (dB)", s.label) } else { s.label.clone() };
-        c.text(bx - 10.0, y0 + ph + 34.0, &title, 2, ink);
+        c.text(bx - 10.0 * k, y0 + ph + 34.0 * k, &title, ts, ink);
     }
 
     for l in &plot.lines {
@@ -230,31 +245,32 @@ pub fn draw(plot: &FieldPlot, width: usize, palette: &Palette) -> Canvas {
         for (p, v) in &set.arrows {
             let q = to_px(*p);
             // Arrows above the scale (a source's spike) stop at the full length.
-            let k = full / scale.max((v[0] * v[0] + v[1] * v[1]).sqrt());
+            let per = full / scale.max((v[0] * v[0] + v[1] * v[1]).sqrt());
             // Screen y points down.
-            let d = [v[0] * k, -v[1] * k];
+            let d = [v[0] * per, -v[1] * per];
             if !(d[0].is_finite() && d[1].is_finite()) || (d[0] * d[0] + d[1] * d[1]).sqrt() < 2.5 {
                 continue;
             }
             let a = [q[0] - d[0] / 2.0, q[1] - d[1] / 2.0];
             let b = [q[0] + d[0] / 2.0, q[1] + d[1] / 2.0];
-            let head = (0.35 * (d[0] * d[0] + d[1] * d[1]).sqrt()).clamp(3.0, 9.0);
-            c.arrow(a, b, 3.2, head + 1.5, palette.halo);
-            c.arrow(a, b, 1.6, head, color);
+            // Bold enough to read over the colours when the picture is shown small.
+            let head = (0.4 * (d[0] * d[0] + d[1] * d[1]).sqrt()).clamp(4.0, 14.0) * k;
+            c.arrow(a, b, 5.0 * k, head + 2.5 * k, palette.halo);
+            c.arrow(a, b, 2.6 * k, head, color);
         }
     }
 
-    axes::frame(&mut c, [x0, y0, pw, ph], &plot.x, &plot.y, ink, None);
+    axes::frame(&mut c, [x0, y0, pw, ph], &plot.x, &plot.y, ink, ts);
 
     // Legend: one sample arrow per vector field, with its halo as over the field.
-    let mut lx = LEFT;
-    let ly = y0 + ph + 62.0;
+    let mut lx = LEFT * k;
+    let ly = y0 + ph + 62.0 * k;
     for set in &plot.arrows {
-        let (a, b) = ([lx, ly + 7.0], [lx + 28.0, ly + 7.0]);
-        c.arrow(a, b, 3.2, 9.5, palette.halo);
-        c.arrow(a, b, 1.6, 8.0, palette.pen(set.pen));
-        c.text(lx + 36.0, ly, &set.label, 2, ink);
-        lx += 46.0 + Canvas::text_width(&set.label, 2) as f64 + 20.0;
+        let (a, b) = ([lx, ly + 7.0 * k], [lx + 28.0 * k, ly + 7.0 * k]);
+        c.arrow(a, b, 5.0 * k, 12.0 * k, palette.halo);
+        c.arrow(a, b, 2.6 * k, 10.0 * k, palette.pen(set.pen));
+        c.text(lx + 36.0 * k, ly, &set.label, ts, ink);
+        lx += 46.0 * k + Canvas::text_width(&set.label, ts) as f64 + 20.0 * k;
     }
     c
 }
@@ -342,7 +358,7 @@ mod tests {
         let lines = wrap("Re(F e$^{j omega t}$) at one two three four five six seven", 200.0, 2);
         assert!(lines.len() > 1, "{lines:?}");
         assert!(lines.iter().any(|l| l.contains("$^{j omega t}$")), "math kept whole: {lines:?}");
-        assert_eq!(top(2), TOP);
-        assert!(top(4) > TOP);
+        assert_eq!(top(2, 1.0), TOP);
+        assert!(top(4, 1.0) > TOP);
     }
 }
