@@ -214,6 +214,17 @@ impl Symmetry {
         if let Some(k) = unmirrored(m.inclusions().iter().map(|inc| (inc.bounds(), inc.material.is_none())).collect()) {
             return Err(format!("inclusion {} has no mirror image about the plane: the solid is not symmetric about it", k + 1));
         }
+        // An inclusion the plane cuts would end on the plane in a cap of its own, flush with the
+        // half's cut face: the mesher does not join the two yet.
+        if let Some(k) = m.inclusions().iter().position(|inc| {
+            let b = inc.bounds();
+            b.min[d] < self.at - tol && b.max[d] > self.at + tol
+        }) {
+            return Err(format!(
+                "not supported yet: inclusion {} across the plane (a body inside the region, cut in two by it); keep inclusions to either side",
+                k + 1
+            ));
+        }
         if !m.sources.is_empty() {
             return Err("not supported yet: a symmetry plane with sources (dipoles, a plane wave)".into());
         }

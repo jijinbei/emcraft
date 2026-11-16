@@ -184,6 +184,22 @@ pub fn region_surface(model: &Model, size: Metres) -> Result<crate::csg::Surface
 /// [`solid`] with its [`SolidOptions`]: sizes per material, curved edges or straight, local
 /// refinements.
 pub fn solid_with(model: &Model, options: &SolidOptions) -> Result<Mesh> {
+    // The half a symmetry plane keeps holds the inclusions below it; those wholly beyond it are
+    // their images' (the model's check refuses one across it).
+    let mirrored;
+    let model = match beyond_planes(model) {
+        gone if gone.is_empty() => model,
+        gone => {
+            let mut m = model.clone();
+            let mut bodies = m.bodies_mut();
+            for k in gone.into_iter().rev() {
+                bodies.remove(k);
+            }
+            drop(bodies);
+            mirrored = m;
+            &mirrored
+        }
+    };
     // A sector keeps the inclusions inside it and those across its cut faces (cut with it);
     // those outside it are their images'.
     let kept;
@@ -301,6 +317,22 @@ fn halved(model: &Model, shape: &Shape) -> Result<(Shape, Vec<Feature>)> {
         }
     }
     Ok((shape, cuts))
+}
+
+/// The bodies of the inclusions wholly beyond a symmetry plane (above it), ascending.
+fn beyond_planes(model: &Model) -> Vec<usize> {
+    let Some(bounds) = model.bounds() else { return Vec::new() };
+    let tol = GEOMETRY_TOLERANCE * (bounds.max - bounds.min).norm();
+    let view = model.mesh_view();
+    let mut gone: Vec<usize> = view
+        .inclusions
+        .iter()
+        .zip(&view.inclusion_body)
+        .filter(|(inc, _)| model.domain.symmetry.iter().any(|p| inc.bounds().min[p.axis.index()] >= p.at - tol))
+        .map(|(_, k)| *k)
+        .collect();
+    gone.sort_unstable();
+    gone
 }
 
 /// `shape` stopped at `at` across axis `d`, if it is a box, a cylinder along z cut across z, or

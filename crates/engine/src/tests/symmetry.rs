@@ -6,6 +6,7 @@
 use serde_json::{Value, json};
 
 use super::s;
+use crate::Session;
 
 /// The template `name` at `size` (mm) solved at `frequencies` (GHz), whole and on the half below
 /// the plane across `axis` closed by a `kind` wall: the two replies.
@@ -115,4 +116,23 @@ fn symmetry_planes_are_found_with_the_walls_the_ports_ask_for() {
     s.execute("geometry.import", &horn).unwrap();
     let e = s.execute("model.symmetry.find", &json!({})).unwrap_err();
     assert!(e.to_string().contains("open problem"), "{e}");
+}
+
+#[test]
+fn an_inclusion_across_a_symmetry_plane_is_refused_before_meshing() {
+    // Cut in two, its cap would lie flush with the half's cut face, which the mesher does not
+    // join yet: meshing failed on "triangles intersect"; now the plane is refused up front.
+    let mut s = Session::new();
+    s.execute("model.material.create", &json!({"name": "water", "eps_r": 10})).unwrap();
+    s.execute("geometry.solid", &json!({"shape": "box", "size": [100, 80, 60]})).unwrap();
+    s.execute("geometry.inclusion", &json!({"shape": "box", "size": [30, 30, 20], "at": [35, 25, 5], "material": "water"})).unwrap();
+    let e = s.execute("model.symmetry", &json!({"axis": "x", "kind": "magnetic"})).unwrap_err();
+    assert!(e.to_string().contains("inclusion 1 across the plane"), "{e}");
+    // Two, a mirror pair either side of it: taken, and they mesh.
+    s.execute("geometry.body.delete", &json!({"body": "body 1"})).unwrap();
+    for x in [15, 55] {
+        s.execute("geometry.inclusion", &json!({"shape": "box", "size": [30, 30, 20], "at": [x, 25, 5], "material": "water"})).unwrap();
+    }
+    s.execute("model.symmetry", &json!({"axis": "x", "kind": "magnetic"})).unwrap();
+    s.execute("mesh.generate", &json!({"size": 12})).unwrap();
 }
