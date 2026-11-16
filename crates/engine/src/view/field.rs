@@ -300,6 +300,14 @@ pub fn fields_at(session: &Session, view: &FieldView, points: &[Point3]) -> Resu
     Ok(Probed { frequency, values: points.iter().map(|p| driven.fields(field, frequency, *p)).collect() })
 }
 
+/// The mesh of a view's solution and E, H (V/m, A/m) at its corner nodes (averaged over the
+/// tetrahedra round each, [`emcraft_solver::driven::Driven::node_fields`]), with the frequency
+/// solved (Hz).
+pub fn node_fields<'s>(session: &'s Session, view: &FieldView) -> Result<(&'s emcraft_model::Mesh, Vec<(CVec3, CVec3)>, f64)> {
+    let Solution { driven, field, frequency, .. } = solution(session, view)?;
+    Ok((&driven.mesh, driven.node_fields(field, frequency)?, frequency))
+}
+
 /// The fields at points: the frequency they were solved at (Hz) and (E, H) at each point (V/m,
 /// A/m), `None` outside the mesh.
 #[derive(Clone, Debug)]
@@ -502,6 +510,21 @@ impl Probe {
 }
 
 impl PlaneSamples {
+    /// The grid's points in the display's length unit (x, y, z) with E and H there, row after
+    /// row from the bottom, the points outside the mesh left out; `show` turns a length (m) into
+    /// the display's unit, as the plot's axes are.
+    pub fn points(&self, show: impl Fn(f64) -> f64) -> impl Iterator<Item = ([f64; 3], CVec3, CVec3)> + '_ {
+        let [hk, vk, nk] = self.axes;
+        let along = |a: &Axis, i: usize, n: usize| a.min + (a.max - a.min) * i as f64 / (n - 1).max(1) as f64;
+        let normal = show(self.normal);
+        self.grid.iter().enumerate().filter_map(move |(k, v)| {
+            let (e, h) = (*v)?;
+            let mut c = [0.0; 3];
+            (c[hk], c[vk], c[nk]) = (along(&self.x, k % self.nx, self.nx), along(&self.y, k / self.nx, self.ny), normal);
+            Some((c, e, h))
+        })
+    }
+
     /// The model axis normal to the plane (0 x, 1 y, 2 z).
     pub fn normal_axis(&self) -> usize {
         self.axes[2]

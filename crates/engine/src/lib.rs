@@ -39,6 +39,7 @@ pub mod breakdown;
 mod cmd;
 mod elements;
 mod estimate;
+mod export;
 pub mod expr;
 mod geometry;
 pub use geometry::{DesignParameter, ImportInspection, ImportedBody, ImportedDesign, designs};

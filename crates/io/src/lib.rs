@@ -1,5 +1,6 @@
 //! EMCraft's geometry import: closed triangulated surfaces read from STL (binary and ASCII,
-//! [`stl`]) and 3MF packages ([`threemf`]), in metres, their triangles grouped into faces.
+//! [`stl`]) and 3MF packages ([`threemf`]), in metres, their triangles grouped into faces; and
+//! the fields' export as VTK unstructured grids ([`vtu`]).
 //!
 //! Files are untrusted: sizes, counts and coordinates are capped and every index is checked;
 //! every problem is an [`Error`], never a panic. Whether a surface bounds a solid (closed,
@@ -12,6 +13,7 @@ pub mod package;
 pub mod solidcraft;
 pub mod stl;
 pub mod threemf;
+pub mod vtu;
 
 use std::collections::HashMap;
 use std::path::Path;

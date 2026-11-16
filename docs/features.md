@@ -1542,6 +1542,19 @@ E (V/m) and H (A/m), complex, at points, for a solved frequency and an excited p
 | `at` | array | length | yes | points `[[x, y, z], …]` |
 | `excitation` | string |  | no | the excited port (default the driven one: view.driven) |
 
+## `results.field.export` — Export fields
+
+Writes a solution's fields as numbers for other programs, by the file's extension: `.csv` the plane `view.field` draws (`plane`, `at`), a header then one row a point inside the mesh — x, y, z in the display's length unit and E (V/m), H (A/m) as real and imaginary parts; `.vtu` the whole mesh as a VTK unstructured grid (ParaView, VisIt, meshio) — E and H (real and imaginary, and |E|, |H| peak) at every node, averaged over the tetrahedra round it, and each tetrahedron's material. The mesh's own nodes only (no images beyond symmetry planes).
+
+| Parameter | Type | Unit | Required | Description |
+|---|---|---|---|---|
+| `path` | string |  | yes | the file: `.csv` (a plane) or `.vtu` (the whole mesh) |
+| `frequency` | number | frequency | no | a solved frequency (the nearest is used); required unless `mode` is given |
+| `mode` | integer |  | no | an eigenmode (1 = the lowest) instead of a driven solution |
+| `plane` | string |  | no | `h` (H-plane, default), `e` (E-plane) or `cross` (cross-section) |
+| `at` | number | length | no | the plane's position along its normal (default the middle) |
+| `excitation` | string |  | no | the excited port (default the driven one: view.driven) |
+
 ## `view.revolution_field` — Body of revolution field
 
 Writes a PNG of the field of the model as a body of revolution (as solve.revolution.frequency solves it) on its meridian half-plane, for a unit wave of `port`'s first mode of order `m` into it: |E| in colour (E_r, E_z and E_φ together) and (E_r, E_z) at φ = 0 as arrows, the axis on the left; outside the body blank.

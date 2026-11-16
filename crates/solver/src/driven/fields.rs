@@ -64,6 +64,37 @@ impl Driven {
         Some((self.turned_on(e, turns), self.turned_on(h, turns)))
     }
 
+    /// E and H (V/m, A/m) at each corner node of the mesh: every tetrahedron's field at its
+    /// corner, averaged over the tetrahedra round the node, in the mesh's order. The tangential
+    /// parts agree between neighbours; the normal ones jump at material interfaces and charged
+    /// walls, where the average is a picture's, not the field on either side. The mesh's own
+    /// nodes only: no images beyond symmetry planes or rotated sectors.
+    pub fn node_fields(&self, x: &[C], frequency: f64) -> Result<Vec<(CVec3, CVec3)>> {
+        let n = self.mesh.nodes.len();
+        let mut sum = crate::memory::filled(n, (CVec3::ZERO, CVec3::ZERO), "the fields at the nodes")?;
+        let mut count = crate::memory::zeros::<u32>(n, "the tetrahedra round each node")?;
+        for (t, tet) in self.mesh.tets.iter().enumerate() {
+            let el = self.element_of(t)?;
+            for (k, &node) in tet.iter().enumerate() {
+                let mut l = [0.0; 4];
+                l[k] = 1.0;
+                let (e, h) = (self.field_in((t, &el), l, x, frequency, Field::E), self.field_in((t, &el), l, x, frequency, Field::H));
+                if let (Some(s), Some(c)) = (sum.get_mut(node as usize), count.get_mut(node as usize)) {
+                    *s = (s.0 + e, s.1 + h);
+                    *c += 1;
+                }
+            }
+        }
+        Ok(sum
+            .into_iter()
+            .zip(count)
+            .map(|((e, h), c)| {
+                let k = C::new(f64::from(c.max(1)), 0.0);
+                (e / k, h / k)
+            })
+            .collect())
+    }
+
     /// The field `which` at barycentric coordinates `l` of tetrahedron `t` (its element `el`).
     pub(crate) fn field_in(&self, (t, el): (usize, &Element), l: [f64; 4], x: &[C], frequency: f64, which: Field) -> CVec3 {
         let values = match which {
