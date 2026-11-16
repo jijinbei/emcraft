@@ -4,11 +4,14 @@ name: Build
 # request, each tried once (the CLI lists its commands and solves a small cavity) and kept as the
 # run's artifacts: `emcraft-linux-x86_64`, `emcraft-windows-x86_64`, `emcraft-macos-arm64`, each
 # a folder with `emcraft`, `emcraft-cli` and the licences. The Windows installer is built
-# separately, cross-compiled (release-windows.yml).
+# separately, cross-compiled (release-windows.yml). A `v*` tag also packs each folder as an archive
+# (`emcraft-<tag>-<platform>.tar.gz`, `.zip` on Windows) and attaches them, with their SHA-256
+# sums, to that release, whose notes are .github/release-notes.md.
 
 on:
   push:
     branches: [develop, main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -84,3 +87,43 @@ jobs:
           path: emcraft-${{ matrix.name }}
           if-no-files-found: error
           retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/release-notes.md
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: emcraft-*
+          path: dist
+      - name: Archives and checksums
+        shell: bash
+        run: |
+          cd dist
+          for dir in emcraft-*; do
+            platform="${dir#emcraft-}"
+            name="emcraft-$GITHUB_REF_NAME-$platform"
+            mv "$dir" "$name"
+            chmod +x "$name"/emcraft* || true
+            case "$platform" in
+              windows-*) zip -qr "$name.zip" "$name" ;;
+              *) tar czf "$name.tar.gz" "$name" ;;
+            esac
+          done
+          sha256sum emcraft-*.tar.gz emcraft-*.zip > SHA256SUMS
+          cat SHA256SUMS
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "EMCraft $GITHUB_REF_NAME" --notes-file .github/release-notes.md \
+            || gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz dist/*.zip dist/SHA256SUMS --repo "$GITHUB_REPOSITORY" --clobber
