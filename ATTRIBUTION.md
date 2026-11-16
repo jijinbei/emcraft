@@ -61,6 +61,8 @@ FieldCraft (`../fieldcraft`, MIT OR Apache-2.0, Copyright (c) 2026 FieldCraft co
 | `crates/render/src/font.rs` | FieldCraft `crates/render/src/font.rs` | marks `\|`, `^`, `<`, `>`, `*` and the Greek `ω`, `θ`, `φ`, `λ`, `ε`, `σ`, `π` added |
 | `crates/testkit/src/oracle.rs` | FieldCraft `crates/testkit/src/oracle.rs` | simplified case format (no pending, slow or nightly cases), EMCraft's engine |
 | `AGENTS.md`, `rustfmt.toml`, `clippy.toml`, workspace lints | FieldCraft's | rewritten for EMCraft |
+| `scripts/claim/`, `scripts/triage/` (and their tests), `.github/workflows/claim.yml`, `triage.yml` | FieldCraft's claim and triage bots | EMCraft's repository, maintainer, `area:` labels, command areas and reproduction hints; GitHub-hosted runners |
+| `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`, `.github/CODEOWNERS`, `.github/dependabot.yml` | FieldCraft's | rewritten for EMCraft |
 
 SolidCraft (`../solidcraft`, MIT OR Apache-2.0, Copyright (c) 2026 SolidCraft contributors):
 

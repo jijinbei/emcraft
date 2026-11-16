@@ -25,6 +25,19 @@ env:
   CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
 
 jobs:
+  bots:
+    name: Claim and triage bot tests
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts
+      # scripts/claim and scripts/triage run in claim.yml and triage.yml through
+      # actions/github-script; their tests use only node:test against a fake client.
+      - run: node --test scripts/claim/*.test.js scripts/triage/*.test.js
+
   gate:
     runs-on: ubuntu-latest
     steps:

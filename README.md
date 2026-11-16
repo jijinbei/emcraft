@@ -98,7 +98,14 @@ and the accepted results are frozen so that any change that moves them fails CI
 [docs/project-file.md](docs/project-file.md) (the `.emcraft` file),
 [docs/themes.md](docs/themes.md) (themes: the colours of the app and its pictures, your own as files),
 [docs/languages.md](docs/languages.md) (the window in English or Japanese, and how to translate it),
-[ROADMAP.md](ROADMAP.md), [AGENTS.md](AGENTS.md) (how to contribute, for people and agents).
+[ROADMAP.md](ROADMAP.md), [AGENTS.md](AGENTS.md) (the rules every change follows, for people and agents).
+
+## Contributing
+
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md): claim an issue with
+`/claim`, branch from `develop`, and keep the rules of [AGENTS.md](AGENTS.md). Security problems go
+to the [Security tab](https://github.com/jijinbei/emcraft/security/advisories/new), not an issue
+([SECURITY.md](SECURITY.md)). Be kind: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
 ## Licence
 

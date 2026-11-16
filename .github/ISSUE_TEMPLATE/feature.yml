@@ -1,0 +1,33 @@
+name: Feature request
+description: A capability EMCraft should have
+labels: [enhancement]
+body:
+  - type: textarea
+    id: current
+    attributes:
+      label: Current behaviour
+      description: What you can and cannot do today, and what happens when you try.
+    validations:
+      required: true
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need and why
+      description: The component, analysis or workflow you are trying to do.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What EMCraft should do, as precisely as you can.
+  - type: textarea
+    id: pictures
+    attributes:
+      label: Pictures
+      description: A screenshot of where it would go, a sketch, or a picture of the result you are after. Drag images in here.
+  - type: textarea
+    id: reference
+    attributes:
+      label: References
+      description: Papers, textbooks, public specifications, published benchmarks or measurements that define the behaviour. Do not paste text, files or results from commercial EM tools.

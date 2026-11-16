@@ -1,0 +1,40 @@
+# Weekly dependency updates against develop, the trunk, grouped so each ecosystem opens one pull
+# request a week. Security updates are switched on in the repository settings and open their own
+# pull requests as advisories appear. CI runs the gate on Dependabot's pull requests.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      # Compatible updates (Cargo.lock only) in one pull request; a breaking release of a
+      # dependency comes on its own, since it usually needs code changes.
+      cargo-compatible:
+        update-types: [minor, patch]
+    ignore:
+      # Pinned to the SolidCraft commit EMCraft reads designs with
+      # (docs/adr/0003-solidcraft-exchange.md); moved by hand.
+      - dependency-name: "solidcraft-*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+      day: monday
+      time: "05:00"
+      timezone: Etc/UTC
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,11 @@
+# Every change to EMCraft needs the maintainer's review before it merges.
+* @jijinbei
+
+# Release and supply-chain paths, named explicitly so they stay owner-reviewed if the rule above
+# is ever relaxed: workflows, packaging, dependencies, licences.
+/.github/ @jijinbei
+/packaging/ @jijinbei
+/Cargo.toml @jijinbei
+/Cargo.lock @jijinbei
+/ATTRIBUTION.md @jijinbei
+/deny.toml @jijinbei

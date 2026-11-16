@@ -30,7 +30,7 @@ commands:
                   run the workspace tests (with cargo-nextest when installed: every test in one
                   pool, .config/nextest.toml; the doctests after); --heavy runs only the ignored
                   (heavy) tests: convergence studies and fine meshes; --changed only the
-                  packages changed since BASE (default main; committed or not) and those built
+                  packages changed since BASE (default develop, else main; committed or not) and those built
                   on them
   oracle [--case NAME]... [--bless NAME|all]... [--no-write]
                   run the verification cases (tests/oracle, docs/verification.md) against their
@@ -157,13 +157,20 @@ fn cmd_layers() -> Result<(), String> {
     }
 }
 
+/// The branch changes are measured from: `develop` (the trunk), or `main` in a clone without it.
+fn trunk() -> &'static str {
+    let has =
+        |b: &str| Command::new("git").args(["rev-parse", "--verify", "--quiet", b]).current_dir(root()).output().is_ok_and(|o| o.status.success());
+    if has("develop") { "develop" } else { "main" }
+}
+
 fn cmd_test(rest: &[&str]) -> Result<(), String> {
     let (mut heavy, mut changed, mut rest) = (false, None, rest);
     loop {
         match rest {
             ["--heavy", after @ ..] => (heavy, rest) = (true, after),
             ["--changed", base, after @ ..] if !base.starts_with('-') => (changed, rest) = (Some(*base), after),
-            ["--changed", after @ ..] => (changed, rest) = (Some("main"), after),
+            ["--changed", after @ ..] => (changed, rest) = (Some(trunk()), after),
             _ => break,
         }
     }

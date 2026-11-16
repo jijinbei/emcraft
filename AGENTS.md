@@ -72,10 +72,12 @@ People trust EMCraft with their models; a crash loses their work. **This outrank
 - **Rust only.** One exception: the rendering shaders of the window's GPU viewport are written in
   WGSL (`crates/gpu3d/src/*.wgsl`, compiled by naga at run time and validated by a unit
   test); compute kernels stay in Rust (CubeCL). See docs/adr/0004-gpu-viewport.md.
+  The repository's bots (`scripts/claim`, `scripts/triage`, run by GitHub Actions) are
+  JavaScript, as `actions/github-script` takes; they are tooling, not part of EMCraft.
 
 ## Workflow for every change
 1. While you work: `cargo check` and the tests your change can break,
-   `cargo xtask test --changed` (the packages changed since main and those built on them, in
+   `cargo xtask test --changed` (the packages changed since `develop`, the trunk, and those built on them, in
    one pool with cargo-nextest when installed: `cargo binstall cargo-nextest`). The whole gate
    (`cargo xtask test`) runs before merging and on CI.
 2. When the change is done: `cargo fmt --all`, `cargo clippy -p <crate> --all-targets -- -D warnings`
