@@ -834,6 +834,15 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: crate::particles::probe,
     },
     CommandSpec {
+        id: "particles.output",
+        label: "Output plane",
+        doc: "A plane across z whose power through it towards +z the run records (Poynting's flux over its disc, a body of revolution's run only): its reply gives the mean power over the run's second half and, with beams, the efficiency against their power. A beam's own field carries power too: put the plane where the beam has landed for the radiated power alone. Undo goes back.",
+        params: &[req("at", K::Number, "the plane's z").of(L).labelled(text!("Position"))],
+        effect: Effect::Record,
+        invalidates: Some(Change::Particles),
+        run: crate::particles::output,
+    },
+    CommandSpec {
         id: "particles.clear",
         label: "Clear particle sources",
         doc: "Takes away the particle run's emitters, plasmas, voltage, magnetic field and probes (the walls stay). Undo goes back.",

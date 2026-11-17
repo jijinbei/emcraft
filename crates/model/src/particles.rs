@@ -331,6 +331,10 @@ pub struct Particles {
     /// Points whose field is recorded (m, the model's coordinates).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub probes: Vec<[f64; 3]>,
+    /// Planes across z whose power through them (towards +z) is recorded: their z (m, the
+    /// model's coordinates). A body of revolution's run only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<f64>,
 }
 
 fn is_zero(b: &[f64; 3]) -> bool {
@@ -367,9 +371,13 @@ impl Particles {
         if self.emitters.len() > MAX_EMITTERS
             || self.plasmas.len() > MAX_PLASMAS
             || self.probes.len() > MAX_PROBES
+            || self.outputs.len() > MAX_PROBES
             || self.bunches.len() > MAX_EMITTERS
         {
-            return Err(invalid("particles", format!("at most {MAX_EMITTERS} emitters and bunches, {MAX_PLASMAS} plasmas and {MAX_PROBES} probes")));
+            return Err(invalid(
+                "particles",
+                format!("at most {MAX_EMITTERS} emitters and bunches, {MAX_PLASMAS} plasmas, {MAX_PROBES} probes and {MAX_PROBES} output planes"),
+            ));
         }
         if self.beams.len() > MAX_EMITTERS {
             return Err(invalid("particles", format!("at most {MAX_EMITTERS} beams")));
@@ -439,7 +447,8 @@ impl Particles {
         {
             return Err(invalid("voltage", format!("{v:?}: an axis and a finite voltage")));
         }
-        if !self.magnetic.iter().all(|b| within(*b, MAX_MAGNETIC, true)) || !self.probes.iter().flatten().all(|x| x.is_finite()) {
+        if !self.magnetic.iter().all(|b| within(*b, MAX_MAGNETIC, true)) || !self.probes.iter().flatten().chain(&self.outputs).all(|x| x.is_finite())
+        {
             return Err(invalid("particles", "the magnetic field and the probes must be finite"));
         }
         Ok(())

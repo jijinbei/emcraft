@@ -761,6 +761,10 @@ overlap tests).
 - L. D. Landau, E. M. Lifshitz, *The Classical Theory of Fields*, 4th ed., §20 (hyperbolic
   motion) and §48 (a charge in a plane wave); J. D. Jackson, *Classical Electrodynamics*, 3rd
   ed., §12.2–12.3 (gyration, E×B drift) — the closed forms the pushes are checked against.
+- J. D. Jackson, *Classical Electrodynamics*, 3rd ed., §6.7 (Poynting's theorem) — the power a
+  particle run's output plane records, (E × H)·ẑ over its disc, taken as the Yee lattice holds
+  the fields; checked by the energy a packet takes out of a tube, and by a ring beam's own
+  field, P = I² ln(a/r_b)/(2πε₀v) (§2.8 and §5.3: a line charge's and a current's fields).
 - T. P. Wangler, *RF Linear Accelerators*, 2nd ed., Wiley 2008, §2.2–2.3 — the energy a particle
   gains crossing a gap, qV₀T cos φ, that tracking through a pillbox's TM010 is checked against.
 - C. K. Birdsall, A. B. Langdon, *Plasma Physics via Computer Simulation*, IOP 1991, §4-2,

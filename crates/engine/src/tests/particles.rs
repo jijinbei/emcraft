@@ -259,6 +259,44 @@ fn a_bunch_through_a_pillbox_as_a_body_of_revolution_leaves_its_loss_factor() {
 }
 
 #[test]
+fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
+    // A thin ring beam (radius r_b) in a tube of radius a carries power in its own static field:
+    // E_r = λ/(2πε₀r) and H_θ = I/(2πr) between the ring and the wall, so Poynting's flux is
+    // P = I² ln(a/r_b)/(2πε₀v) (Jackson §§2.8, 5.3: the line charge's and the current's fields).
+    // 20 A at 100 keV, 5 mm in 10 mm: about 30 kW, its space charge slowing it by 0.6 %.
+    let mut s = Session::new();
+    run(
+        &mut s,
+        &[
+            ("geometry.solid", json!({"shape": "cylinder", "radius": 10, "length": 60})),
+            ("project.analysis", json!({"kind": "particles"})),
+            ("particles.magnetic", json!({"b": [0, 0, 3]})),
+            ("particles.beam", json!({"face": "z-", "current": 20, "energy": 1e5, "radius": 5.1, "inner": 4.9, "rise": 100})),
+            ("particles.open", json!({"face": "z+"})),
+            ("particles.output", json!({"at": 40})),
+        ],
+    );
+    let r = s.execute("solve.particles", &json!({"time": 2, "cell": 0.5, "axisymmetric": true})).unwrap();
+    let (eps0, c0, mc2) = (8.854_187_812_8e-12, 299_792_458.0, 510_998.95);
+    let gamma: f64 = 1.0 + 1e5 / mc2;
+    let v = c0 * (1.0 - 1.0 / (gamma * gamma)).sqrt();
+    let want = 20.0f64.powi(2) * 2f64.ln() / (2.0 * std::f64::consts::PI * eps0 * v);
+    let out = &r["outputs"][0];
+    let power = out["power_w"].as_f64().unwrap();
+    assert!((power / want - 1.0).abs() < 0.03, "{power} W against {want} W");
+    let efficiency = out["efficiency"].as_f64().unwrap();
+    assert!((efficiency - power / (20.0 * 1e5)).abs() < 1e-12, "{out}");
+    let kept = s.results.particles.clone().unwrap();
+    assert!(kept.history.iter().all(|h| h.power.len() == 1) && kept.outputs.len() == 1);
+    // On the Cartesian grid and on a device, output planes are refused, not left out.
+    let cartesian = s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1})).unwrap_err().to_string();
+    assert!(cartesian.contains("output planes"), "{cartesian}");
+    let device = s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1, "axisymmetric": true, "device": "cubecl-cpu"}));
+    assert!(device.unwrap_err().to_string().contains("output planes"));
+    assert!(s.clone().execute("particles.output", &json!({"at": "x"})).is_err());
+}
+
+#[test]
 fn a_relativistic_ring_beam_in_a_body_of_revolution_sinks_to_its_closed_form() {
     // Bogdankevich & Rukhadze's ring (Sov. Phys. Usp. 14:163, 1971) at γ₀ = 3 and 0.7 of its
     // limiting current, confirmed as the job's settings: on cells 8 times finer along z its

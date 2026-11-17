@@ -71,6 +71,9 @@ impl Run for Axi {
         let [er, et, ez] = self.pic.field_at(r, z).0;
         [er * cos - et * sin, er * sin + et * cos, ez]
     }
+    fn flux(&self, z: f64) -> f64 {
+        self.pic.flux(z)
+    }
     fn now(&self) -> f64 {
         self.pic.time()
     }
@@ -121,7 +124,7 @@ impl OnDevice {
 
 impl Run for OnDevice {
     fn advance(&mut self) -> Result<pic::Moved> {
-        Ok(self.span(1, &[], &|_| false)?.into_iter().next().map_or_else(pic::Moved::default, |s| s.0))
+        Ok(self.span(1, &[], &[], &|_| false)?.into_iter().next().map_or_else(pic::Moved::default, |s| s.0))
     }
     fn energy(&mut self) -> Result<pic::Energy> {
         match self.device.as_mut() {
@@ -143,10 +146,10 @@ impl Run for OnDevice {
         self.axi.snapshot()
     }
     /// The steps on the device, E at the probes (the ones it was made with) turned from the
-    /// half plane θ = 0 to x and y.
-    fn span(&mut self, steps: usize, _: &[[f64; 3]], sampled: &dyn Fn(usize) -> bool) -> Result<Vec<super::Stepped>> {
+    /// half plane θ = 0 to x and y; no output planes (refused before a run on a device).
+    fn span(&mut self, steps: usize, _: &[[f64; 3]], _: &[f64], sampled: &dyn Fn(usize) -> bool) -> Result<Vec<super::Stepped>> {
         let Some(device) = self.device.as_mut() else {
-            return (0..steps).map(|_| Ok((self.axi.advance()?, None))).collect();
+            return (0..steps).map(|_| Ok((self.axi.advance()?, None, Vec::new()))).collect();
         };
         let done = device.advance(&mut self.axi.pic, steps).map_err(fdtd)?;
         Ok(done
@@ -156,7 +159,7 @@ impl Run for OnDevice {
                 let probes = sampled(b).then(|| {
                     step.probes.iter().zip(&self.probes).map(|([er, et, ez], q)| [er * q.cos - et * q.sin, er * q.sin + et * q.cos, *ez]).collect()
                 });
-                (step.moved, probes)
+                (step.moved, probes, Vec::new())
             })
             .collect())
     }
@@ -193,6 +196,9 @@ fn unsupported(s: &Session) -> Option<String> {
 pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize, gpu: Option<Gpu>) -> Result<Value> {
     if let Some(why) = unsupported(s) {
         return Err(EngineError::failed(why));
+    }
+    if gpu.is_some() && !s.model.particles.outputs.is_empty() {
+        return Err(EngineError::failed("not supported yet: output planes (particles.output) on a device; run on the CPU's threads (`device`: cpu)"));
     }
     let b =
         s.model.bounds().ok_or_else(|| EngineError::failed("no geometry: the body of revolution particles run in is its bounds (geometry.solid)"))?;

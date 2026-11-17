@@ -514,6 +514,45 @@ impl AxiPic {
         )
     }
 
+    /// The power (W) through the plane of nodes nearest `z` (m from the low end) towards +z:
+    /// Poynting's (E × H)·ẑ = (E_r B_θ − E_θ B_r)/μ₀ summed over the plane's rings as the Yee
+    /// lattice holds them — E_r and E_θ on the plane, B_θ and B_r averaged from the half cells
+    /// on either side, E and B at the same time at the end of a step — so it is the energy
+    /// balance's own flux, not one of interpolated fields.
+    ///
+    /// ```
+    /// use emcraft_fdtd::axi::{AxiGrid, AxiPic, Component};
+    /// use emcraft_fdtd::pic::{Axis, Wall};
+    /// use emcraft_particles::Pusher;
+    /// let g = AxiGrid::new(10, 1e-3, Axis { cells: 20, h: 1e-3, wall: Wall::Conductor })?;
+    /// let mut pic = AxiPic::new(g, g.time_step(0.9), Pusher::Boris)?;
+    /// assert_eq!(pic.flux(0.01), 0.0);
+    /// pic.set(Component::Er, |_, _| 1.0);
+    /// pic.set(Component::Btheta, |_, _| 1e-3);
+    /// assert!(pic.flux(0.01) > 0.0); // E_r × H_θ points along +z
+    /// # Ok::<(), emcraft_fdtd::FdtdError>(())
+    /// ```
+    pub fn flux(&self, z: f64) -> f64 {
+        let g = self.grid;
+        let k = (z / g.z.h).round().clamp(0.0, g.z.cells as f64) as isize;
+        // The half cells either side of node k along z.
+        let (below, above) = (g.z.clamp(k - 1, false), g.z.clamp(k, false));
+        let node = g.z.clamp(k, true);
+        let value = |which: usize, values: &[f64], i: usize, k: usize| values.get(self.lats[which].at(i, k)).copied().unwrap_or(0.0);
+        let mut p = 0.0;
+        for i in 0..g.nr {
+            // E_r and B_θ at r = (i + ½) dr: a ring of 2π r dr.
+            let bt = 0.5 * (value(BT, &self.f.bt, i, below) + value(BT, &self.f.bt, i, above));
+            p += value(ER, &self.f.er, i, node) * bt * 2.0 * PI * (i as f64 + 0.5) * g.dr * g.dr;
+        }
+        for i in 0..g.nr {
+            // E_θ and B_r on the nodes r = i dr: node i's ring (E_θ is held at zero on the wall).
+            let br = 0.5 * (value(BR, &self.f.br, i, below) + value(BR, &self.f.br, i, above));
+            p -= value(ET, &self.f.et, i, node) * br * g.area(i);
+        }
+        p / MU0
+    }
+
     /// `values` on `lat` at (r, z), linearly; across the axis odd (`odd`) or even, past the outer
     /// wall and a conducting end the nearest point's.
     fn interpolate(&self, lat: Lat, values: &[f64], r: f64, z: f64, odd: bool) -> f64 {

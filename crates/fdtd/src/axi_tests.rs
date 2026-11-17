@@ -164,6 +164,33 @@ fn a_relativistic_ring_beam_keeps_its_depression_on_cells_fine_along_z() {
 }
 
 #[test]
+fn the_power_through_a_plane_is_the_energy_that_leaves() {
+    // Poynting's theorem (Jackson, Classical Electrodynamics, §6.7): a TM01 packet of B_θ (E = 0, so Gauss's law holds; carrier 20 GHz, well
+    // above the 11.5 GHz cut-off, so no slow waves linger near it) in a tube closed at z = 0 and
+    // open at its other end. The energy the plane before the layer lets through, ∫P dt, is
+    // what the field loses once the packet has died in the layer.
+    use emcraft_theory::bessel::j;
+    let (a, h): (f64, f64) = (0.01, 0.25e-3);
+    let g = AxiGrid::new(40, h, Axis { cells: 400, h, wall: Wall::Conductor }).unwrap();
+    let dt = g.time_step(0.95);
+    let mut pic = AxiPic::new(g, dt, Pusher::Boris).unwrap();
+    pic.absorb(true, 20).unwrap();
+    let (x01, f): (f64, f64) = (2.404_825_557_695_773, 20e9);
+    let kz = ((2.0 * PI * f / C0).powi(2) - (x01 / a).powi(2)).sqrt();
+    pic.set(Component::Btheta, |r, z| j(1, x01 * r / a) * (-((z - 0.04) / 0.012).powi(2)).exp() * (kz * z).cos() * 1e-3);
+    let before = pic.energy().field;
+    let mut through = 0.0;
+    for _ in 0..(4e-9 / dt) as usize {
+        pic.step().unwrap();
+        through += pic.flux(0.09) * dt;
+    }
+    let left = pic.energy().field;
+    assert!(left < 0.01 * before, "the packet still in the tube: {left:e} of {before:e} J");
+    let lost = before - left;
+    assert!((through - lost).abs() < 0.005 * lost, "through the plane {through:e} J, lost {lost:e} J");
+}
+
+#[test]
 fn one_thread_and_seven_give_the_same_bits() {
     // A ring beam through a corrugated tube with an absorbing end, metal and an axial field: the
     // fields by z rows and the rings by chunks on the threads, their currents added in the rings'
