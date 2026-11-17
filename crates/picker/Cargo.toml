@@ -13,4 +13,4 @@ workspace = true
 emcraft-engine = { workspace = true }
 emcraft-ui-core = { workspace = true }
 # The system's file dialog (docs/adr/0001-libraries.md).
-rfd = "0.17"
+rfd = "0.18"

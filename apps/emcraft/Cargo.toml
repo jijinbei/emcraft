@@ -27,7 +27,7 @@ emcraft-ui-iced = { workspace = true }
 
 # The message box a window program shows when its window cannot open (no console there).
 [target.'cfg(windows)'.dependencies]
-rfd = "0.17"
+rfd = "0.18"
 
 [build-dependencies]
 # The icon and version resource of emcraft.exe (build.rs, docs/adr/0001-libraries.md).
