@@ -39,20 +39,41 @@ fn main() -> ExitCode {
         }
         None => (None, None),
     };
+    if let Some(why) = no_display(|name| std::env::var(name).ok()) {
+        eprintln!("error: {why}");
+        return ExitCode::FAILURE;
+    }
     let picker: std::sync::Arc<dyn emcraft_ui_core::files::Picker> = std::sync::Arc::new(emcraft_picker::SystemPicker);
     let launch = emcraft_ui_iced::Launch { sample, project, shoot: shot, replay, picker: Some(picker), control: requests };
-    let result = emcraft_ui_iced::run(launch);
+    // The window's toolkit panics when it cannot make its event loop (a display named but not
+    // running): caught here, before any of EMCraft's work, and told as an error.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| emcraft_ui_iced::run(launch)))
+        .map_err(|_| "the window could not open (see the message above): is the display server running? emcraft-cli works without one".to_owned())
+        .and_then(|run| run.map_err(|e| e.to_string()));
     drop(token_file);
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("error: {e}");
             if control.is_none() {
-                show_start_error(&e.to_string());
+                show_start_error(&e);
             }
             ExitCode::FAILURE
         }
     }
+}
+
+/// Why no window can open here, when no display is named at all: on Linux and the BSDs the
+/// window needs a Wayland compositor (`WAYLAND_DISPLAY`) or an X server (`DISPLAY`). `var` reads
+/// the environment. Elsewhere (Windows, macOS) the system always has one.
+fn no_display(var: impl Fn(&str) -> Option<String>) -> Option<String> {
+    if !cfg!(all(unix, not(target_os = "macos"))) {
+        return None;
+    }
+    let named = |name: &str| var(name).is_some_and(|v| !v.trim().is_empty());
+    (!named("WAYLAND_DISPLAY") && !named("DISPLAY")).then(|| {
+        "no display to open the window on: neither WAYLAND_DISPLAY nor DISPLAY is set. Run EMCraft in a desktop session, or use emcraft-cli (the same commands, no window)".to_owned()
+    })
 }
 
 /// The command line's choices: a sample or a project file to open, a crash report or recording
@@ -159,5 +180,21 @@ mod tests {
         for bad in [&["--sample", "no-such"][..], &["--control", "x"], &["--control"], &["a", "b"], &["--what"], &["--replay"], &["--shot"]] {
             assert_eq!(parse(bad, None), Parsed::Usage, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn without_a_display_the_app_says_so_instead_of_panicking() {
+        // Issue #8: no WAYLAND_DISPLAY and no DISPLAY (or blank ones) is refused up front.
+        let env = |pairs: &'static [(&'static str, &'static str)]| move |name: &str| pairs.iter().find(|p| p.0 == name).map(|p| p.1.to_owned());
+        let refused = no_display(env(&[]));
+        let blank = no_display(env(&[("DISPLAY", " "), ("WAYLAND_DISPLAY", "")]));
+        if cfg!(all(unix, not(target_os = "macos"))) {
+            assert!(refused.as_deref().is_some_and(|w| w.contains("DISPLAY") && w.contains("emcraft-cli")), "{refused:?}");
+            assert!(blank.is_some());
+        } else {
+            assert_eq!((refused, blank), (None, None));
+        }
+        assert_eq!(no_display(env(&[("DISPLAY", ":0")])), None);
+        assert_eq!(no_display(env(&[("WAYLAND_DISPLAY", "wayland-0")])), None);
     }
 }
