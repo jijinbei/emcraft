@@ -274,6 +274,7 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
             ("particles.beam", json!({"face": "z-", "current": 20, "energy": 1e5, "radius": 5.1, "inner": 4.9, "rise": 100})),
             ("particles.open", json!({"face": "z+"})),
             ("particles.output", json!({"at": 40})),
+            ("particles.probe", json!({"at": [7, 0, 30]})),
         ],
     );
     let r = s.execute("solve.particles", &json!({"time": 2, "cell": 0.5, "axisymmetric": true})).unwrap();
@@ -294,6 +295,23 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
     let device = s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1, "axisymmetric": true, "device": "cubecl-cpu"}));
     assert!(device.unwrap_err().to_string().contains("output planes"));
     assert!(s.clone().execute("particles.output", &json!({"at": "x"})).is_err());
+    // Its records as CSV: the history with the plane's power, the particles' phase space.
+    let history = scratch("history.csv");
+    let r = s.execute("results.particles.export", &json!({"path": history})).unwrap();
+    let text = std::fs::read_to_string(&history).unwrap();
+    assert_eq!(text.lines().count(), r["rows"].as_u64().unwrap() as usize + 1);
+    assert!(text.starts_with("t (ns),field (J),kinetic (J),particles,emitted (A),power at z = 40 mm (W)\n"), "{text:.120}");
+    let phase = scratch("phase.csv");
+    let r = s.execute("results.particles.export", &json!({"path": phase, "what": "particles"})).unwrap();
+    assert!(r["rows"].as_u64().unwrap() > 100);
+    let row: Vec<f64> = std::fs::read_to_string(&phase).unwrap().lines().nth(1).unwrap().split(',').map(|v| v.parse().unwrap()).collect();
+    assert!(row.len() == 8 && row[6] > 9e4 && row[6] < 1.01e5, "{row:?}");
+    let probes = scratch("probes.csv");
+    let r = s.execute("results.particles.export", &json!({"path": probes, "what": "probes"})).unwrap();
+    let text = std::fs::read_to_string(&probes).unwrap();
+    assert!(r["rows"].as_u64().unwrap() > 100 && text.starts_with("t (ns),probe 1 (7 0 30 mm) Ex (V/m)"), "{text:.80}");
+    assert!(s.execute("results.particles.export", &json!({"path": phase, "what": "nope"})).is_err());
+    assert!(Session::new().execute("results.particles.export", &json!({"path": phase})).is_err());
 }
 
 #[test]

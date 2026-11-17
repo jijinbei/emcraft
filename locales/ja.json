@@ -207,6 +207,7 @@
     "Field animation": "電磁界アニメーション",
     "Fields": "電磁界",
     "File": "ファイル",
+    "Contents": "内容",
     "Files": "ファイル",
     "Filling": "充填材料",
     "Fit surfaces": "曲面の復元",
@@ -1942,6 +1943,14 @@
         "frequency": "解析済みの周波数",
         "at": "点 `[[x, y, z], …]`",
         "excitation": "励振するポート（既定は駆動ポート：view.driven）"
+      }
+    },
+    "results.particles.export": {
+      "label": "粒子の実行の書き出し",
+      "doc": "最後の粒子の実行の記録を他のプログラム向けの CSV に書き出す。`history`（既定）は実行の記録：時刻（ns）、場と粒子のエネルギー（J）、保持している粒子の数、放出された電流（A）、各出力面を通る電力（W、記録の間の平均）。`probes` は各プローブの E（V/m）の時間変化。`particles` は最後の粒子（位相空間）：位置（表示の長さの単位）、運動量 γv（m/s）、運動エネルギー（eV）、集団。",
+      "params": {
+        "path": "CSV ファイル",
+        "what": "`history`（既定）、`probes` または `particles`"
       }
     },
     "results.field.export": {

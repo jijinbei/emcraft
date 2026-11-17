@@ -1551,6 +1551,15 @@ E (V/m) and H (A/m), complex, at points, for a solved frequency and an excited p
 | `at` | array | length | yes | points `[[x, y, z], …]` |
 | `excitation` | string |  | no | the excited port (default the driven one: view.driven) |
 
+## `results.particles.export` — Export particle run
+
+Writes the last particle run's records as CSV for other programs: `history` (default) the run's records — time (ns), the field's and the particles' energy (J), the particles held, the current emitted (A) and the power through each output plane (W, averaged between records); `probes` each probe's E (V/m) over time; `particles` the particles at the end, the phase space — position in the display's length unit, momentum γv (m/s), kinetic energy (eV), population.
+
+| Parameter | Type | Unit | Required | Description |
+|---|---|---|---|---|
+| `path` | string |  | yes | the CSV file |
+| `what` | string |  | no | `history` (default), `probes` or `particles` |
+
 ## `results.field.export` — Export fields
 
 Writes a solution's fields as numbers for other programs, by the file's extension: `.csv` the plane `view.field` draws (`plane`, `at`), a header then one row a point inside the mesh — x, y, z in the display's length unit and E (V/m), H (A/m) as real and imaginary parts; `.vtu` the whole mesh as a VTK unstructured grid (ParaView, VisIt, meshio) — E and H (real and imaginary, and |E|, |H| peak) at every node, averaged over the tetrahedra round it, and each tetrahedron's material. The mesh's own nodes only (no images beyond symmetry planes).

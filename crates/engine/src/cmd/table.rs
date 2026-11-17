@@ -2009,6 +2009,18 @@ pub static COMMANDS: &[CommandSpec] = &[
         run: crate::results::probe,
     },
     CommandSpec {
+        id: "results.particles.export",
+        label: "Export particle run",
+        doc: "Writes the last particle run's records as CSV for other programs: `history` (default) the run's records — time (ns), the field's and the particles' energy (J), the particles held, the current emitted (A) and the power through each output plane (W, averaged between records); `probes` each probe's E (V/m) over time; `particles` the particles at the end, the phase space — position in the display's length unit, momentum γv (m/s), kinetic energy (eV), population.",
+        params: &[
+            req("path", K::String, "the CSV file").labelled(text!("File")),
+            opt("what", K::String, "`history` (default), `probes` or `particles`").one_of(&crate::particles::export::What::IDS).labelled(text!("Contents")),
+        ],
+        effect: Effect::None,
+        invalidates: None,
+        run: crate::particles::export::export,
+    },
+    CommandSpec {
         id: "results.field.export",
         label: "Export fields",
         doc: "Writes a solution's fields as numbers for other programs, by the file's extension: `.csv` the plane `view.field` draws (`plane`, `at`), a header then one row a point inside the mesh — x, y, z in the display's length unit and E (V/m), H (A/m) as real and imaginary parts; `.vtu` the whole mesh as a VTK unstructured grid (ParaView, VisIt, meshio) — E and H (real and imaginary, and |E|, |H| peak) at every node, averaged over the tetrahedra round it, and each tetrahedron's material. The mesh's own nodes only (no images beyond symmetry planes).",

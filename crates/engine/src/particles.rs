@@ -27,6 +27,7 @@ use serde_json::{Value, json};
 use crate::{EngineError, Params, Result, Session};
 
 mod axi;
+pub(crate) mod export;
 
 /// The most records of the run's history, samples of each probe and particles kept at the end.
 pub const HISTORY: usize = 2000;
