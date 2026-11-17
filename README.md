@@ -107,6 +107,13 @@ Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md): c
 to the [Security tab](https://github.com/jijinbei/emcraft/security/advisories/new), not an issue
 ([SECURITY.md](SECURITY.md)). Be kind: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
+## Relation to SolidCraft
+
+EMCraft is an independent project. It opens designs made with
+[SolidCraft](https://github.com/tangency-labs/solidcraft), the open-source CAD application by
+Tangency Labs, and follows the conventions of SolidCraft and
+[FieldCraft](https://github.com/tangency-labs/fieldcraft); it is not part of either.
+
 ## Licence
 
 MIT OR Apache-2.0.

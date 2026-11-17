@@ -1,5 +1,5 @@
 //! How the mouse, the wheel, the trackpad and the keys move the 3D view's camera, the same way
-//! as in the sibling app SolidCraft (`crates/ui-egui/src/prefs.rs` and `navigation.rs`, MIT OR
+//! as in SolidCraft (`crates/ui-egui/src/prefs.rs` and `navigation.rs`, MIT OR
 //! Apache-2.0; ATTRIBUTION.md), so the two apps feel alike: its mouse mappings (presets), its
 //! wheel and pinch zoom toward the cursor, two-finger pan, Ctrl+left drag orbiting in every
 //! mapping, Shift snapping an orbit to the nearest of the cube's views, the arrow keys (15°, with

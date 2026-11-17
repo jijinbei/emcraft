@@ -165,7 +165,7 @@ its faces by the face's name (`face_name`, the port tool records it), so it foll
 when the design changes; a name the design has none of is refused at its field, which lists the
 names it has.
 
-**Navigating the 3D view** works as in SolidCraft, so the sibling apps feel alike
+**Navigating the 3D view** works as in SolidCraft, so the two apps feel alike
 (`crates/ui-core/src/navigation.rs`, `cube.rs`, `crates/ui-iced/src/view3d/`; scenario `navigation`):
 
 | Input | Default mapping (Fusion) |

@@ -5,8 +5,9 @@ microwave components, solves Maxwell's equations with its own finite element sol
 S-parameters and fields. It targets the work done today in CST Studio Suite, HFSS and similar
 tools, and aims to beat them on openness, verification and agent control.
 
-Siblings with the same conventions: `../fieldcraft` (CAE pre-processor and structural solvers)
-and `../solidcraft` (parametric CAD). Code adapted from them (MIT OR Apache-2.0) is noted in
+EMCraft is an independent project that follows the conventions of `../fieldcraft` (CAE
+pre-processor and structural solvers) and `../solidcraft` (parametric CAD), and works with
+SolidCraft's designs. Code adapted from them (MIT OR Apache-2.0) is noted in
 ATTRIBUTION.md.
 
 ## Product name

@@ -7,7 +7,7 @@ Status: accepted (2026-11-13); done (H1–H7).
 The window offers part of a CAD: boxes, cylinders and spheres (`geometry.body`), a waveguide
 (`geometry.waveguide`), the region's shape (`geometry.solid`), grips that resize them — but no
 sketches, no Booleans the person controls, no history. It is not enough to model with, and it
-copies what SolidCraft (the sibling CAD) does properly. The same commands also build 73 of the
+copies what SolidCraft (the CAD application EMCraft works with) does properly. The same commands also build 73 of the
 79 templates, the oracle's cases and old projects, so they cannot simply go.
 
 ## Decision

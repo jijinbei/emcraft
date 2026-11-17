@@ -16,7 +16,7 @@ third-party material under an open licence.
 | docs/media/app-start.png, docs/media/app-sparameters.png, docs/media/app-pcb-board.png | EMCraft contributors | Original: the desktop app's own window — the start page (`ui.render` over its control channel, docs/control-protocol.md), the two-post resonator's S-parameters (a frame of docs/media/walkthrough.mp4) and the `pcb-board` sample's coupling illustration | MIT OR Apache-2.0 |
 | docs/book/src/img/first-solve-*.png | EMCraft contributors | Original: the desktop app's own window on the `highpass` sample (opened, run, its field at 8 GHz, the Results step), drawn by `ui.render` over its control channel (docs/control-protocol.md) | MIT OR Apache-2.0 |
 | docs/book/src/img/{bandpass-s, bandpass-field, cavity-e, cavity-h, patch-pattern, stub-s, post-s, post-field}.png, docs/book/src/img/cavity-window.png | EMCraft contributors | Original: the pictures the tutorials' scripts write (docs/book/scripts: `view.sparameters`, `view.field`, `view.pattern`), and the window on the cavity tutorial's project (`ui.render`) | MIT OR Apache-2.0 |
-| docs/media/walkthrough.gif, docs/media/walkthrough.mp4 | EMCraft contributors | Original: a screen recording of SolidCraft and EMCraft on a virtual display (Xvfb), driven by a script, captions, title and end cards (the two apps' marks) added with ffmpeg; SolidCraft is the sibling project, shown as it is | MIT OR Apache-2.0 |
+| docs/media/walkthrough.gif, docs/media/walkthrough.mp4 | EMCraft contributors | Original: a screen recording of SolidCraft and EMCraft on a virtual display (Xvfb), driven by a script, captions, title and end cards (the two apps' marks) added with ffmpeg; SolidCraft, the CAD application EMCraft works with, is shown as it is | MIT OR Apache-2.0 |
 | docs/media/highpass-fem-fdtd.png | EMCraft contributors | Original: drawn by `view.sparameters` after `file.sample highpass` solved and `solve.time_domain` from 5 to 9 GHz | MIT OR Apache-2.0 |
 | docs/media/bandpass-h-10GHz.png | EMCraft contributors | Original: drawn by `emcraft-cli sample iris-bandpass --frequency 10` (h-10GHz.png) | MIT OR Apache-2.0 |
 | docs/media/cavity-te101-h.png | EMCraft contributors | Original: drawn by `emcraft-cli sample cavity` (mode1-h-90deg.png) | MIT OR Apache-2.0 |
@@ -35,7 +35,7 @@ third-party material under an open licence.
 | crates/engine/tests/fixtures/post-and-puck.3mf | EMCraft contributors | Original: a post and a puck modelled in SolidCraft and exported as 3MF with face tags | MIT OR Apache-2.0 |
 | tests/oracle/imported-iris-cavity/block.3mf | EMCraft contributors | Original: a WR-90 block with its channel and two iris plates, written by SolidCraft's CLI from `tests/oracle/imported-iris-cavity/block.solidcraft.json` (3MF with face tags) | MIT OR Apache-2.0 |
 | tests/oracle/imported-iris-touching/iris.3mf | EMCraft contributors | Original: a WR-90 guide and two iris plates as three bodies, written by SolidCraft's CLI from `tests/oracle/imported-iris-touching/iris.solidcraft.json` (3MF with face tags) | MIT OR Apache-2.0 |
-| apps/emcraft/assets/emcraft.ico, docs/media/emcraft-logo.png (and the window icon) | EMCraft contributors | Original: drawn by `emcraft_render::icon` (`cargo xtask icon`), in the style of the sibling project SolidCraft's mark (isometric blue blocks, parted faces); no SolidCraft file used | MIT OR Apache-2.0 |
+| apps/emcraft/assets/emcraft.ico, docs/media/emcraft-logo.png (and the window icon) | EMCraft contributors | Original: drawn by `emcraft_render::icon` (`cargo xtask icon`), in the style of SolidCraft's mark (isometric blue blocks, parted faces); no SolidCraft file used | MIT OR Apache-2.0 |
 | apps/emcraft/installer/emcraft.nsi | EMCraft contributors | Original: the Windows installer script, written for NSIS 3's Modern UI (NSIS itself is a build tool, not shipped; its installer stub is under the zlib/libpng licence) | MIT OR Apache-2.0 |
 | locales/ja.json | EMCraft contributors | Original: the window's Japanese translation | MIT OR Apache-2.0 |
 
@@ -46,7 +46,7 @@ face cannot be read, is FieldCraft's (below). The window's Japanese (and any Jap
 is set in a Japanese font installed on the system, or a font file the person chooses; none is
 embedded (`emcraft_ui_core::fonts`, docs/languages.md).
 
-## Code adapted from sibling projects
+## Code adapted from SolidCraft and FieldCraft
 
 FieldCraft (`../fieldcraft`, MIT OR Apache-2.0, Copyright (c) 2026 FieldCraft contributors):
 

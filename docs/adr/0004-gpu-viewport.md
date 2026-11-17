@@ -126,7 +126,7 @@ lines here (`gpu3d`: packing, projection, five passes, three small WGSL shaders)
   SolidCraft use.
 - **truck's renderer** draws CAD shapes with its own shading; it shares nothing with our scene
   and is not in our tree.
-- **The choice:** our own small renderer on wgpu, the approach SolidCraft (the sibling app)
+- **The choice:** our own small renderer on wgpu, the approach SolidCraft (the CAD application EMCraft works with)
   takes, so fixes and techniques move between the two.
 
 ## Licences
