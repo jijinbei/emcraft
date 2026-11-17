@@ -23,6 +23,12 @@ updates:
       # Pinned to the SolidCraft commit EMCraft reads designs with
       # (docs/adr/0003-solidcraft-exchange.md); moved by hand.
       - dependency-name: "solidcraft-*"
+      # The exact predicates' BigInt must be num-rational's (0.4 uses num-bigint 0.4): both move
+      # together, by hand.
+      - dependency-name: num-bigint
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: num-rational
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: github-actions
     directory: /
