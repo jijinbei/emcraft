@@ -15,6 +15,7 @@ mod dupes;
 mod fonts;
 mod heavy;
 mod installer;
+mod land;
 mod layers;
 mod style;
 
@@ -75,6 +76,12 @@ commands:
                   build the Windows installer on Linux: release binaries cross-compiled with
                   MinGW-w64, packed by NSIS (both fetched through nix-shell when missing;
                   docs/install-windows.md); default FILE target/EMCraft-VERSION-setup.exe
+  land [--dry-run] [--oracle] PR...
+                  the maintainer's merge queue: stack the pull requests on the latest develop
+                  (each rebased on the ones before it), check the stack as CI's gate does (the
+                  oracle too with --oracle), then push each rebased pull request to its branch
+                  and develop to the stack, so GitHub marks them merged; nothing is pushed when a
+                  rebase or a check fails, nor with --dry-run (needs gh)
   ci              fmt --check, layers, dupes --fail, colours, style, clippy -D warnings, the tests,
                   then the oracle
 ";
@@ -101,6 +108,7 @@ fn main() -> ExitCode {
         Some("desktop") => installer::desktop(rest.iter().position(|a| *a == "--exec").and_then(|i| rest.get(i + 1)).copied()),
         Some("font-subset") => font_subset(),
         Some("installer-windows") => installer::windows(&root(), &rest),
+        Some("land") => land::run(&root(), &rest),
         Some("ci") => cmd_ci(),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
