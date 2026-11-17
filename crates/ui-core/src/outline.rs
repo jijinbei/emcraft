@@ -181,6 +181,7 @@ const STEP_ADDS: &[(Step, &[&str])] = &[
             "particles.walls",
             "particles.open",
             "particles.probe",
+            "particles.output",
             "particles.clear",
         ],
     ),
