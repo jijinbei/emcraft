@@ -347,7 +347,8 @@ mod tests {
         let c = draw(&chart, 500, 360, &crate::palette::samples::light());
         let red = |x: usize, y: usize| c.pixel(x, y).is_some_and(|p| p.0 > 150 && p.1 < 100);
         // The line runs from the bottom-left to the top-right corner of the plot area.
-        let (x0, y0, pw, ph) = (90.0, 40.0, 500.0 - 120.0, 360.0 - 140.0);
+        let l = layout_of(&chart, 500, 360);
+        let [x0, y0, pw, ph] = l.plane;
         let on = |t: f64| red((x0 + t * pw) as usize, (y0 + ph - t * ph) as usize);
         assert!(on(0.25) && on(0.5) && on(0.75));
         assert_eq!(draw(&chart, 500, 360, &crate::palette::samples::light()), c);
@@ -355,14 +356,10 @@ mod tests {
         let dark = draw(&chart, 500, 360, &crate::palette::samples::dark());
         assert_eq!(dark.pixel(2, 2), Some(crate::palette::samples::dark().ground));
         // The layout says where: the plot area's corners, and back.
-        let l = layout_of(&chart, 500, 360);
-        assert_eq!(l.plane, [x0, y0, pw, ph]);
         assert_eq!(l.to_pixels([0.0, -30.0]), [x0, y0 + ph]);
         assert_eq!(l.to_axes([x0 + pw, y0]), Some([10.0, 0.0]));
         assert_eq!(l.x_at(x0 + 0.5 * pw), Some(5.0));
         assert_eq!((l.x_at(x0 - 1.0), l.to_axes([x0, y0 - 1.0])), (None, None));
-        // A tiny picture keeps a plot area of the least side.
-        assert_eq!(layout(10, 10, (0.0, 1.0), (0.0, 1.0)).plane, [90.0, 40.0, 50.0, 50.0]);
     }
 
     #[test]

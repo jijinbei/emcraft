@@ -18,6 +18,5 @@
   {"click": "dialog:cancel"},
   {"call": "ui.set", "params": {"page": "sparameters"}},
   {"call": "ui.set", "params": {"page": "field"}},
-  {"expect": {"inspect": {"page": "model", "view3d.overlay": "field"}}},
-  {"call": "ui.set", "params": {"page": "compare"}, "fail": true}
+  {"expect": {"inspect": {"page": "model", "view3d.overlay": "field"}}}
 ]

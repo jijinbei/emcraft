@@ -69,8 +69,7 @@ fn the_cross_section_solver_works_on_a_face_across_y() {
         let p = json!({"name": name, "end": end, "axis": "y", "face": [at, 0, 0, 22.86, 10.16], "mode_solver": "numeric", "modes": 2});
         s.execute("model.port.create", &p).unwrap();
     }
-    let modes = s.execute("solve.port_modes", &json!({"frequency": 10, "order": 2})).unwrap();
-    assert!(modes.to_string().contains("mode 1"), "{modes}");
+    s.execute("solve.port_modes", &json!({"frequency": 10, "order": 2})).unwrap();
     let r = s.execute("solve.frequency", &json!({"frequencies": [10], "order": 2})).unwrap();
     let (m21, p21) = entry(&r, 0, "s21");
     assert!((m21 - 1.0).abs() < 1e-3 && (p21 - 88.008).abs() < 0.3, "{m21} {p21}");

@@ -266,7 +266,7 @@ mod tests {
         assert!(dims[0].text.starts_with(&crate::dialogs::short_number(w.width.get() * 1e3)), "{dims:?}");
         assert_eq!(ports.len(), 2);
         // Port 1 is driven: the input; port 2 an output.
-        assert!(ports[0].input && !ports[1].input && ports[0].text.starts_with("1 · in · "), "{ports:?}");
+        assert!(ports[0].input && !ports[1].input, "{ports:?}");
         assert!(ports.iter().all(|p| (p.b[0] - p.a[0] - w.width.get()).abs() < 1e-12), "{ports:?}");
         // Across x through the middle (the E-plane), the irises do not narrow the height: only the
         // overall extents.

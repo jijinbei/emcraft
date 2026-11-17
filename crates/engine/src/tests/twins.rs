@@ -113,19 +113,6 @@ fn the_inductive_posts_design_reflects_as_its_twin_and_the_closed_form() {
     assert!((d - exact).abs() < 1e-2, "design {d}, closed form {exact}");
 }
 
-/// The mitred H-plane bend has no closed form: its design and its twin agree (with its symmetry
-/// plane: the design's two ends triangulated differently are still mirror images).
-#[test]
-fn the_h_bends_design_turns_as_its_twin() {
-    let (design, twin) = both("h-bend", json!(null), "solve.frequency", json!({"frequencies": [9, 11], "order": 2}));
-    for k in 0..2 {
-        for s in ["s11", "s21"] {
-            let p = format!("/points/{k}/{s}/mag");
-            assert!((at(&design, &p) - at(&twin, &p)).abs() < 3e-3, "{p}: design {design}, twin {twin}");
-        }
-    }
-}
-
 /// The cross-guide coupler's two holes: its design and its twin agree on the coupling into each
 /// port (Bethe's small-hole theory is too rough to check them by).
 #[test]

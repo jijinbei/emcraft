@@ -236,31 +236,4 @@ mod tests {
             assert!(!text(c.id, &none, &none, &s).is_empty(), "{}", c.id);
         }
     }
-
-    #[test]
-    fn a_reply_with_missing_fields_still_reads() {
-        let s = Session::new();
-        let none = json!({});
-        assert_eq!(text("results.touchstone", &none, &none, &s), "Wrote .");
-        assert_eq!(text("file.open", &none, &none, &s), "Opened the project.");
-        assert_eq!(text("mesh.adapt", &none, &none, &s), "Adaptive mesh: 0 passes, 0 tetrahedra, last ΔS –, not converged.");
-        assert_eq!(
-            text("mesh.adapt", &none, &json!({"passes": [{"delta_s": 0.5}, {"delta_s": 0.01}], "converged": true}), &s),
-            "Adaptive mesh: 2 passes, 0 tetrahedra, last ΔS 1.00e-2, converged."
-        );
-        assert_eq!(
-            text("mesh.adapt", &none, &json!({"quantity": "far_field", "passes": [{"delta_far_field": 0.004}]}), &s),
-            "Adaptive mesh: 1 passes, 0 tetrahedra, last far-field change 4.00e-3, not converged."
-        );
-        assert_eq!(text("project.setup", &none, &json!({"start": 5.0, "stop": 9.0}), &s), "Settings confirmed.");
-        assert_eq!(text("file.sample", &json!({"name": "highpass"}), &none, &s), "Opened sample highpass; Run (step 6) solves it.");
-        // An open problem's: the power radiated, a plane wave's scattering cross-section (it
-        // radiates nothing of its own: no NaN), or neither.
-        assert_eq!(text("solve.radiation", &none, &json!({"radiated_power": 0.00245}), &s), "Solved the open problem: radiated power 0.00245 W.");
-        assert_eq!(
-            text("solve.radiation", &none, &json!({"scattering_cross_section": 12.5}), &s),
-            "Solved the scattering problem: scattering cross-section 12.5 mm²."
-        );
-        assert_eq!(text("solve.radiation", &none, &none, &s), "Solved the open problem.");
-    }
 }

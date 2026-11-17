@@ -336,14 +336,6 @@ fn bitmap(text: &str, scale: usize, mut plot: impl FnMut(i64, i64, f32)) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_face_reads_and_covers_the_labels_marks() {
-        let f = face().unwrap();
-        for ch in "S21 |E| (V/m) εr ωt φ θ ° µ² ₁₀ — dBi λ/4 √".chars().filter(|c| !c.is_whitespace()) {
-            assert_ne!(f.glyph_id(ch).0, 0, "{ch}");
-        }
-    }
-
     /// The embedded subset draws every character the code below the UI can write (the
     /// characters of its sources, beside ASCII) exactly as the full DejaVu Sans does: the same
     /// outline, advance and side bearing, and the same kerning between any two of them.

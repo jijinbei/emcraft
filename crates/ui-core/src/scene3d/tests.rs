@@ -255,8 +255,6 @@ fn a_large_scene_moves_coarser_and_is_picked_in_full() {
         assert!(got.is_some());
         assert_eq!(got, hits(&b.scene, &c, emcraft_render::view3d::Pixel::new(x, y, 300.0, 200.0)));
     }
-    let copy = b.clone();
-    assert!(format!("{:?}", copy.cache).contains("index: false"));
 }
 
 /// Milliseconds per pick, face and moving picture on the magic tee's fine mesh, scanned and

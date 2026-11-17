@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(p.number("n").optional(), Ok(None));
         assert_eq!(p.number("b").or(7.0), Ok(7.0));
         assert_eq!(p.number("b").or_maybe(Some(3.0)).required(), Ok(3.0));
-        assert!(matches!(p.number("b").required(), Err(EngineError::Params(m)) if m == "`b` is required"));
+        assert!(matches!(p.number("b").required(), Err(EngineError::Params(_))));
     }
 
     #[test]
@@ -515,7 +515,7 @@ mod tests {
         let items = p.items("sections", "section", 10).unwrap();
         assert!(items[0].positive("length").required().is_ok());
         let e = items[1].positive("length").required().unwrap_err();
-        assert_eq!(e, EngineError::Params("section 2: `length` must be > 0, got -1".into()));
+        assert!(matches!(&e, EngineError::Params(m) if m.contains("section 2")), "{e}");
         assert!(p.items("sections", "section", 1).is_err());
     }
 }

@@ -237,12 +237,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn views_read_their_ids_and_labels() {
+    fn views_read_their_ids() {
         for v in View::ALL {
             assert_eq!(View::parse(v.id()), Some(v));
         }
-        assert_eq!(View::Tdr.label(), "TDR");
-        assert_eq!(View::PortModes.id(), "port_modes");
-        assert_eq!(View::COUNT, 14);
     }
 }

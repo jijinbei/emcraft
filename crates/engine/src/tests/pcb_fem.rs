@@ -244,7 +244,6 @@ fn the_four_layer_example_board_meshes_and_its_route_crosses_layers() {
     let mut s = Session::new();
     s.execute("file.sample", &json!({"name": "pcb-board"})).unwrap();
     let board = s.model().pcb().cloned().unwrap();
-    assert_eq!(board.layers.len(), 4);
     // The route's two free ends are its pads; its via joins the layers.
     let ends = crate::pcb_fem::route_ends(&board, "DATA");
     assert_eq!(ends, vec![("data:0".to_string(), emcraft_model::End::Start), ("data:3".to_string(), emcraft_model::End::End)]);

@@ -359,17 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn entries_read_by_pair_and_by_row() {
-        let s = SMatrix::from_fn(2, |p, q| c(p as f64, q as f64));
-        assert_eq!(s[(1, 0)], c(1.0, 0.0));
-        assert_eq!(s[0][1], c(0.0, 1.0));
-        assert_eq!(s.get(2, 0), None);
-        assert_eq!(s.rows().count(), 2);
-        assert_eq!(SMatrix::zeros(0).rows().count(), 0);
-        assert_eq!(s.transpose()[(0, 1)], s[(1, 0)]);
-    }
-
-    #[test]
     fn a_lossless_reciprocal_two_port_is_unitary_and_symmetric() {
         // A line section: S11 = S22 = 0, S21 = S12 = e^{−jθ}.
         let t = C::from_polar(1.0, -0.7);

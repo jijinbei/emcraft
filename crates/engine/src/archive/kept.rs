@@ -111,13 +111,3 @@ impl KeptSweep {
         self.s.curve(p, q).collect()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn nothing_solved_keeps_nothing() {
-        assert_eq!(Kept::of(&Results::default()), Kept::default());
-    }
-}

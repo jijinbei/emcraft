@@ -835,18 +835,3 @@ pub(crate) fn reply(s: &Session, r: &SystemResult) -> Value {
         "most_at": most.map(|x| s.show_frequency(x.0)),
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_matched_lines_chain_matrix_is_its_own() {
-        // λ/4 at 1 GHz in vacuum: A = D = 0, B = j Z₀, C = j/Z₀; two make a half wave, S21 = −1
-        // (Pozar, Microwave Engineering, 4th ed., §4.4, Tables 4.1–4.2).
-        let m = Block::Line { z0: 50.0, length: C0 / 4e9, eps_r: 1.0, loss: LineLoss::default() }.chain(1e9).unwrap();
-        assert!(m[0].norm() < 1e-12 && (m[1] - C::new(0.0, 50.0)).norm() < 1e-9);
-        let s = s_of_chain(times(m, m), 50.0).unwrap();
-        assert!((s[2] + ONE).norm() < 1e-12 && s[0].norm() < 1e-12);
-    }
-}

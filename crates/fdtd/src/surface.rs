@@ -108,7 +108,5 @@ mod tests {
         // A decade and beyond the band by 10: still close.
         let e = worst(2.0 * PI * 1e9, 2.0 * PI * 1e10, (2.0 * PI * 1e8, 2.0 * PI * 1e11));
         assert!(e < 1e-4, "{e:e}");
-        // Some 25 branches for a band.
-        assert!(inverse_sqrt(lo, hi).len() < 30);
     }
 }

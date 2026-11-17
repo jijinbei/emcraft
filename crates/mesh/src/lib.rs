@@ -565,8 +565,6 @@ mod tests {
     #[test]
     fn hostile_sizes_are_refused() {
         let m = model();
-        // A size of zero, below or not finite is no `Metres`: it cannot reach the mesher.
-        assert!([0.0, f64::NAN, -1.0].into_iter().all(|h| emcraft_model::Metres::new(h).is_err()));
         assert!(matches!(waveguide(&m, metres(1e-6)), Err(MeshError::TooLarge { .. })));
         assert!(waveguide(&Model::new(), metres(0.001)).is_err());
     }

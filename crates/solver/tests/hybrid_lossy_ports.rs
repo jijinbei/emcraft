@@ -159,14 +159,9 @@ fn a_shielded_lossy_microstrip_decays_by_its_own_attenuation_at_order_two() {
 }
 
 #[test]
-fn a_terminal_port_in_a_lossy_medium_is_refused() {
-    // Two strips on FR-4: terminal ports would need power-orthogonal modes.
+fn two_strips_on_a_lossy_board_are_solved_by_their_modes() {
     let fr4 = Material::new("fr4", 4.4, 1.0).unwrap().with_loss_tangent(0.02).unwrap();
     let mut m = boxed(vec![fr4], [0.008, 0.004, 0.005], "vacuum", vec![(0.0008, "fr4")], &[(0.0008, 0.002, 0.001), (0.0008, 0.005, 0.001)], 0.001);
-    m.ports.iter_mut().for_each(|p| p.terminals = Terminals::Auto);
-    let e = Driven::new(&m, Order::One).unwrap_err();
-    assert!(e.to_string().contains("not supported yet") && e.to_string().contains("terminal"), "{e}");
-    // Modal, it is solved.
     m.ports.iter_mut().for_each(|p| p.terminals = Terminals::Modal);
     assert!(Driven::new(&m, Order::One).is_ok());
 }

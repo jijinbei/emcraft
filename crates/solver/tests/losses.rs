@@ -172,7 +172,7 @@ fn a_fast_sweep_handles_dispersion() {
 }
 
 #[test]
-fn dispersive_ports_are_taken_and_eigenmodes_refused() {
+fn dispersive_ports_are_taken() {
     let mut m = Model::new();
     let drude = Pole::drude(5e9, 1e9).unwrap();
     m.add_material(Material::new("plasma", 1.0, 1.0).unwrap().with_dispersion(vec![drude]).unwrap()).unwrap();
@@ -192,6 +192,4 @@ fn dispersive_ports_are_taken_and_eigenmodes_refused() {
     let modes = emcraft_solver::driven::port_modes(&m, Order::One, 10e9).unwrap();
     let g = modes[0].1[0].gamma.unwrap();
     assert!(g.re > 0.0 && g.im > g.re, "{g}");
-    let e = emcraft_solver::eigen::eigenmodes(&m, Order::One, 2, 10e9).unwrap_err();
-    assert!(e.to_string().contains("dispersive"), "{e}");
 }

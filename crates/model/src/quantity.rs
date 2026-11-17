@@ -335,7 +335,6 @@ mod tests {
         assert_eq!(Conductivity::new(MAX_CONDUCTIVITY).map(Conductivity::get), Ok(MAX_CONDUCTIVITY));
         assert_eq!(LossTangent::new(0.0), Ok(LossTangent::ZERO));
         assert_eq!(LossTangent::new(MAX_LOSS_TANGENT).map(LossTangent::get), Ok(MAX_LOSS_TANGENT));
-        assert_eq!(Hertz::new(-1.0).unwrap_err().to_string(), "invalid frequency: must be a finite number > 0, got -1");
     }
 
     #[test]

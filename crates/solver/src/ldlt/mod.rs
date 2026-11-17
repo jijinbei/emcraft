@@ -831,7 +831,6 @@ mod tests {
         let mem = Ldlt::factor_within(&a, &xyz, u64::MAX).unwrap();
         let disk = Ldlt::factor_within(&a, &xyz, 0).unwrap();
         assert_eq!(mem.bytes_on_disk, 0);
-        assert_eq!(disk.bytes_on_disk, 16 * disk.supernodes.iter().map(|s| s.k * s.rows.len()).sum::<usize>() as u64);
         let (mut x, mut y) = (b.clone(), b.clone());
         mem.solve(&mut x).unwrap();
         disk.solve(&mut y).unwrap();

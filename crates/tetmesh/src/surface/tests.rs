@@ -223,7 +223,6 @@ fn holes_and_bad_edges_are_located() {
     let d = defects(&open);
     assert_eq!(d.total, 3);
     assert!(d.listed.iter().all(|x| x.kind() == "open_edge" && x.at().is_some()));
-    assert!(d.to_string().starts_with("3 defects; open edge"), "{d}");
 
     let mut flipped = cube([0.0; 3], 1.0);
     flipped.1[5].swap(0, 1);

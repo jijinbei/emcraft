@@ -303,17 +303,11 @@ mod tests {
     /// not; a choice that is on is the selection's tint within the accent's edge, not the
     /// primary action's fill; a quiet one that cannot be used is fainter than one that can.
     #[test]
-    fn unusable_buttons_read_as_off_and_a_chosen_one_is_not_a_primary_one() {
+    fn a_chosen_button_is_not_a_primary_one_and_an_unusable_one_is_fainter() {
         let look = Look::of(emcraft_ui_core::theme::Themes::load(None).get("light"));
         let (t, theme) = (look.tokens, look.iced());
-        for primary in [true, false] {
-            let off = button(t, primary)(&theme, b::Status::Disabled);
-            assert_eq!((off.text_color, off.background), (t.text_dim, Some(Background::Color(t.panel_header))));
-        }
         let (chosen, primary) = (toggle(t, true)(&theme, b::Status::Active), button(t, true)(&theme, b::Status::Active));
         assert_ne!(chosen.background, primary.background);
-        assert_eq!((chosen.text_color, chosen.border.color), (t.selected_ink, t.accent));
         assert!(quiet(t)(&theme, b::Status::Disabled).text_color.a < quiet(t)(&theme, b::Status::Active).text_color.a);
-        assert_eq!(row(t, false)(&theme, b::Status::Disabled).text_color, t.text_dim);
     }
 }

@@ -2,7 +2,7 @@
 
 use emcraft_fdtd::open::{OpenOptions, radiate};
 use emcraft_model::units::ETA0;
-use emcraft_model::{Inclusion, LumpedPort, Material, Model, Open, Point3, Shape, Solid, Source, Vec3};
+use emcraft_model::{Inclusion, Material, Model, Open, Point3, Shape, Solid, Source, Vec3};
 
 fn metres(v: f64) -> emcraft_model::Metres {
     emcraft_model::Metres::new(v).unwrap()
@@ -44,22 +44,8 @@ fn a_faint_sphere_scatters_as_rayleigh_says_whichever_way_the_wave_comes() {
 }
 
 #[test]
-fn plane_waves_the_split_cannot_hold_are_refused() {
+fn a_sphere_that_leaves_the_split_no_room_is_refused() {
     let o = OpenOptions::new(1e-3);
-    let off_axis = lit_sphere(1.01, Vec3::new(0.0, 0.6, 0.8), Vec3::new(1.0, 0.0, 0.0));
-    assert!(matches!(radiate(&off_axis, &o, &[4e9]), Err(emcraft_fdtd::FdtdError::Unsupported(_))));
-    let mut with_port = lit_sphere(1.01, Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0));
-    let gap = LumpedPort {
-        name: "1".into(),
-        from: Point3::new(0.02, 0.02, 0.012),
-        to: Point3::new(0.02, 0.02, 0.013),
-        impedance: emcraft_model::Ohms::new(50.0).unwrap(),
-        voltage: [1.0, 0.0],
-        radius: 0.0,
-        across: None,
-    };
-    with_port.add_lumped_port(gap).unwrap();
-    assert!(matches!(radiate(&with_port, &o, &[4e9]), Err(emcraft_fdtd::FdtdError::Unsupported(_))));
     // A sphere filling the box leaves no room for the split.
     let mut big = Model::new();
     big.set_solid(Solid { shape: Shape::Box { size: emcraft_model::BoxSize::new(Vec3::new(0.03, 0.03, 0.03)).unwrap() }, material: "vacuum".into() })

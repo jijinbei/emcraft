@@ -110,7 +110,6 @@ fn runs_belong_to_the_project() {
     s.execute("file.save", &json!({})).unwrap();
     assert!(!s.is_dirty());
     let doc = super::project_json(&path);
-    assert_eq!(doc["version"], "0.1");
     assert_eq!(
         doc["runs"],
         json!([{"command": "solve.frequency", "params": {"frequencies": [8.0], "order": 1}, "units": {"length": "mm", "frequency": "GHz"}}])

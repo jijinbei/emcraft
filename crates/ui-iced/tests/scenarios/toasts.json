@@ -3,5 +3,6 @@
   {"call": "engine.execute", "params": {"command": "file.sample", "params": {"name": "highpass"}}},
   {"expect": {"inspect": {"toasts": []}}},
   {"call": "engine.execute", "params": {"command": "solve.frequency", "params": {"start": 6, "stop": 9, "points": 4, "order": 1}}},
+  {"expect": {"inspect": {"toasts.0.error": false}}},
   {"shot": "toasts"}
 ]

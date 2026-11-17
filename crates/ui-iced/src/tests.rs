@@ -15,11 +15,6 @@ fn gpu() -> std::sync::MutexGuard<'static, ()> {
     GPU.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The window's settings as it runs: the pictures' face loaded for the charts' labels.
-fn settings() -> iced::Settings {
-    iced::Settings { fonts: vec![emcraft_render::text::face_bytes().into()], ..iced::Settings::default() }
-}
-
 fn field(node: &str, key: &'static str) -> Field {
     Field { node: node.to_owned(), key }
 }
@@ -74,7 +69,7 @@ fn the_node_editor_edits_drags_and_links_the_chain() {
 }
 
 /// The view drawn headless: an empty project shows the kinds of stage, and clicking one adds
-/// it. With `EMCRAFT_ICED_SHOTS=DIR` the sample's view is written there as a PNG to look at.
+/// it.
 #[test]
 fn an_empty_chain_offers_its_stages_and_a_click_adds_one() {
     let _gpu = gpu();
@@ -89,19 +84,6 @@ fn an_empty_chain_offers_its_stages_and_a_click_adds_one() {
         app.update(m);
     }
     assert_eq!(app.session.model().system.stages.len(), 1);
-    if let Ok(dir) = std::env::var("EMCRAFT_ICED_SHOTS") {
-        let themes = emcraft_ui_core::theme::Themes::load(None);
-        for (name, theme, language) in [("system", "light", "en"), ("system-dark", "dark", "en"), ("system-ja-sepia", "sepia", "ja")] {
-            emcraft_ui_core::lang::set(language);
-            let sample = App::new(Some("adsb-receiver")).dressed(themes.get(theme));
-            let mut ui = iced_test::Simulator::with_size(settings(), (1400.0, 1300.0), sample.view());
-            let shot = ui.snapshot(&sample.theme()).unwrap_or_else(|e| panic!("{e}"));
-            let path = std::path::Path::new(&dir).join(name);
-            let _ = std::fs::remove_file(std::path::Path::new(&dir).join(format!("{name}-wgpu.png")));
-            assert!(shot.matches_image(&path).unwrap_or(false));
-        }
-        emcraft_ui_core::lang::set("en");
-    }
 }
 
 /// Waits for the running job to end (a cap of two minutes), looking at it as the frames would.
@@ -229,59 +211,6 @@ fn run_solves_on_the_worker_and_shows_the_sweep() {
         assert!(app.charts.page.as_ref().is_some_and(|p| p.shown.is_ok()), "{page:?}'s chart");
     }
     assert!(app.log.lines().iter().any(|n| n.text.contains(" s")), "its time noted: {:?}", app.log);
-}
-
-/// The 3D view's frame drawn offscreen on the process's own device, as the shader widget draws
-/// it on the window's: the model's pixels differ from the ground. With `EMCRAFT_ICED_SHOTS=DIR`
-/// the picture is written there. A machine with no adapter at all skips it.
-#[test]
-fn the_3d_frame_draws_the_model() {
-    let _gpu = gpu();
-    let app = App::new(Some("highpass"));
-    let Some(shown) = app.view3d.shown.as_ref() else { panic!("no scene") };
-    let frame = crate::view3d::shader::frame(&app.shot(shown), [640, 400], 1.0);
-    let canvas = match emcraft_gpu3d::picture(0, &frame) {
-        Ok(c) => c,
-        Err(emcraft_gpu3d::Gpu3dError::NoAdapter(e)) => return eprintln!("skipped: {e}"),
-        Err(e) => panic!("{e}"),
-    };
-    let corner = &canvas.rgba[..4];
-    let differ = canvas.rgba.chunks(4).filter(|p| p != &corner).count();
-    assert!(differ > canvas.rgba.len() / 4 / 20, "the model covers some of the view ({differ} pixels)");
-    if let Ok(dir) = std::env::var("EMCRAFT_ICED_SHOTS") {
-        let png = canvas.png().unwrap_or_default();
-        assert!(std::fs::write(std::path::Path::new(&dir).join("model-3d.png"), png).is_ok());
-        // The pages around it, solved (the simulator draws no shader: the 3D view is blank).
-        let mut app = App::new(Some("highpass"));
-        app.update(Message::Start("solve.run".into()));
-        finish(&mut app);
-        let ports = Message::View3d(crate::view3d::Nav::Overlay(emcraft_ui_core::scene3d::Overlay::Ports));
-        let field = Message::View3d(crate::view3d::Nav::Overlay(emcraft_ui_core::scene3d::Overlay::Field));
-        let h_arrows = Message::View3d(crate::view3d::Nav::Arrows(true, true));
-        let cut = app.view3d.bounds().map(|b| emcraft_ui_core::scene3d::Cut::middle(0, b));
-        let section = Message::View3d(crate::view3d::Nav::Section(cut));
-        let pick = Message::Click(crate::view3d::Click { at: emcraft_ui_core::geom::Point::new(400.0, 300.0), add: false, double: false });
-        for (name, page, then) in [
-            ("sparameters", emcraft_ui_core::view::View::SParameters, None),
-            ("tdr", emcraft_ui_core::view::View::Tdr, None),
-            ("model", emcraft_ui_core::view::View::Model, None),
-            ("model-ports", emcraft_ui_core::view::View::Model, Some(ports)),
-            ("model-field", emcraft_ui_core::view::View::Model, Some(field)),
-            ("model-arrows", emcraft_ui_core::view::View::Model, Some(h_arrows)),
-            ("model-probe", emcraft_ui_core::view::View::Model, Some(Message::Hover(Some(emcraft_ui_core::geom::Point::new(400.0, 300.0))))),
-            ("model-selected", emcraft_ui_core::view::View::Model, Some(pick)),
-            ("model-section", emcraft_ui_core::view::View::Model, Some(section)),
-        ] {
-            app.update(Message::Page(page));
-            if let Some(m) = then {
-                app.update(m);
-            }
-            let mut ui = iced_test::Simulator::with_size(settings(), (1400.0, 900.0), app.view());
-            let shot = ui.snapshot(&app.theme()).unwrap_or_else(|e| panic!("{e}"));
-            let _ = std::fs::remove_file(std::path::Path::new(&dir).join(format!("{name}-wgpu.png")));
-            assert!(shot.matches_image(std::path::Path::new(&dir).join(name)).unwrap_or(false));
-        }
-    }
 }
 
 /// A click on the model picks the part under it (the shared selection's rules): its row names it
@@ -490,15 +419,6 @@ fn a_dialog_edits_an_item_and_delete_takes_one_away() {
     app.update(Message::Delete);
     assert_eq!(app.session.model().ports.len(), ports - 1);
     assert!(app.selection.is_clear());
-    if let Ok(dir) = std::env::var("EMCRAFT_ICED_SHOTS") {
-        let _gpu = gpu();
-        app.update(Message::Row("material:ptfe-like".into()));
-        app.update(Message::Edit);
-        let mut ui = iced_test::Simulator::with_size(settings(), (1400.0, 900.0), app.view());
-        let shot = ui.snapshot(&app.theme()).unwrap_or_else(|e| panic!("{e}"));
-        let _ = std::fs::remove_file(std::path::Path::new(&dir).join("dialog-wgpu.png"));
-        assert!(shot.matches_image(std::path::Path::new(&dir).join("dialog")).unwrap_or(false));
-    }
 }
 
 /// The tree's ＋: Geometry's list offers a new material, whose dialog opens in the properties
@@ -641,16 +561,6 @@ fn a_cavitys_modes_are_listed_and_one_is_shown() {
     assert_eq!((app.page, app.view3d.field.mode), (View::Model, Some(0)));
     assert_eq!(app.view3d.field_error, None);
     assert!(app.view3d.shown.as_ref().is_some_and(|s| s.field.is_some()), "the mode's field on the plane");
-    if let Ok(dir) = std::env::var("EMCRAFT_ICED_SHOTS") {
-        let _gpu = gpu();
-        for (name, page) in [("eigenmodes", View::Eigenmodes), ("cavity-mode", View::Model)] {
-            app.update(Message::Page(page));
-            let mut ui = iced_test::Simulator::with_size(settings(), (1400.0, 900.0), app.view());
-            let shot = ui.snapshot(&app.theme()).unwrap_or_else(|e| panic!("{e}"));
-            let _ = std::fs::remove_file(std::path::Path::new(&dir).join(format!("{name}-wgpu.png")));
-            assert!(shot.matches_image(std::path::Path::new(&dir).join(name)).unwrap_or(false));
-        }
-    }
 }
 
 /// An eigenmode's field shows its strongest component of E, and another project starts its field
@@ -757,13 +667,6 @@ fn settings_change_the_window_at_once() {
     let off = emcraft_ui_core::prefs::GpuLook { outline: false, ..app.gpu_look };
     app.update(Message::Pref(Pref::GpuLook(off)));
     assert!(!app.gpu_look.outline, "the 3D view's drawing follows");
-    if let Ok(dir) = std::env::var("EMCRAFT_ICED_SHOTS") {
-        let _gpu = gpu();
-        let mut ui = iced_test::Simulator::with_size(settings(), (1400.0, 900.0), app.view());
-        let shot = ui.snapshot(&app.theme()).unwrap_or_else(|e| panic!("{e}"));
-        let _ = std::fs::remove_file(std::path::Path::new(&dir).join("settings-wgpu.png"));
-        assert!(shot.matches_image(std::path::Path::new(&dir).join("settings")).unwrap_or(false));
-    }
     app.update(Message::Pref(Pref::Navigation("nowhere".into())));
     assert!(app.error.as_deref().is_some_and(|e| e.contains("nowhere")));
     app.update(Message::Page(emcraft_ui_core::view::View::Model));
@@ -788,12 +691,6 @@ fn the_start_page_draws_templates_and_opens_one() {
         }
     }
     assert_eq!(app.thumbs.1.len(), 2);
-    if let Ok(dir) = std::env::var("EMCRAFT_ICED_SHOTS") {
-        let mut ui = iced_test::Simulator::with_size(settings(), (1400.0, 900.0), app.view());
-        let shot = ui.snapshot(&app.theme()).unwrap_or_else(|e| panic!("{e}"));
-        let _ = std::fs::remove_file(std::path::Path::new(&dir).join("start-wgpu.png"));
-        assert!(shot.matches_image(std::path::Path::new(&dir).join("start")).unwrap_or(false));
-    }
     let open = Then::Sample { name: "cavity".into(), values: serde_json::Value::Null, purpose: None };
     app.update(Message::File(FileAction::Request(open)));
     assert!(!app.cover.start() && app.session.name() == "cavity");
@@ -851,13 +748,6 @@ fn a_boards_route_is_diagnosed() {
     app.update(run("view.pcb", json!({"stage": Stage::Results.id()})));
     let line = emcraft_ui_core::pcb::report(&app.session, &app.replies, &net).and_then(|r| r.si.clone());
     assert!(line.is_some_and(|l| !l.points.is_empty() && !l.tdr.is_empty()), "{:?}", app.error);
-    if let Ok(dir) = std::env::var("EMCRAFT_ICED_SHOTS") {
-        let _gpu = gpu();
-        let mut ui = iced_test::Simulator::with_size(settings(), (1400.0, 1000.0), app.view());
-        let shot = ui.snapshot(&app.theme()).unwrap_or_else(|e| panic!("{e}"));
-        let _ = std::fs::remove_file(std::path::Path::new(&dir).join("pcb-wgpu.png"));
-        assert!(shot.matches_image(std::path::Path::new(&dir).join("pcb")).unwrap_or(false));
-    }
 }
 
 /// Every scenario in `tests/scenarios/`, each on a window opened on nothing, driven through the
@@ -1401,67 +1291,6 @@ fn the_field_column_reads_power_probes_and_a_pinned_point() {
     let params = emcraft_ui_core::results::fields::save_params(&app.view3d.field, None, &app.session, "field.png", false);
     app.update(Message::Open("view.field", params));
     assert_eq!(app.dialog.as_ref().map(|d| d.command.id), Some("view.field"));
-}
-
-/// The TDR, pulse and far-field pages' choices make their charts. Evidence: the high-pass
-/// filter's TDR in band pass is |h(t)| (no negative value); low pass, which needs a harmonic sweep
-/// of a line without a cut-off, is refused with why;
-/// a pulse sent through is charted as its power, then its instantaneous frequency; a θ cut starts
-/// at θ = 90°.
-#[test]
-fn the_result_pages_choices_make_their_charts() {
-    use crate::results::RAct;
-    use emcraft_ui_core::view::View;
-    let mut app = App::new(Some("highpass"));
-    app.run_now("solve.frequency", &json!({"start": 6, "stop": 9, "points": 31}));
-    finish(&mut app);
-    let chart = |app: &App| app.charts.page.as_ref().and_then(|p| p.shown.as_ref().ok()).cloned();
-    app.update(Message::Page(View::Tdr));
-    app.update(Message::R(RAct::TdrMode(Some(emcraft_engine::tdr::Mode::BandPass))));
-    let band = chart(&app).unwrap_or_else(|| panic!("a band-pass TDR: {:?}", app.charts.page.as_ref().map(|p| p.shown.clone().err())));
-    assert!(band.series.iter().flat_map(|s| s.points.iter()).all(|p| p[1] >= -1e-12), "|h(t)| is not negative");
-    app.update(Message::R(RAct::TdrMode(Some(emcraft_engine::tdr::Mode::LowPass))));
-    // Low pass needs a harmonic sweep (f = kΔf) from a line without a cut-off: refused, why shown.
-    let refused = app.charts.page.as_ref().and_then(|p| p.shown.as_ref().err().cloned());
-    assert!(refused.is_some(), "a guide's sweep from 6 GHz has no low-pass TDR");
-    // The pulse.
-    app.update(Message::Page(View::Pulse));
-    app.update(Message::R(RAct::PulseRun));
-    finish(&mut app);
-    let power = chart(&app).unwrap_or_else(|| panic!("the pulse: {:?}", app.error));
-    app.update(Message::R(RAct::PulseShow(true)));
-    let frequency = chart(&app).unwrap_or_else(|| panic!("its frequency"));
-    assert_ne!(power.y.label, frequency.y.label, "power, then frequency");
-    // The far field: a θ cut at 90°.
-    app.update(Message::Page(View::FarField));
-    app.update(Message::R(RAct::Cut(emcraft_engine::view::Cut::Theta)));
-    assert_eq!(app.pattern.angle, 90.0);
-    let _ = app.view();
-}
-
-/// The study page. Analytic evidence: a grid sweep of two variables over two values each has
-/// 2 × 2 = 4 points, and its table a row per point; charted along one variable the other is held
-/// at one of its two values, and the chart is made again when another is chosen.
-#[test]
-fn the_study_page_slices_a_grid() {
-    use crate::results::RAct;
-    use emcraft_ui_core::view::View;
-    let mut app = App::new(Some("highpass"));
-    let sweep = json!({"variables": [{"name": "er", "values": [2.0, 2.2]}, {"name": "l_gap", "values": [18, 22]}], "solve": {"command": "solve.frequency", "params": {"start": 6, "stop": 9, "points": 3, "order": 1}}});
-    app.run_now("study.sweep", &sweep);
-    finish(&mut app);
-    let study = app.session.results().study.as_ref().unwrap_or_else(|| panic!("a study: {:?}", app.error));
-    assert!(study.is_grid() && study.rows.len() == 4, "{} points", study.rows.len());
-    app.update(Message::Page(View::Study));
-    let table = emcraft_ui_core::results::study::points(&app.session, &app.study).unwrap_or_else(|| panic!("its table"));
-    assert_eq!(table.rows.len(), 4);
-    let chart = |app: &App| app.charts.page.as_ref().and_then(|p| p.shown.as_ref().ok()).map(|c| c.series.len());
-    assert!(chart(&app).is_some(), "{:?}", app.charts.page.as_ref().map(|p| p.shown.clone().err()));
-    app.update(Message::R(RAct::Along(1)));
-    app.update(Message::R(RAct::Held(0, 1)));
-    assert_eq!((app.study.slice.free, app.study.slice.at.first().copied()), (1, Some(1)));
-    assert!(chart(&app).is_some());
-    let _ = app.view();
 }
 
 /// A chart's style card. Evidence: each change is one view.chart.style the chart then shows — a

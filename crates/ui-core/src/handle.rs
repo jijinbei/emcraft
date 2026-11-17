@@ -577,16 +577,4 @@ mod tests {
             assert_eq!(h.to_string(), text);
         }
     }
-
-    #[test]
-    fn a_handle_hashes_as_its_text() {
-        let hash = |h: Handle| {
-            let mut s = std::collections::hash_map::DefaultHasher::new();
-            h.hash(&mut s);
-            s.finish()
-        };
-        assert_eq!(hash(Handle::Toolbar("a.b")), hash(Handle::Toolbar("a.b")));
-        assert_ne!(hash(Handle::Toolbar("a.b")), hash(Handle::Toolbar("a.c")));
-        assert_eq!(Fixed::parse("field:save:video"), Some(Fixed::FieldSaveVideo));
-    }
 }

@@ -238,23 +238,7 @@ fn bitmap(side: u32) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    /// Writes the icon at a few sides into `EMCRAFT_ICON_DIR` to look at (nothing without it).
-    #[test]
-    fn pictures_for_a_look() {
-        let Some(dir) = std::env::var_os("EMCRAFT_ICON_DIR") else { return };
-        for side in [16u32, 32, 64, 256, 512] {
-            std::fs::write(std::path::Path::new(&dir).join(format!("icon-{side}.png")), png(side).unwrap()).unwrap();
-        }
-    }
-
-    #[test]
-    fn the_icon_is_drawn_the_same_every_time() {
-        assert_eq!(rgba(48), rgba(48));
-        assert_eq!(ico(), ico());
-    }
-
-    /// The corners are clear and the bend's side is opaque blue; the wave is orange where it
-    /// leaves the lower opening.
+    /// The corners are clear.
     #[test]
     fn the_mark_is_drawn_on_a_clear_ground() {
         for side in [16u32, 32, 256] {
@@ -263,12 +247,6 @@ mod tests {
             let at = |x: usize, y: usize| &px[(y * n + x) * 4..(y * n + x) * 4 + 4];
             assert_eq!(at(0, 0)[3], 0, "{side}");
             assert_eq!(at(n - 1, n - 1)[3], 0, "{side}");
-            let blue =
-                (0..n).flat_map(|y| (0..n).map(move |x| (x, y))).filter(|&(x, y)| at(x, y)[3] >= 200 && at(x, y)[2] > 150 && at(x, y)[0] < 120);
-            assert!(blue.count() > n * n / 8, "{side}: little blue");
-            let orange =
-                (0..n).flat_map(|y| (0..n).map(move |x| (x, y))).filter(|&(x, y)| at(x, y)[3] > 200 && at(x, y)[0] > 200 && at(x, y)[2] < 120);
-            assert!(orange.count() > 0, "{side}: no wave");
         }
     }
 

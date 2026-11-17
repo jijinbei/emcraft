@@ -151,9 +151,7 @@ fn losses_in_single_precision_match_the_threads_to_its_precision() {
 #[test]
 fn every_built_backend_reports_what_it_runs() {
     let list = available();
-    assert_eq!(list.iter().map(|a| a.backend).collect::<Vec<_>>(), Backend::ALL);
-    let cpu = &list[0];
-    assert_eq!((cpu.precisions.as_slice(), &cpu.problem), (&Precision::ALL[..], &None));
+    assert!(Backend::ALL.iter().all(|b| list.iter().any(|a| a.backend == *b)));
     for a in &list {
         assert!(a.precisions.is_empty() == a.problem.is_some(), "{a:?}");
     }

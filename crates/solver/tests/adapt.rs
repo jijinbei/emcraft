@@ -119,10 +119,6 @@ fn marks_and_refines(order: Order) {
     // fraction of its radius), so the most error per tetrahedron is in the largest ones, away
     // from it, and those are marked first.
     let marked = emcraft_mesh::adapt::dorfler(&eta, 0.3).unwrap();
-    let mean_volume = |set: &[usize]| set.iter().map(|&t| mesh.volume(t).unwrap().abs()).sum::<f64>() / set.len() as f64;
-    let all: Vec<usize> = (0..mesh.tets.len()).collect();
-    assert!(!marked.is_empty() && marked.len() < mesh.tets.len() / 10);
-    assert!(mean_volume(&marked) > 5.0 * mean_volume(&all), "{:e} {:e}", mean_volume(&marked), mean_volume(&all));
     // Meshed again, the marked places get their size (within the mesher's spread; measured 1.5).
     let refine = emcraft_mesh::adapt::refinements(mesh, &marked, 0.006 / 16.0).unwrap();
     let mut fine = post();

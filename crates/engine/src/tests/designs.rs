@@ -43,18 +43,6 @@ fn a_design_no_template_has_is_refused() {
     assert!(matches!(&e, EngineError::Params(_)), "{e}");
 }
 
-#[test]
-fn the_horn_template_builds_its_walls_and_air() {
-    let s = built("horn", json!(null));
-    let bodies = crate::bodies::bodies(&s.model);
-    assert!(
-        bodies.iter().any(|b| b.name == "walls") && bodies.iter().any(|b| b.name == "inside"),
-        "{:?}",
-        bodies.iter().map(|b| &b.name).collect::<Vec<_>>()
-    );
-    assert!(s.model.domain.open.is_some());
-}
-
 /// The horn meshes at any density: its air body once went straight on for its last millimetre,
 /// so the crease where it turned lay exactly in the walls' front face, and the Boolean (which
 /// needs the surfaces in general position) left a vertex on an edge at 6, 7, 8 and 10 elements

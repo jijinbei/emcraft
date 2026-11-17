@@ -236,7 +236,6 @@ mod tests {
     #[test]
     fn named_colours_and_contrast() {
         let mut p = samples::light();
-        assert_eq!(COLOURS.len(), 11);
         for name in COLOURS {
             assert!(p.colour(name).is_some(), "{name}");
         }

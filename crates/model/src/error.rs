@@ -39,20 +39,3 @@ pub(crate) fn named(what: &str, name: &str) -> Result<()> {
 pub(crate) fn near<const N: usize>(x: [f64; N], y: [f64; N], tol: f64) -> bool {
     x.iter().zip(y).all(|(a, b)| (a - b).abs() <= tol)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn checks_name_what_they_refuse() {
-        assert_eq!(positive("width", 2.0), Ok(2.0));
-        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
-            assert!(matches!(positive("width", bad), Err(ModelError::Invalid { what, .. }) if what == "width"));
-        }
-        assert!(all_finite("strip", &[1.0, 2.0]).is_ok());
-        assert_eq!(all_finite("strip", &[1.0, f64::NAN]), Err(invalid("strip", "must be finite")));
-        assert!(named("name", " \t").is_err() && named("name", "a").is_ok());
-        assert!(near([1.0, 2.0], [1.0 + 1e-12, 2.0], 1e-9) && !near([1.0], [1.1], 1e-9));
-    }
-}

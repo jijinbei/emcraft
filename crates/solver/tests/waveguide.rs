@@ -9,7 +9,7 @@ mod common;
 
 use common::*;
 use emcraft_fem::Order;
-use emcraft_solver::{Complex64 as C, Driven, Field, SolveError};
+use emcraft_solver::{Driven, Field, SolveError};
 
 /// Frequencies across the filter's band: below the empty section's cut-off (6.557 GHz) and above.
 const BAND: [f64; 6] = [5.0e9, 6.0e9, 6.5e9, 7.0e9, 8.0e9, 9.0e9];
@@ -46,7 +46,6 @@ fn straight_guide_transmits_with_the_te10_phase() {
         // No reflection; S21 = e^{−jβL}.
         assert!(r.s[0][0].norm() < 5e-3, "{f}: S11 {}", r.s[0][0]);
         assert!((r.s[1][0] - exact.s21).norm() < 5e-3, "{f}: S21 {} exact {}", r.s[1][0], exact.s21);
-        assert!(exact.s11.norm() < 1e-15);
     }
 }
 
@@ -146,7 +145,6 @@ fn hostile_requests_are_refused() {
     assert!(matches!(Driven::new(&m, Order::One), Err(SolveError::NotReady(_))));
     m.ports.clear();
     assert!(matches!(Driven::new(&m, Order::One), Err(SolveError::NotReady(_))));
-    let _ = C::new(0.0, 0.0);
 }
 
 /// The observed order of convergence between two mesh sizes.

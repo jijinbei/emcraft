@@ -259,12 +259,6 @@ fn the_time_domain_solves_open_problems() {
     s.execute("view.pattern", &json!({"path": path, "points": 19})).unwrap();
 }
 
-/// The far-field chart's cut through the strongest direction: none before a solve.
-#[test]
-fn no_strongest_azimuth_before_a_solve() {
-    assert_eq!(crate::open::strongest_azimuth(&Session::new()), None);
-}
-
 /// A patch antenna's broadside lies off its board's plane (the model's x–z, which φ = 0 cuts
 /// along): the strongest azimuth is 90° (7.2 dBi there against about −4 dBi in the plane).
 #[test]

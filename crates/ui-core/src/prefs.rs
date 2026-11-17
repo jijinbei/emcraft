@@ -21,16 +21,11 @@ pub struct Prefs {
     pub recent: Vec<String>,
     /// The theme's name (`light` when empty).
     pub theme: String,
-    /// Older preferences' theme switch, read as the theme `dark` and never written.
-    #[serde(skip_serializing)]
-    pub dark: bool,
     /// The window's language (`en` when empty or unknown).
     pub language: String,
     /// A font file to show the language with, before the system's fonts.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_file: Option<String>,
-    /// Dialogs dock at the right, beside what they edit (new preferences; a file keeps its own).
-    pub dock_dialogs: bool,
     /// The 3D view's mouse mapping, by id (`crate::navigation::NAV_PRESETS`; the default
     /// when unknown).
     pub navigation: String,
@@ -55,10 +50,8 @@ impl Default for Prefs {
         Prefs {
             recent: Vec::new(),
             theme: String::new(),
-            dark: false,
             language: String::new(),
             font_file: None,
-            dock_dialogs: true,
             navigation: crate::navigation::FUSION.into(),
             orbit_around: String::new(),
             navigator: String::new(),
@@ -144,9 +137,6 @@ impl Prefs {
         let fits = std::fs::metadata(path).is_ok_and(|m| m.len() <= MAX_BYTES);
         let mut p: Prefs = fits.then(|| std::fs::read(path).ok()).flatten().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         p.recent.truncate(MAX_RECENT);
-        if p.theme.is_empty() && std::mem::take(&mut p.dark) {
-            p.theme = "dark".into();
-        }
         p.theme = p.theme.chars().take(emcraft_engine::theme::MAX_NAME).collect();
         p.language = crate::lang::clip_id(&p.language);
         for id in [&mut p.navigation, &mut p.orbit_around, &mut p.navigator] {
@@ -252,11 +242,6 @@ mod tests {
         assert_eq!(Prefs::load(&path), p);
         std::fs::write(&path, "{ not json").unwrap();
         assert_eq!(Prefs::load(&path), Prefs::default());
-        std::fs::write(&path, r#"{"dark": true}"#).unwrap();
-        // Older preferences named the dark theme by a switch.
-        assert_eq!(Prefs::load(&path).theme(), "dark");
-        std::fs::write(&path, r#"{"dark": false}"#).unwrap();
-        assert_eq!(Prefs::load(&path).theme(), "light");
         std::fs::write(&path, format!(r#"{{"theme": "{}"}}"#, "x".repeat(5000))).unwrap();
         assert_eq!(Prefs::load(&path).theme.len(), emcraft_engine::theme::MAX_NAME);
         // The language: an unknown or overlong one reads as English.
@@ -266,12 +251,6 @@ mod tests {
         let odd = Prefs::load(&path);
         assert_eq!((odd.language.len(), odd.language()), (crate::lang::MAX_ID, "en"));
         assert_eq!(Prefs::default().language(), "en");
-        // Dialogs dock by default; preferences that chose floating keep it.
-        assert!(Prefs::default().dock_dialogs);
-        std::fs::write(&path, r#"{"dock_dialogs": false, "theme": "dark"}"#).unwrap();
-        assert!(!Prefs::load(&path).dock_dialogs);
-        std::fs::write(&path, r#"{"theme": "dark"}"#).unwrap();
-        assert!(Prefs::load(&path).dock_dialogs);
         assert_eq!(Prefs::load(&dir.join("missing.json")), Prefs::default());
         // The navigation: SolidCraft's default mapping; unknown ones read as the defaults.
         assert_eq!(Prefs::default().nav().id, "fusion");

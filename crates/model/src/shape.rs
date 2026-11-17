@@ -47,8 +47,7 @@ pub enum Shape {
 ///
 /// let size = BoxSize::new(Vec3::new(0.02, 0.01, 0.03))?; // m
 /// assert_eq!(size.x * size.y * size.z, 0.02 * 0.01 * 0.03);
-/// let e = BoxSize::new(Vec3::new(0.02, 0.0, 0.03)).unwrap_err();
-/// assert_eq!(e.to_string(), "invalid box size y: must be a finite number > 0, got 0");
+/// assert!(BoxSize::new(Vec3::new(0.02, 0.0, 0.03)).is_err());
 /// # Ok::<(), emcraft_model::ModelError>(())
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

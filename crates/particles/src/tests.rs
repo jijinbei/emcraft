@@ -4,7 +4,7 @@ use std::f64::consts::PI;
 
 use emcraft_model::units::C0;
 
-use crate::push::{cross, dot};
+use crate::push::cross;
 use crate::*;
 
 const Z: V3 = [0.0, 0.0, 1.0];
@@ -185,5 +185,4 @@ fn a_run_ends_where_it_should_and_a_wrong_one_is_refused() {
     assert!(track(ELECTRON, Start { x: [0.0; 3], u: forward, t: 0.0 }, &free, Line { length: -1.0, ..line }, settings).is_err());
     assert!(track(ELECTRON, Start { x: [0.0; 3], u: forward, t: 0.0 }, &free, Line { axis: [0.0, 0.0, 2.0], ..line }, settings).is_err());
     assert!(track(ELECTRON, Start { x: [f64::INFINITY, 0.0, 0.0], u: forward, t: 0.0 }, &free, line, settings).is_err());
-    assert!(dot(forward, forward) > 0.0);
 }

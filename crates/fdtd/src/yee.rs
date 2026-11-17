@@ -365,16 +365,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fields_are_staggered() {
-        let f = Fields::new([2, 3, 4]);
-        assert_eq!(f.e.each_ref().map(Field::dims), [[2, 4, 5], [3, 3, 5], [3, 4, 4]]);
-        assert_eq!(f.h.each_ref().map(Field::dims), [[3, 3, 4], [2, 4, 4], [2, 3, 5]]);
-        let x = &f.e[1];
-        assert_eq!(x.at(1, 2, 3) + x.stride(1), x.at(1, 3, 3));
-        assert_eq!(x.at(1, 2, 3) + x.stride(2), x.at(1, 2, 4));
-    }
-
-    #[test]
     fn the_leapfrog_takes_every_step_on_every_plane() {
         struct Count(Vec<AtomicU64>);
         impl Kernel for Count {

@@ -655,7 +655,6 @@ mod tests {
             assert!(t.palette.ink.contrast_ratio(t.palette.ground) >= 4.5);
             assert_eq!(t.is_dark(), base.is_dark());
         }
-        assert_eq!(TOKEN_NAMES.len(), 67);
         assert_eq!(Tokens::<Colour>::sizes().colour("text"), Some(Colour::default()));
         assert_eq!(Tokens::<Colour>::sizes().colour("nope"), None);
         // The fallback stands in with readable text.

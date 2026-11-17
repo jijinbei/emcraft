@@ -42,10 +42,6 @@ pub(crate) const GEOMETRY_TOLERANCE: f64 = 1e-9;
 
 /// The threads the solvers' parallel loops have (rayon's pool): the results do not depend on
 /// it (each sum is taken in one fixed order), only the time.
-///
-/// ```
-/// assert!(emcraft_solver::threads() >= 1);
-/// ```
 pub fn threads() -> usize {
     rayon::current_num_threads().max(1)
 }

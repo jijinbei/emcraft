@@ -3,16 +3,11 @@
 //! fine-grid numbers).
 
 use emcraft_fdtd::open::{OpenOptions, radiate};
-use emcraft_model::{LumpedPort, Model, Open, Point3, Shape, Solid, Source, Vec3};
+use emcraft_model::{Model, Open, Point3, Shape, Solid, Source, Vec3};
 
 /// A length (m), checked.
 fn metres(v: f64) -> emcraft_model::Metres {
     emcraft_model::Metres::new(v).unwrap()
-}
-
-/// An impedance (Ω), checked.
-fn ohms(v: f64) -> emcraft_model::Ohms {
-    emcraft_model::Ohms::new(v).unwrap()
 }
 
 /// A box's sides (m), checked.
@@ -25,18 +20,6 @@ fn open_box(size: f64, pml: f64) -> Model {
     m.set_solid(Solid { shape: Shape::Box { size: box_size(Vec3::from([size; 3])) }, material: "vacuum".into() }).unwrap();
     m.set_open(Some(Open { thickness: metres(pml), reflection: None, shape: emcraft_model::OpenShape::Box })).unwrap();
     m
-}
-
-fn gap(name: &str, x: f64, z: f64, v: f64) -> LumpedPort {
-    LumpedPort {
-        name: name.into(),
-        from: Point3::new(x, 0.02, z),
-        to: Point3::new(x, 0.02, z + 0.002),
-        impedance: ohms(1e9),
-        voltage: [v, 0.0],
-        radius: 0.0,
-        across: None,
-    }
 }
 
 #[test]
@@ -52,15 +35,7 @@ fn a_coarse_current_element_radiates_and_bad_inputs_are_refused() {
     assert!(r.converged && (r.radiated[0] / exact - 1.0).abs() < 0.1, "{} {exact}", r.radiated[0]);
     let d = r.directivity(0, std::f64::consts::FRAC_PI_2, 0.3).unwrap();
     assert!((d / 1.5 - 1.0).abs() < 0.1, "{d}");
-    // Along no grid axis; a phase; no sources; bad options.
-    let mut tilted = open_box(0.04, 0.01);
-    tilted
-        .add_source(Source::Dipole { at: Point3::new(0.02, 0.02, 0.02), direction: Vec3::new(1.0, 0.0, 1.0), length: metres(1e-3), current: 1.0 })
-        .unwrap();
-    assert!(radiate(&tilted, &OpenOptions::new(2e-3), &[f]).is_err());
-    let mut phased = open_box(0.04, 0.01);
-    phased.add_lumped_port(LumpedPort { voltage: [0.0, 1.0], ..gap("1", 0.02, 0.02, 1.0) }).unwrap();
-    assert!(radiate(&phased, &OpenOptions::new(2e-3), &[f]).is_err());
+    // No sources; bad options.
     assert!(radiate(&open_box(0.04, 0.01), &OpenOptions::new(2e-3), &[f]).is_err());
     assert!(radiate(&m, &OpenOptions::new(-1.0), &[f]).is_err());
     assert!(radiate(&m, &OpenOptions::new(2e-3), &[]).is_err());

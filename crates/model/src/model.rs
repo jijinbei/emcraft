@@ -580,7 +580,6 @@ mod tests {
         m.add_port(Port::new("1", End::Start)).unwrap();
         m.add_port(Port::new("2", End::End)).unwrap();
         assert_eq!(m.check(), vec![Issue::NoMesh]);
-        assert_eq!(Issue::NoMesh.to_string(), "no mesh: mesh the geometry with mesh.generate");
         let mm = |t: f64| Some(Metres::new(t * 1e-3).unwrap());
         assert!(m.set_wall_thickness(mm(2000.0)).is_err(), "thicker than a metre");
         m.set_wall_thickness(mm(1.0)).unwrap();

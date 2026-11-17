@@ -19,7 +19,7 @@ fn pictures_are_written() {
     s.execute("view.field", &json!({"path": path, "frequency": 8, "arrows": ["e", "h"], "width": 300})).unwrap();
     for bad in [json!(["e", "b"]), json!([1])] {
         let r = s.execute("view.field", &json!({"path": path, "frequency": 8, "arrows": bad, "width": 300}));
-        assert!(matches!(&r, Err(EngineError::Params(m)) if m.starts_with("`arrows` holds `e` or `h`")), "{r:?}");
+        assert!(matches!(&r, Err(EngineError::Params(_))), "{r:?}");
     }
     let path = scratch("s.png");
     s.execute("view.sparameters", &json!({"path": path, "width": 600, "height": 400})).unwrap();

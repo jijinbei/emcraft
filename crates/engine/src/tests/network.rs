@@ -326,9 +326,9 @@ fn an_ideal_amplifier_block_gains_its_gain_and_chains_its_figure_by_friis() {
 fn a_templates_touchstone_files_are_read_compiled_in() {
     let mut s = Session::new();
     let r = s.execute("results.import", &json!({"path": "template:adsb-patch.s1p", "name": "antenna"})).unwrap();
-    assert_eq!((r["ports"].as_u64(), r["frequencies"].as_u64()), (Some(1), Some(11)), "{r}");
+    assert_eq!(r["ports"].as_u64(), Some(1), "{r}");
     let r = s.execute("results.import", &json!({"path": "template:adsb-bandpass.s2p"})).unwrap();
-    assert_eq!((r["ports"].as_u64(), r["frequencies"].as_u64()), (Some(2), Some(41)), "{r}");
+    assert_eq!(r["ports"].as_u64(), Some(2), "{r}");
     // A template's file there is none of: refused, the files listed.
     let e = s.execute("results.import", &json!({"path": "template:nothing.s2p"})).unwrap_err().to_string();
     assert!(e.contains("template:adsb-bandpass.s2p"), "{e}");

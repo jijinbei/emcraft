@@ -165,13 +165,6 @@ fn a_run_on_the_device_repeats_bit_for_bit() {
 }
 
 #[test]
-fn a_run_of_two_populations_is_refused_not_run() {
-    let mut pic = tube();
-    pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
-    assert!(Gpu { backend: Backend::Cpu, precision: Precision::Double }.axi(&mut pic, &[]).is_err());
-}
-
-#[test]
 #[ignore = "needs an NVIDIA GPU: cargo test -p emcraft-gpu --features cuda -- --ignored"]
 fn cuda_matches_the_threads_in_a_body_of_revolution() {
     let cpu = on_cpu(tube());

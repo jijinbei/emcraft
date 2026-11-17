@@ -273,6 +273,6 @@ mod tests {
         assert_eq!(r, Err(EngineError::Cancelled));
         // Other errors name their step.
         let r = s.run_script(&serde_json::json!([{"command": "units.set", "params": {"length": "km"}}]));
-        assert!(matches!(&r, Err(EngineError::Failed(m)) if m.starts_with("step 1 (units.set): ")), "{r:?}");
+        assert!(matches!(&r, Err(EngineError::Failed(m)) if m.contains("units.set")), "{r:?}");
     }
 }

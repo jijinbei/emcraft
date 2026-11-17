@@ -288,6 +288,8 @@ mod tests {
         assert!(matches!(v[..], [Violation::Upward { from: 2, to: 6, .. }]));
         let v = check(&[c("emcraft-fem", &[("emcraft-solver", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 1, to: 2, .. }]));
+        let v = check(&[c("emcraft-engine", &[("emcraft-cli", Normal, true)])]);
+        assert!(matches!(v[..], [Violation::Upward { from: 6, to: APPS_LAYER, .. }]));
     }
 
     #[test]
@@ -310,20 +312,6 @@ mod tests {
     fn upward_dev_dependency_flagged() {
         let v = check(&[c("emcraft-model", &[("emcraft-solver", Dev, true)])]);
         assert!(matches!(v[..], [Violation::Upward { kind: Dev, .. }]));
-    }
-
-    #[test]
-    fn solvers_sit_above_the_kernels() {
-        let g = [
-            c("emcraft-fem", &[("emcraft-model", Normal, true)]),
-            c("emcraft-solver", &[("emcraft-fem", Normal, true), ("emcraft-mesh", Normal, true)]),
-            c("emcraft-engine", &[("emcraft-solver", Normal, true)]),
-        ];
-        assert!(check(&g).is_empty(), "{:?}", check(&g));
-        let v = check(&[c("emcraft-solver", &[("emcraft-engine", Normal, true)])]);
-        assert!(matches!(v[..], [Violation::Upward { from: 2, to: 6, .. }]));
-        let v = check(&[c("emcraft-engine", &[("emcraft-cli", Normal, true)])]);
-        assert!(matches!(v[..], [Violation::Upward { from: 6, to: APPS_LAYER, .. }]));
     }
 
     #[test]

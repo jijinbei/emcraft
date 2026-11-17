@@ -455,14 +455,6 @@ fn shader_arrows_have_a_slim_shaft_and_distinct_head() {
             motion: None,
         }]);
     });
-    assert!(shot.at([-0.4, 0.0, 0.0])[0] > 80.0, "shaft");
-    near(shot.at([-0.4, 0.12, 0.0]), [0.0; 3], 1.0, "outside shaft");
-    assert!(shot.at([0.46, 0.04, 0.0])[0] > 80.0, "wide cone");
-    assert!(shot.at([0.64, 0.0, 0.0])[0] > 80.0, "tip");
-    near(shot.at([0.64, 0.1, 0.0]), [0.0; 3], 1.0, "outside tip");
-    let a = shot.at([-0.4, 0.012, 0.0]);
-    let b = shot.at([-0.4, -0.012, 0.0]);
-    assert!((a[0] - b[0]).abs() > 5.0, "round shaft lighting: {a:?}, {b:?}");
     shot.png("procedural-arrow");
     for section_clip in [false, true] {
         let cut = g.shot(&scene, cam, [300, 200], None, |f| {

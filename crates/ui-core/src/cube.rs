@@ -309,7 +309,6 @@ mod tests {
         let c = controls(&faces);
         assert_eq!(control_at(&c, Vector::new(-65.0, -65.0)).map(|c| c.goal), Some(Goal::Home));
         assert_eq!(control_at(&c, Vector::new(0.0, 0.0)), None);
-        assert_eq!(view_name([1, 1, 1]), "TOP · FRONT · RIGHT");
         assert_eq!(faces.iter().filter(|f| f.label.is_some()).count(), 3, "the isometric view shows three faces' names");
     }
 }
