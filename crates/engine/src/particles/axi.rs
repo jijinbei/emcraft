@@ -71,8 +71,8 @@ impl Run for Axi {
         let [er, et, ez] = self.pic.field_at(r, z).0;
         [er * cos - et * sin, er * sin + et * cos, ez]
     }
-    fn flux(&self, z: f64) -> f64 {
-        self.pic.flux(z)
+    fn plane(&self, z: f64) -> Option<emcraft_fdtd::axi::Plane> {
+        Some(self.pic.plane(z))
     }
     fn now(&self) -> f64 {
         self.pic.time()

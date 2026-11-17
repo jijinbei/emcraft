@@ -579,7 +579,7 @@ A point whose electric field the particle run records; its reply gives the frequ
 
 ## `particles.output` — Output plane
 
-A plane across z whose power through it towards +z the run records (Poynting's flux over its disc, a body of revolution's run only): its reply gives the mean power over the run's second half and, with beams, the efficiency against their power. A beam's own field carries power too: put the plane where the beam has landed for the radiated power alone. Undo goes back.
+A plane across z whose power through it towards +z the run records (Poynting's flux over its disc, a body of revolution's run only): its reply gives the mean power over the run's second half, split into the steady fields' (a beam's own field carries power too) and the oscillations', ⟨E × H⟩ − ⟨E⟩ × ⟨H⟩, and, with beams, the oscillations' power against theirs (the efficiency). Undo goes back.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|

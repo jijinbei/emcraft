@@ -285,8 +285,12 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
     let out = &r["outputs"][0];
     let power = out["power_w"].as_f64().unwrap();
     assert!((power / want - 1.0).abs() < 0.03, "{power} W against {want} W");
+    // All of it is the beam's steady field: the oscillations carry next to nothing, and the
+    // efficiency (theirs against the beam's 2 MW) is about zero.
+    let (steady, oscillating) = (out["steady_w"].as_f64().unwrap(), out["oscillating_w"].as_f64().unwrap());
+    assert!((steady / power - 1.0).abs() < 0.01 && oscillating.abs() < 0.01 * power, "{out}");
     let efficiency = out["efficiency"].as_f64().unwrap();
-    assert!((efficiency - power / (20.0 * 1e5)).abs() < 1e-12, "{out}");
+    assert!((efficiency - oscillating / (20.0 * 1e5)).abs() < 1e-12, "{out}");
     let kept = s.results.particles.clone().unwrap();
     assert!(kept.history.iter().all(|h| h.power.len() == 1) && kept.outputs.len() == 1);
     // On the Cartesian grid and on a device, output planes are refused, not left out.

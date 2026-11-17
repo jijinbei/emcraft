@@ -16,6 +16,7 @@
 
 use std::sync::Arc;
 
+use emcraft_fdtd::axi::Plane;
 use emcraft_fdtd::pic::{self, Axis, Grid, Pic, Population};
 use emcraft_model::particles::{Emission, Emitter, Face, MAX_FINE, Particles, Plasma, Pusher, RunGrid, Voltage, Wall, Wave};
 use emcraft_model::units::C0;
@@ -56,15 +57,26 @@ pub struct Record {
     pub power: Vec<f64>,
 }
 
-/// An output plane: its z (m), its power through it towards +z (W) averaged over the run's
-/// second half, and that against the beams' power (their current times their energy), when
-/// beams feed the run.
+/// An output plane: its z (m); its power through it towards +z (W) averaged over the run's
+/// second half, and the part of it the mean fields carry (a beam's own static field: the power
+/// of the fields averaged over the second half), so the power the oscillations carry is the
+/// difference, ⟨E × H⟩ − ⟨E⟩ × ⟨H⟩; and that against the beams' power (their current times
+/// their energy), when beams feed the run.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Output {
     pub z: f64,
     pub power: f64,
+    #[serde(default)]
+    pub steady: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub efficiency: Option<f64>,
+}
+
+impl Output {
+    /// The power the oscillations carry (W): the mean power less the mean fields'.
+    pub fn oscillating(&self) -> f64 {
+        self.power - self.steady
+    }
 }
 
 /// A probe: its point (m), its E (V/m) every `every` steps, and its frequency (Hz), if it rings.
@@ -138,7 +150,7 @@ impl PicResult {
                 && r.power.len() <= emcraft_model::particles::MAX_PROBES
         });
         let outputs = self.outputs.len() <= emcraft_model::particles::MAX_PROBES
-            && self.outputs.iter().all(|o| [o.z, o.power].iter().chain(&o.efficiency).all(|x| x.is_finite()));
+            && self.outputs.iter().all(|o| [o.z, o.power, o.steady].iter().chain(&o.efficiency).all(|x| x.is_finite()));
         let probes_finite =
             self.probes.iter().all(|p| p.at.iter().chain(p.e.iter().flatten()).chain(&p.frequency).all(|x| x.is_finite()) && p.every >= 1);
         let snapshot = self.snapshot.iter().all(|p| p.x.iter().chain(&p.u).chain([&p.energy]).all(|x| x.is_finite()));
@@ -356,10 +368,10 @@ trait Run {
     fn held(&self) -> usize;
     /// E (V/m, along x, y, z) at a point (m from the grid's corner).
     fn e_at_point(&self, at: [f64; 3]) -> [f64; 3];
-    /// The power (W) through the plane across z at `z` (m from the grid's corner) towards +z,
-    /// where the run can tell it (a body of revolution's on the CPU).
-    fn flux(&self, _z: f64) -> f64 {
-        0.0
+    /// The fields on the plane across z at `z` (m from the grid's corner) that carry power
+    /// along it, where the run can tell them (a body of revolution's on the CPU).
+    fn plane(&self, _z: f64) -> Option<Plane> {
+        None
     }
     fn now(&self) -> f64;
     /// At most [`SNAPSHOT`] of its particles, evenly chosen, in the model's coordinates.
@@ -372,7 +384,7 @@ trait Run {
             .map(|b| {
                 let moved = self.advance()?;
                 let e = sampled(b).then(|| probes.iter().map(|at| self.e_at_point(*at)).collect());
-                Ok((moved, e, outputs.iter().map(|z| self.flux(*z)).collect()))
+                Ok((moved, e, outputs.iter().filter_map(|z| self.plane(*z)).collect()))
             })
             .collect()
     }
@@ -383,9 +395,9 @@ trait Run {
     }
 }
 
-/// What a step did, E at the probes after it when they were sampled, and the power through the
+/// What a step did, E at the probes after it when they were sampled, and the fields on the
 /// output planes after it.
-type Stepped = (pic::Moved, Option<Vec<[f64; 3]>>, Vec<f64>);
+type Stepped = (pic::Moved, Option<Vec<[f64; 3]>>, Vec<Plane>);
 
 /// A run on the Cartesian grid whose corner is at `origin` (m).
 struct Cartesian {
@@ -432,8 +444,10 @@ impl Run for Cartesian {
 struct Recording {
     history: Vec<Record>,
     probe_fields: Vec<Vec<[f64; 3]>>,
-    /// The power through each output plane averaged over the second half (W).
+    /// The power through each output plane averaged over the second half (W), and its fields'
+    /// mean over it.
     late_power: Vec<f64>,
+    late_planes: Vec<Plane>,
     late: pic::Moved,
     lost: usize,
     charge: f64,
@@ -449,6 +463,7 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], output
     // The power through each plane summed over the steps since the last record, and over the
     // second half; and how many steps each sum holds.
     let (mut power_since, mut power_late) = (vec![0.0; outputs.len()], vec![0.0; outputs.len()]);
+    let mut planes_late: Vec<Plane> = vec![Plane::default(); outputs.len()];
     let (mut steps_since, mut steps_late) = (0usize, 0usize);
     let (mut since, mut late) = (pic::Moved::default(), pic::Moved::default());
     let mut lost = 0;
@@ -459,7 +474,8 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], output
     while n < steps {
         let first = n;
         let stop = ((n / every + 1) * every).min(steps);
-        for (moved, sample, power) in run.span(stop - n, probes, outputs, &|b| (first + b + 1) % probe_every == 0)? {
+        for (moved, sample, planes) in run.span(stop - n, probes, outputs, &|b| (first + b + 1) % probe_every == 0)? {
+            let power: Vec<f64> = planes.iter().map(Plane::flux).collect();
             if n % (steps / PROGRESS_REPORTS).max(1) == 0 {
                 crate::progress::report(n, steps, "solve.particles")?;
             }
@@ -469,6 +485,7 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], output
             if n >= half {
                 late += &moved;
                 power_late.iter_mut().zip(&power).for_each(|(sum, p)| *sum += p);
+                planes_late.iter_mut().zip(&planes).for_each(|(sum, p)| sum.add(p));
                 steps_late += 1;
             }
             power_since.iter_mut().zip(&power).for_each(|(sum, p)| *sum += p);
@@ -496,8 +513,10 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], output
             n += 1;
         }
     }
-    let late_power = power_late.iter().map(|p| p / steps_late.max(1) as f64).collect();
-    Ok(Recording { history, probe_fields, late_power, late, lost, charge, probe_every })
+    let mean = 1.0 / steps_late.max(1) as f64;
+    let late_power = power_late.iter().map(|p| p * mean).collect();
+    let late_planes = planes_late.into_iter().map(|p| p.scaled(mean)).collect();
+    Ok(Recording { history, probe_fields, late_power, late_planes, late, lost, charge, probe_every })
 }
 
 /// How many times a run reports its progress.
@@ -568,7 +587,15 @@ fn finish(s: &mut Session, frame: Frame, rec: Recording, probes: &[[f64; 3]], en
         outputs: {
             // The beams' power (W): each one's current times its electrons' energy (eV).
             let beams: f64 = m.beams.iter().map(|b| b.current * b.energy).sum();
-            m.outputs.iter().zip(&rec.late_power).map(|(&z, &power)| Output { z, power, efficiency: (beams > 0.0).then(|| power / beams) }).collect()
+            m.outputs
+                .iter()
+                .zip(&rec.late_power)
+                .zip(&rec.late_planes)
+                .map(|((&z, &power), plane)| {
+                    let steady = plane.flux();
+                    Output { z, power, steady, efficiency: (beams > 0.0).then(|| (power - steady) / beams) }
+                })
+                .collect()
         },
         snapshot,
         particles,
@@ -930,7 +957,11 @@ pub(crate) fn reply(s: &Session, r: &PicResult) -> Value {
     }
     let probes: Vec<Value> =
         r.probes.iter().map(|p| json!({"at": s.show_point(p.at), "frequency": p.frequency.map(|f| s.show_frequency(f))})).collect();
-    let outputs: Vec<Value> = r.outputs.iter().map(|o| json!({"at": s.show_length(o.z), "power_w": o.power, "efficiency": o.efficiency})).collect();
+    let outputs: Vec<Value> = r
+        .outputs
+        .iter()
+        .map(|o| json!({"at": s.show_length(o.z), "power_w": o.power, "steady_w": o.steady, "oscillating_w": o.oscillating(), "efficiency": o.efficiency}))
+        .collect();
     let last = r.history.last();
     let fastest = r.snapshot.iter().map(|p| p.energy).fold(0.0, f64::max);
     json!({

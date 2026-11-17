@@ -194,6 +194,47 @@ struct Layers {
     psi: [Vec<f64>; 4],
 }
 
+/// The fields on a plane across z that carry power along it ([`AxiPic::plane`]): E_r and B_θ
+/// at the half radii (V/m, T) with their rings' areas (m²), E_θ and B_r at the node radii with
+/// theirs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Plane {
+    pub er: Vec<f64>,
+    pub bt: Vec<f64>,
+    pub half: Vec<f64>,
+    pub et: Vec<f64>,
+    pub br: Vec<f64>,
+    pub node: Vec<f64>,
+}
+
+impl Plane {
+    /// The power through it towards +z (W): Poynting's (E × H)·ẑ = (E_r B_θ − E_θ B_r)/μ₀ over
+    /// its rings, as the Yee lattice holds the fields — the energy balance's own flux.
+    pub fn flux(&self) -> f64 {
+        let along = |e: &[f64], b: &[f64], area: &[f64]| e.iter().zip(b).zip(area).map(|((e, b), a)| e * b * a).sum::<f64>();
+        (along(&self.er, &self.bt, &self.half) - along(&self.et, &self.br, &self.node)) / MU0
+    }
+
+    /// `other`'s fields added to its own (a sum towards a mean); an empty plane takes them.
+    pub fn add(&mut self, other: &Plane) {
+        if self.half.is_empty() {
+            *self = other.clone();
+            return;
+        }
+        for (mine, theirs) in [(&mut self.er, &other.er), (&mut self.bt, &other.bt), (&mut self.et, &other.et), (&mut self.br, &other.br)] {
+            mine.iter_mut().zip(theirs).for_each(|(m, t)| *m += t);
+        }
+    }
+
+    /// Its fields times `k` (a sum of `n` planes times 1/n is their mean).
+    pub fn scaled(mut self, k: f64) -> Plane {
+        for f in [&mut self.er, &mut self.bt, &mut self.et, &mut self.br] {
+            f.iter_mut().for_each(|x| *x *= k);
+        }
+        self
+    }
+}
+
 /// An axisymmetric particle-in-cell run.
 pub struct AxiPic {
     grid: AxiGrid,
@@ -514,11 +555,31 @@ impl AxiPic {
         )
     }
 
-    /// The power (W) through the plane of nodes nearest `z` (m from the low end) towards +z:
-    /// Poynting's (E × H)·ẑ = (E_r B_θ − E_θ B_r)/μ₀ summed over the plane's rings as the Yee
-    /// lattice holds them — E_r and E_θ on the plane, B_θ and B_r averaged from the half cells
-    /// on either side, E and B at the same time at the end of a step — so it is the energy
-    /// balance's own flux, not one of interpolated fields.
+    /// The fields on the plane of nodes nearest `z` (m from the low end) that carry power along
+    /// z: E_r and E_θ on the plane, B_θ and B_r averaged from the half cells on either side (E
+    /// and B at the same time, at the end of a step), each with its ring's area.
+    pub fn plane(&self, z: f64) -> Plane {
+        let g = self.grid;
+        let k = (z / g.z.h).round().clamp(0.0, g.z.cells as f64) as isize;
+        // The half cells either side of node k along z.
+        let (below, above) = (g.z.clamp(k - 1, false), g.z.clamp(k, false));
+        let node = g.z.clamp(k, true);
+        let value = |which: usize, values: &[f64], i: usize, k: usize| values.get(self.lats[which].at(i, k)).copied().unwrap_or(0.0);
+        let mean = |which: usize, values: &[f64], i: usize| 0.5 * (value(which, values, i, below) + value(which, values, i, above));
+        // E_r and B_θ at r = (i + ½) dr, rings of 2π r dr; E_θ and B_r on the nodes r = i dr
+        // (E_θ held at zero on the wall).
+        Plane {
+            er: (0..g.nr).map(|i| value(ER, &self.f.er, i, node)).collect(),
+            bt: (0..g.nr).map(|i| mean(BT, &self.f.bt, i)).collect(),
+            half: (0..g.nr).map(|i| 2.0 * PI * (i as f64 + 0.5) * g.dr * g.dr).collect(),
+            et: (0..g.nr).map(|i| value(ET, &self.f.et, i, node)).collect(),
+            br: (0..g.nr).map(|i| mean(BR, &self.f.br, i)).collect(),
+            node: (0..g.nr).map(|i| g.area(i)).collect(),
+        }
+    }
+
+    /// The power (W) through the plane of nodes nearest `z` towards +z ([`AxiPic::plane`]'s
+    /// [`Plane::flux`]).
     ///
     /// ```
     /// use emcraft_fdtd::axi::{AxiGrid, AxiPic, Component};
@@ -533,24 +594,7 @@ impl AxiPic {
     /// # Ok::<(), emcraft_fdtd::FdtdError>(())
     /// ```
     pub fn flux(&self, z: f64) -> f64 {
-        let g = self.grid;
-        let k = (z / g.z.h).round().clamp(0.0, g.z.cells as f64) as isize;
-        // The half cells either side of node k along z.
-        let (below, above) = (g.z.clamp(k - 1, false), g.z.clamp(k, false));
-        let node = g.z.clamp(k, true);
-        let value = |which: usize, values: &[f64], i: usize, k: usize| values.get(self.lats[which].at(i, k)).copied().unwrap_or(0.0);
-        let mut p = 0.0;
-        for i in 0..g.nr {
-            // E_r and B_θ at r = (i + ½) dr: a ring of 2π r dr.
-            let bt = 0.5 * (value(BT, &self.f.bt, i, below) + value(BT, &self.f.bt, i, above));
-            p += value(ER, &self.f.er, i, node) * bt * 2.0 * PI * (i as f64 + 0.5) * g.dr * g.dr;
-        }
-        for i in 0..g.nr {
-            // E_θ and B_r on the nodes r = i dr: node i's ring (E_θ is held at zero on the wall).
-            let br = 0.5 * (value(BR, &self.f.br, i, below) + value(BR, &self.f.br, i, above));
-            p -= value(ET, &self.f.et, i, node) * br * g.area(i);
-        }
-        p / MU0
+        self.plane(z).flux()
     }
 
     /// `values` on `lat` at (r, z), linearly; across the axis odd (`odd`) or even, past the outer
