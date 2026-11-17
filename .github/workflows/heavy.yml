@@ -32,7 +32,7 @@ jobs:
     steps:
       - name: Free the runner's disk
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost && df -h /
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
       # As the oracle: the heavy tests rerun only when the code they are built from changes.
@@ -41,7 +41,7 @@ jobs:
         run: echo "key=heavy-pass-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '.config/**', 'crates/**', 'apps/**') }}" >> "$GITHUB_OUTPUT"
       - name: Heavy tests passed before with these inputs
         id: heavy-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .heavy-pass
           key: ${{ steps.heavy-key.outputs.key }}
@@ -64,7 +64,7 @@ jobs:
       - name: Record the pass
         if: steps.heavy-cache.outputs.cache-hit != 'true'
         run: git rev-parse HEAD > .heavy-pass
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         if: steps.heavy-cache.outputs.cache-hit != 'true'
         with:
           path: .heavy-pass

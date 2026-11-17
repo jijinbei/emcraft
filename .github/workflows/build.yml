@@ -57,7 +57,7 @@ jobs:
       - name: Free the runner's disk
         if: runner.os == 'Linux'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost && df -h /
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # Saved from main only, one cache an OS.
       - uses: Swatinem/rust-cache@v2
@@ -84,7 +84,7 @@ jobs:
           mkdir "$dir"
           cp target/release/emcraft${{ matrix.exe }} target/release/emcraft-cli${{ matrix.exe }} LICENSE-MIT LICENSE-APACHE "$dir"/
           ls -l "$dir"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: emcraft-${{ matrix.name }}
           path: emcraft-${{ matrix.name }}
@@ -98,11 +98,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: .github/release-notes.md
           sparse-checkout-cone-mode: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: emcraft-*
           path: dist

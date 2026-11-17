@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: scripts
       # scripts/claim and scripts/triage run in claim.yml and triage.yml through
@@ -46,7 +46,7 @@ jobs:
     steps:
       - name: Free the runner's disk
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost && df -h /
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         id: toolchain
         with:
@@ -81,7 +81,7 @@ jobs:
         run: echo "key=oracle-pass-${{ steps.toolchain.outputs.cachekey }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'tests/oracle/**', 'crates/model/**', 'crates/mesh/**', 'crates/tetmesh/**', 'crates/fem/**', 'crates/theory/**', 'crates/solver/**', 'crates/fdtd/**', 'crates/gpu/**', 'crates/io/**', 'crates/render/**', 'crates/engine/**', 'crates/testkit/**') }}" >> "$GITHUB_OUTPUT"
       - name: Oracle passed before with these inputs
         id: oracle-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .oracle-pass
           key: ${{ steps.oracle-key.outputs.key }}
@@ -91,7 +91,7 @@ jobs:
       - name: Record the pass
         if: steps.oracle-cache.outputs.cache-hit != 'true'
         run: git rev-parse HEAD > .oracle-pass
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v6
         if: steps.oracle-cache.outputs.cache-hit != 'true'
         with:
           path: .oracle-pass
