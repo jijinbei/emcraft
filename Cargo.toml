@@ -44,7 +44,7 @@ faer = "0.24"
 # the apps' manifests): not in the Windows GNU build cross-compiled from Linux. Without its
 # default `persistence`, which caches autotune results and compiled kernels on disk in an embedded
 # SQLite (turso): the kernels compile again in each run.
-cubecl = { version = "=0.11.3", default-features = false, features = ["std", "stdlib"] }
+cubecl = { version = "=0.11.4", default-features = false, features = ["std", "stdlib"] }
 rayon = "1"
 
 # geometry import: 3MF packages (zip, XML), the same lines as FieldCraft
