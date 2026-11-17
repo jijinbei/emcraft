@@ -87,6 +87,50 @@ pub(super) fn factor_front(f: &mut [C], m: usize, k: usize, rows: &mut [usize], 
     Ok((e.pivots, e.counts))
 }
 
+/// Eliminates all `w` columns of a panel (column-major `mj` × `w`: its first `w` rows the
+/// diagonal block, full; the rest below) as [`factor_front`] does a front's first k, each block
+/// of pivots updating only the panel's later columns (the columns beyond the panel are updated
+/// later, from the stored factor). Returns the pivots, the counts and every interchange of the
+/// panel's variables (panel indices), in order.
+pub(super) fn factor_panel(
+    f: &mut [C],
+    mj: usize,
+    w: usize,
+    rows: &mut [usize],
+    tau: f64,
+) -> Result<(Vec<Pivot>, PivotCounts, Vec<(usize, usize)>), OutOfMemory> {
+    let mut e = Elimination::new(mj, w, rows, tau);
+    let mut swaps = Vec::new();
+    let mut b0 = 0;
+    while b0 < w {
+        let be = (b0 + BLOCK).min(w);
+        e.swaps.clear();
+        e.factor_block(f, b0..be);
+        swaps.extend(e.swaps.iter().copied());
+        if be < w {
+            let wm = block_w(f, mj, b0..be, &e.pivots)?;
+            let below = mj - be;
+            let (left, right) = f.split_at_mut(be * mj);
+            let lm = MatRef::from_column_major_slice(&left[b0 * mj..], mj, be - b0).subrows(be, w - be);
+            let dst = MatMut::from_column_major_slice_mut(&mut right[..(w - be) * mj], mj, w - be).subrows_mut(be, below);
+            let par = products(below * (w - be) * (be - b0), PARALLEL_WORK);
+            matmul(
+                dst,
+                BlockStructure::Rectangular,
+                Accum::Add,
+                MatRef::from_column_major_slice(&wm, below, be - b0),
+                BlockStructure::Rectangular,
+                lm.transpose(),
+                BlockStructure::Rectangular,
+                C::new(-1.0, 0.0),
+                par,
+            );
+        }
+        b0 = be;
+    }
+    Ok((e.pivots, e.counts, swaps))
+}
+
 /// [`factor_front`] with the front held by `device`: each block's columns are read back, its
 /// pivots found here (the same code), its interchanges and its update of the later columns done
 /// there; the Schur complement is read back at the end.

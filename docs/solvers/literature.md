@@ -425,7 +425,20 @@ overlap tests).
 - J. W. H. Liu, *On the storage requirement in the out-of-core multifrontal method for sparse
   factorization*, ACM TOMS 12(3):249–264, 1986 — the fronts and updates alive at once, followed
   through the tree: the memory plan (`multifrontal::memory`) that picks the threads and the
-  factor's share in memory, or refuses before the first front.
+  factor's share in memory, or refuses before the first front; and, when the fronts and the
+  updates waiting for them do not fit, the updates of the top's fronts written to a scratch file
+  as they are made and read back one at a time as their parent is assembled (`Waiting`), so the
+  top holds one front and one child's update at a time.
+- P. Amestoy, C. Ashcraft, O. Boiteau, A. Buttari, J.-Y. L'Excellent, C. Weisbecker, *Improving
+  multifrontal methods by means of block low-rank representations*, SIAM J. Sci. Comput.
+  37(3):A1451–A1474, 2015; P. Amestoy, A. Buttari, J.-Y. L'Excellent, T. Mary, *On the
+  complexity of the block low-rank multifrontal factorization*, SIAM J. Sci. Comput.
+  39(4):A1710–A1740, 2017 — the factor's rows below a large front's diagonal block kept as tiles,
+  each X Yᵀ where that is smaller (`ldlt::lowrank`, `solve.frequency`'s `compress`), the
+  accuracy given up recovered by iterative refinement.
+- P. Businger, G. H. Golub, *Linear least squares solutions by Householder transformations*,
+  Numer. Math. 7:269–276, 1965 — QR with column pivoting, truncated where the trailing block's
+  Frobenius norm (the error) falls to the tolerance: each tile's compression.
 - C. Ashcraft, R. Grimes, *The influence of relaxed supernode partitions on the multifrontal
   method*, ACM TOMS 15(4):291–309, 1989; Y. Chen, T. A. Davis, W. W. Hager, S. Rajamanickam,
   *Algorithm 887: CHOLMOD*, ACM TOMS 35(3):22, 2008 — relaxed amalgamation and its thresholds.

@@ -342,6 +342,32 @@ fn lumped_ports_sweep_fast_as_they_solve_in_full() {
 }
 
 #[test]
+fn a_compressed_factor_gives_the_exact_ones_s_parameters() {
+    // `compress` keeps the large fronts as low-rank tiles (the solver's tests show them
+    // compressed); the solve refines back to the exact factor's S. Tolerances outside (0, 1)
+    // are refused.
+    let mut s = Session::new();
+    s.execute("file.sample", &json!({"name": "highpass"})).unwrap();
+    let solve = |compress: Option<f64>| {
+        let mut s = s.clone();
+        let mut p = json!({"frequencies": [8], "order": 2, "sweep": "full"});
+        if let Some(c) = compress {
+            p["compress"] = json!(c);
+        }
+        s.execute("solve.frequency", &p).unwrap()
+    };
+    let (exact, compressed) = (solve(None), solve(Some(1e-6)));
+    for k in ["s11", "s21"] {
+        let (a, b) = (&exact["points"][0][k], &compressed["points"][0][k]);
+        let d = (a["re"].as_f64().unwrap() - b["re"].as_f64().unwrap()).hypot(a["im"].as_f64().unwrap() - b["im"].as_f64().unwrap());
+        assert!(d < 1e-9, "{k}: {d}");
+    }
+    for bad in [json!(0), json!(1), json!(-1e-8), json!("x")] {
+        assert!(s.clone().execute("solve.frequency", &json!({"frequencies": [8], "compress": bad})).is_err(), "{bad}");
+    }
+}
+
+#[test]
 fn second_order_solves_iteratively_as_they_factor() {
     let mut s = Session::new();
     s.execute("file.sample", &json!({"name": "highpass"})).unwrap();
@@ -357,6 +383,25 @@ fn second_order_solves_iteratively_as_they_factor() {
         }
     }
     assert!(s.clone().execute("solve.frequency", &json!({"frequencies": [8], "order": 1, "solver": "iterative"})).is_err());
+}
+
+/// `auto` factors a second-order system however large, falling back to the iterative solver only
+/// when the factor does not fit (an oven of 2.1 million unknowns was once sent to GMRES, which
+/// did not converge, though its factor fitted); `direct` never falls back.
+#[test]
+fn auto_factors_second_order_and_falls_back_only_when_the_factor_does_not_fit() {
+    let mut s = Session::new();
+    s.execute("file.sample", &json!({"name": "highpass"})).unwrap();
+    let chosen = |solver: &str, order: u8| {
+        let mut s = s.clone();
+        s.execute("solve.frequency", &json!({"frequencies": [8], "order": order, "solver": solver})).unwrap();
+        let d = &s.results().sweep.as_ref().unwrap().driven;
+        (d.iterative, d.fallback)
+    };
+    assert_eq!(chosen("auto", 2), (false, true));
+    assert_eq!(chosen("auto", 1), (false, false));
+    assert_eq!(chosen("direct", 2), (false, false));
+    assert_eq!(chosen("iterative", 2), (true, false));
 }
 
 #[test]

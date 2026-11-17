@@ -45,5 +45,8 @@ sensitive, usually a resonance or the top of the band.
 2. **Physics:** `results.check` (the **Passivity and reciprocity** button). A lossless model
    must be unitary; an error well above 1e-9 points at the model, not the mesh.
 3. **Memory:** the direct solver's memory grows faster than the unknowns. When a model does not
-   fit, the factorization spills to scratch files and slows down; a coarser mesh with
-   `mesh.adapt` usually beats a uniformly fine one.
+   fit, the factorization spills to scratch files (the factor, then the updates waiting for
+   the largest fronts) and slows down; a coarser mesh with `mesh.adapt` usually beats a
+   uniformly fine one. For a model of a million unknowns or more, `solve.frequency` with
+   `"compress": 1e-8` keeps the factor's large blocks as low-rank tiles: less disk and
+   memory, the same S-parameters after iterative refinement.

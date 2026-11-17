@@ -229,7 +229,7 @@ fn by_position(a: &Csr, inv: &[usize], row_scale: &[f64], col_scale: &[f64]) -> 
 
 /// The LU's fronts: each update full (m − k rows square), the factor both triangles of the
 /// front's first k rows and columns, kept in memory.
-const SHAPE: Shape = Shape { update: Triangle::Full, kept: |k, m| k * m + k * (m - k), out_of_core: false };
+const SHAPE: Shape = Shape { update: Triangle::Full, kept: |k, m| k * m + k * (m - k), out_of_core: false, panels: false };
 
 /// The LU's fronts: R A C by position and the static-pivot threshold.
 struct Kernel {
@@ -296,7 +296,7 @@ impl Lu {
         let (row_scale, col_scale) = scalings(a);
         let (lower, upper, norm) = by_position(a, &an.inv, &row_scale, &col_scale);
         let kernel = Kernel { lower, upper, tau: f64::EPSILON.sqrt() * norm };
-        let (nodes, counts) = factor_tree(&kernel, an, plan.threads)?;
+        let (nodes, counts) = factor_tree(&kernel, an, &plan)?;
         Ok(Lu {
             n: a.n,
             perm: an.perm.clone(),

@@ -122,19 +122,23 @@ pub fn frequency(s: &mut Session, p: &Params) -> Result<Value> {
     let freqs = frequencies(s, p)?;
     let order = p.order()?;
     let asked = p.choice("solver").or(LinearSolver::Auto)?;
-    // Second-order systems too large to factor whole are solved iteratively by default.
+    // (iterative, fallback): by default a second-order system is factored, and solved
+    // iteratively only when its factor does not fit.
     let two = order == emcraft_fem::Order::Two;
-    let iterative = |unknowns: usize| match asked {
-        LinearSolver::Auto => Ok(two && unknowns > emcraft_solver::driven::MAX_UNKNOWNS),
-        LinearSolver::Direct => Ok(false),
-        LinearSolver::Iterative if two => Ok(true),
-        LinearSolver::Iterative => Err(p.error("solver", "iterative needs second-order elements (`order` 2)")),
+    let (iterative, fallback) = match asked {
+        LinearSolver::Auto => (false, two),
+        LinearSolver::Direct => (false, false),
+        LinearSolver::Iterative if two => (true, false),
+        LinearSolver::Iterative => return Err(p.error("solver", "iterative needs second-order elements (`order` 2)")),
     };
+    let compress = p.number("compress").check(|t| *t > 0.0 && *t < 1.0, "between 0 and 1").optional()?;
     let driven = match reusable(s, order) {
-        Some(d) if d.iterative == iterative(d.dofs.unknowns)? => d,
+        Some(d) if d.iterative == iterative && d.fallback == fallback && d.compress == compress => d,
         _ => {
             let mut d = Driven::new(&s.model, order)?;
-            d.iterative = iterative(d.dofs.unknowns)?;
+            d.iterative = iterative;
+            d.fallback = fallback;
+            d.compress = compress;
             Arc::new(d)
         }
     };

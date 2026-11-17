@@ -124,8 +124,9 @@ pub(crate) const FIELD_REFINEMENT: usize = 4;
 pub(crate) const AUXILIARY_REFINEMENT: usize = 2;
 pub(crate) const UNREFINED: usize = 0;
 
-/// The most unknowns a problem factored whole may have.
-pub const MAX_UNKNOWNS: usize = 2_000_000;
+/// The most unknowns a problem factored whole may have (whether its factor fits is the memory
+/// plan's to say: [`crate::multifrontal`]).
+pub const MAX_UNKNOWNS: usize = 4_000_000;
 /// The most unknowns a second-order problem solved iteratively may have (its first-order part
 /// factored, about a sixth of them).
 pub const MAX_ITERATIVE_UNKNOWNS: usize = 5_000_000;
@@ -156,6 +157,17 @@ pub enum SolveError {
 }
 
 pub type Result<T> = std::result::Result<T, SolveError>;
+
+/// Whether `e` says the factor does not fit — too many unknowns, a front or factor too large, an
+/// allocation refused — rather than that the system is wrong.
+fn does_not_fit(e: &SolveError) -> bool {
+    matches!(
+        e,
+        SolveError::TooLarge { .. }
+            | SolveError::Memory(_)
+            | SolveError::Factor(FactorError::FactorTooLarge { .. } | FactorError::FrontTooLarge { .. } | FactorError::Memory(_))
+    )
+}
 
 pub(crate) fn invalid(what: impl Into<String>, why: impl Into<String>) -> SolveError {
     SolveError::Invalid { what: what.into(), why: why.into() }
@@ -247,6 +259,12 @@ pub struct Driven {
     /// Solve second-order systems iteratively, preconditioned by their first-order part
     /// ([`pmg`]), instead of factoring them whole.
     pub iterative: bool,
+    /// A second-order system whose factor does not fit (too many unknowns, a factor beyond the
+    /// memory budget, an allocation refused) is solved iteratively ([`pmg`]) instead of failing.
+    pub fallback: bool,
+    /// Factor with the large fronts' rows below their diagonal blocks compressed to this
+    /// tolerance ([`crate::ldlt::with_compression`]); `None` keeps the factor exact.
+    pub compress: Option<f64>,
 }
 
 /// The solution at one frequency.
@@ -491,6 +509,8 @@ impl Driven {
             rotation: model.domain.rotation,
             analysis: std::sync::OnceLock::new(),
             iterative: false,
+            fallback: false,
+            compress: None,
             mesh,
             topo,
         })
@@ -529,7 +549,12 @@ impl Driven {
         if self.iterative && self.order == Order::Two {
             return Ok((self.solve_iterative(frequency, system, assembly)?, Vec::new()));
         }
-        let f = self.factor(&system)?;
+        let f = match self.factor(&system) {
+            Err(e) if self.fallback && self.order == Order::Two && does_not_fit(&e) => {
+                return Ok((self.solve_iterative(frequency, system, assembly)?, Vec::new()));
+            }
+            f => f?,
+        };
         let System { a, rhs, terms, border } = system;
         let n = self.dofs.unknowns;
         let mut solved = solution::solve_each(&f, &a, &rhs, n, assembly)?;
@@ -681,4 +706,27 @@ fn refuse_open(model: &Model) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    use super::*;
+
+    /// Only "does not fit" sends a system to the iterative solver; a wrong system stays an error.
+    #[test]
+    fn only_a_factor_that_does_not_fit_falls_back() {
+        let out_of_memory = crate::memory::OutOfMemory { what: "a front", bytes: 1, available: None };
+        for (e, falls_back) in [
+            (SolveError::TooLarge { unknowns: 5, limit: 4 }, true),
+            (SolveError::Factor(FactorError::FactorTooLarge { needs: 2, budget: 1 }), true),
+            (SolveError::Factor(FactorError::FrontTooLarge { rows: 2, limit: 1 }), true),
+            (SolveError::Factor(FactorError::Memory(out_of_memory)), true),
+            (SolveError::Memory(out_of_memory), true),
+            (SolveError::Factor(FactorError::NotFinite), false),
+            (SolveError::Factor(FactorError::Zero), false),
+            (invalid("x", "y"), false),
+        ] {
+            assert_eq!(does_not_fit(&e), falls_back, "{e}");
+        }
+    }
 }

@@ -79,7 +79,11 @@ impl Provenance {
             tetrahedra: s.model.mesh.as_ref().map(|m| m.tets.len()),
             unknowns: count("unknowns"),
             order: count("order").and_then(|n| u8::try_from(n).ok()),
-            linear_solver: sweep.map(|sw| if sw.driven.iterative { crate::LinearSolver::Iterative } else { crate::LinearSolver::Direct }),
+            // The solver that ran: iterative as asked, or as `auto`'s fallback (no factor kept).
+            linear_solver: sweep.map(|sw| {
+                let fell_back = sw.driven.fallback && sw.results.iter().any(|p| p.factor_entries == 0);
+                if sw.driven.iterative || fell_back { crate::LinearSolver::Iterative } else { crate::LinearSolver::Direct }
+            }),
             device: s.compute.device(),
             precision: s.compute.precision,
             threads: emcraft_solver::threads(),

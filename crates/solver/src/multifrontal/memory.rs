@@ -36,6 +36,8 @@ pub(crate) struct Shape {
     pub update: super::Triangle,
     pub kept: fn(usize, usize) -> usize,
     pub out_of_core: bool,
+    /// Whether its large fronts may be factored by panels.
+    pub panels: bool,
 }
 
 /// How a factorization runs within the memory: on how many threads, how many bytes of the factor
@@ -47,7 +49,17 @@ pub(crate) struct Plan {
     pub in_memory: u64,
     pub working: u64,
     pub factor: u64,
+    /// Whether the updates waiting for the top's fronts go to disk ([`super::factor_tree`]).
+    pub spill: bool,
+    /// Fronts of this many rows or more factored by panels, never formed whole
+    /// ([`super::FrontKernel::eliminate_panels`]), when even one front at a time does not fit.
+    pub panel_from: Option<usize>,
 }
+
+/// The rows from which a front is factored by panels when the memory asks for it, and the
+/// columns of a panel.
+pub(crate) const PANEL_FROM: usize = 4096;
+pub(crate) const PANEL: usize = 256;
 
 impl Plan {
     /// The plan for factoring `an` with fronts of `shape`, at most `budget` bytes of the factor in
@@ -71,20 +83,28 @@ impl Plan {
             return Ok(Plan {
                 threads: threads.max(1),
                 in_memory: budget.min(UNKNOWN_BUDGET),
-                working: ENTRY_BYTES * working(an, &tree, shape, threads),
+                working: ENTRY_BYTES * working(an, &tree, shape, threads, false, None),
                 factor,
+                spill: false,
+                panel_from: None,
             });
         };
         let usable = (available as f64 * HEADROOM) as u64;
         let mut t = threads.max(1);
         loop {
-            let working = ENTRY_BYTES * working(an, &tree, shape, t);
-            let left = usable.saturating_sub(working);
-            let fits = working <= usable && (shape.out_of_core || factor <= left);
-            if fits {
-                return Ok(Plan { threads: t, in_memory: left.min(budget), working, factor });
+            // The updates held in memory if they fit, else on disk; then the largest fronts by
+            // panels (a factorization whose fronts may be).
+            let panels = |from: usize| if shape.panels { Some(from) } else { None };
+            for (spill, panel_from) in [(false, None), (true, None), (true, panels(PANEL_FROM)), (true, panels(PANEL_FROM / 4))] {
+                let working = ENTRY_BYTES * working(an, &tree, shape, t, spill, panel_from);
+                let left = usable.saturating_sub(working);
+                if working <= usable && (shape.out_of_core || factor <= left) {
+                    return Ok(Plan { threads: t, in_memory: left.min(budget), working, factor, spill, panel_from });
+                }
             }
             if t == 1 {
+                let panel_from = if shape.panels { Some(PANEL_FROM / 4) } else { None };
+                let working = ENTRY_BYTES * working(an, &tree, shape, 1, true, panel_from);
                 let needs = if shape.out_of_core { working } else { working.saturating_add(factor) };
                 return Err(OutOfMemory { what: "the factorization", bytes: needs, available: Some(usable) }.into());
             }
@@ -107,32 +127,63 @@ fn factor_entries(an: &Analysis, shape: Shape) -> u64 {
 }
 
 /// The most entries of fronts and updates alive at once factoring `an` on `threads` threads (see
-/// [`Plan::new`]).
-fn working(an: &Analysis, tree: &Tree, shape: Shape, threads: usize) -> u64 {
+/// [`Plan::new`]); with `spill`, the updates the subtrees and the top's fronts leave on disk
+/// until their parent takes them, one at a time.
+fn working(an: &Analysis, tree: &Tree, shape: Shape, threads: usize, spill: bool, panel_from: Option<usize>) -> u64 {
     let (tasks, top) = tree.split(threads);
     let update = |s: usize| shape.update.entries(an.super_rows[s].len() - an.columns(s).len()) as u64;
-    let mut peaks: Vec<u64> = tasks.iter().map(|&s| sequential(an, tree, shape, tree.first[s]..=s, 0).0).collect();
+    let mut peaks: Vec<u64> = tasks.iter().map(|&s| sequential(an, tree, shape, tree.first[s]..=s, 0, panel_from).0).collect();
     peaks.sort_unstable_by(|a, b| b.cmp(a));
-    let finished: u64 = tasks.iter().map(|&s| update(s)).sum();
+    let finished: u64 = if spill { 0 } else { tasks.iter().map(|&s| update(s)).sum() };
     let parallel = finished.saturating_add(peaks.iter().take(threads.max(1)).sum());
-    let (on_top, _) = sequential(an, tree, shape, top, finished);
+    let on_top = if spill { spilled(an, tree, shape, top, panel_from) } else { sequential(an, tree, shape, top, finished, panel_from).0 };
     parallel.max(on_top)
+}
+
+/// The most entries alive factoring the supernodes `order` with their updates on disk: a front
+/// is m² entries beside the one child's update being added, and after its elimination beside its
+/// own update and the columns the factor keeps. A front of `panel_from` rows or more is never
+/// formed: a panel of m rows, the factor's columns (lower, uncompressed: the most it keeps) and
+/// its update.
+fn spilled(an: &Analysis, tree: &Tree, shape: Shape, order: impl IntoIterator<Item = usize>, panel_from: Option<usize>) -> u64 {
+    let update = |c: usize| shape.update.entries(an.super_rows[c].len() - an.columns(c).len()) as u64;
+    order
+        .into_iter()
+        .map(|s| {
+            let (k, m) = (an.columns(s).len(), an.super_rows[s].len());
+            if panel_from.is_some_and(|p| m >= p) {
+                // Two panels' worth: the panel and its update's products.
+                return (2 * m * PANEL) as u64 + super::fill(k, m) as u64 + update(s);
+            }
+            let front = (m * m) as u64;
+            let child = tree.children[s].iter().map(|&c| update(c)).max().unwrap_or(0);
+            (front + child).max(front + update(s) + (shape.kept)(k, m) as u64)
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 /// The most entries alive factoring the supernodes `order` one after another, `held` entries of
 /// updates held at the start; and those held at the end. A front's children's updates are
 /// held until it is assembled; it is then m² entries, and eliminating it adds its update and a
 /// copy of the columns the factor keeps before the front is freed.
-fn sequential(an: &Analysis, tree: &Tree, shape: Shape, order: impl IntoIterator<Item = usize>, held: u64) -> (u64, u64) {
+fn sequential(an: &Analysis, tree: &Tree, shape: Shape, order: impl IntoIterator<Item = usize>, held: u64, panel_from: Option<usize>) -> (u64, u64) {
     let mut held = held;
     let mut peak = held;
     for s in order {
         let (k, m) = (an.columns(s).len(), an.super_rows[s].len());
         let update = |c: usize| shape.update.entries(an.super_rows[c].len() - an.columns(c).len()) as u64;
         let incoming: u64 = tree.children[s].iter().map(|&c| update(c)).sum();
-        let (front, own, kept) = ((m * m) as u64, update(s), (shape.kept)(k, m) as u64);
+        let own = update(s);
         let rest = held.saturating_sub(incoming);
-        peak = peak.max(held.saturating_add(front)).max(rest.saturating_add(front + own + kept));
+        if panel_from.is_some_and(|p| m >= p) {
+            // By panels: the children's updates held to the end, beside the panels, the factor's
+            // columns (lower, uncompressed) and the update.
+            peak = peak.max(held.saturating_add((2 * m * PANEL) as u64 + super::fill(k, m) as u64 + own));
+        } else {
+            let (front, kept) = ((m * m) as u64, (shape.kept)(k, m) as u64);
+            peak = peak.max(held.saturating_add(front)).max(rest.saturating_add(front + own + kept));
+        }
         held = rest.saturating_add(own);
     }
     (peak, held)
@@ -172,8 +223,8 @@ mod tests {
     use super::*;
     use crate::multifrontal::testing::grid_pattern;
 
-    const LDLT: Shape = Shape { update: super::super::Triangle::Lower, kept: |k, m| k * m, out_of_core: true };
-    const LU: Shape = Shape { update: super::super::Triangle::Full, kept: |k, m| k * m + k * (m - k), out_of_core: false };
+    const LDLT: Shape = Shape { update: super::super::Triangle::Lower, kept: |k, m| k * m, out_of_core: true, panels: false };
+    const LU: Shape = Shape { update: super::super::Triangle::Full, kept: |k, m| k * m + k * (m - k), out_of_core: false, panels: false };
 
     fn analysis() -> Analysis {
         let (a, _, xyz) = grid_pattern(12, 10, 9);
@@ -185,19 +236,19 @@ mod tests {
         let an = analysis();
         let tree = Tree::new(&an);
         let largest = (0..an.supernodes()).map(|s| an.super_rows[s].len().pow(2) as u64).max().unwrap();
-        let one = working(&an, &tree, LDLT, 1);
+        let one = working(&an, &tree, LDLT, 1, false, None);
         // Every front is alive once, its largest among them.
         assert!(one >= largest, "{one} < {largest}");
-        assert!(working(&an, &tree, LDLT, 8) >= one);
+        assert!(working(&an, &tree, LDLT, 8, false, None) >= one);
         // LU's updates are full, so its fronts hold more.
-        assert!(working(&an, &tree, LU, 1) > one);
+        assert!(working(&an, &tree, LU, 1, false, None) > one);
     }
 
     #[test]
     fn plans_fewer_threads_then_refuse_as_the_memory_shrinks() {
         let an = analysis();
         let tree = Tree::new(&an);
-        let (one, eight) = (16 * working(&an, &tree, LDLT, 1), 16 * working(&an, &tree, LDLT, 8));
+        let (one, eight) = (16 * working(&an, &tree, LDLT, 1, false, None), 16 * working(&an, &tree, LDLT, 8, false, None));
         assert!(eight > one);
         let room = |bytes: u64| Some((bytes as f64 / HEADROOM).ceil() as u64 + 16);
         // Room for eight threads' fronts: all eight, the rest for the factor up to its budget.
@@ -208,13 +259,22 @@ mod tests {
         // Room for one thread's only: fewer threads, the factor on disk.
         let p = Plan::new(&an, LDLT, u64::MAX, room(one), 8).unwrap();
         assert!(p.threads < 8 && p.working <= one + 16, "{p:?}");
-        // Less: refused, saying what it needs.
+        // Less: the updates waiting for the top's fronts on disk, which needs less.
+        let spilled = 16 * working(&an, &tree, LDLT, 1, true, None);
+        assert!(spilled < one, "{spilled} ≥ {one}");
+        let p = Plan::new(&an, LDLT, u64::MAX, room(spilled), 8).unwrap();
+        assert!(p.spill && p.working <= spilled + 16, "{p:?}");
+        // Less still: refused, saying what it needs at the least.
         assert_eq!(
-            Plan::new(&an, LDLT, u64::MAX, Some(one / 2), 8),
-            Err(FactorError::Memory(OutOfMemory { what: "the factorization", bytes: one, available: Some(((one / 2) as f64 * HEADROOM) as u64) }))
+            Plan::new(&an, LDLT, u64::MAX, Some(spilled / 2), 8),
+            Err(FactorError::Memory(OutOfMemory {
+                what: "the factorization",
+                bytes: spilled,
+                available: Some(((spilled / 2) as f64 * HEADROOM) as u64)
+            }))
         );
         // A factor kept in memory must fit beside its fronts.
-        let lu = 16 * working(&an, &tree, LU, 1);
+        let lu = 16 * working(&an, &tree, LU, 1, false, None);
         let factor = 16 * factor_entries(&an, LU);
         assert!(matches!(Plan::new(&an, LU, u64::MAX, room(lu), 1), Err(FactorError::Memory(OutOfMemory { available: Some(_), .. }))));
         assert_eq!(Plan::new(&an, LU, u64::MAX, room(lu + factor), 1).unwrap().threads, 1);

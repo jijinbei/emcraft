@@ -29,11 +29,13 @@ use crate::sparse::Csr;
 
 mod analysis;
 mod memory;
+mod scratch;
 
 pub(crate) use crate::memory::available_memory;
 pub use analysis::Analysis;
 pub(crate) use analysis::fill;
-pub(crate) use memory::{Plan, Shape, products};
+pub(crate) use memory::{PANEL, Plan, Shape, products};
+pub(crate) use scratch::Scratch;
 
 /// The largest frontal matrix (rows) a factorization may form: m² complex entries (40 GB at the
 /// limit; the [`Plan`] refuses before that what the memory cannot hold).
@@ -134,6 +136,92 @@ impl Update {
     }
 }
 
+/// An update waiting for its parent: in memory, or in the factorization's scratch file for
+/// updates (its rows kept here).
+pub(crate) enum Held {
+    Memory(Update),
+    Disk { rows: Vec<usize>, offset: u64, len: usize },
+}
+
+impl Held {
+    /// Its rows (positions).
+    pub(crate) fn rows(&self) -> &[usize] {
+        match self {
+            Held::Memory(u) => &u.rows,
+            Held::Disk { rows, .. } => rows,
+        }
+    }
+}
+
+/// A child's update as a front factored by panels reads it: where each of its rows goes in the
+/// front, and the update itself.
+pub(crate) struct Child {
+    pub place: Vec<usize>,
+    pub held: Held,
+}
+
+/// Where the top's updates wait for their parents: in memory, or (`spill`) each written to a
+/// scratch file of their own as it is made and read back as its parent is assembled, so the top
+/// holds one front and one child's update at a time (Liu 1986's out-of-core stack). The file is
+/// made when first needed and goes with the factorization.
+pub(crate) struct Waiting {
+    spill: bool,
+    file: std::sync::Mutex<Option<Scratch>>,
+}
+
+impl Waiting {
+    fn new(spill: bool) -> Waiting {
+        Waiting { spill, file: std::sync::Mutex::new(None) }
+    }
+
+    fn hold(&self, u: Update) -> Result<Held, FactorError> {
+        if !self.spill {
+            return Ok(Held::Memory(u));
+        }
+        let mut guard = self.file.lock().map_err(|_| FactorError::Scratch("the updates' file's lock was poisoned".into()))?;
+        if guard.is_none() {
+            *guard = Some(Scratch::new()?);
+        }
+        match guard.as_mut() {
+            Some(file) => {
+                let (offset, len) = file.write(&u.values, "an update matrix on its way to disk")?;
+                Ok(Held::Disk { rows: u.rows, offset, len })
+            }
+            None => Ok(Held::Memory(u)),
+        }
+    }
+
+    /// The columns `cols` of a lower-packed update of `mu` rows (each from its diagonal down,
+    /// one after another), from memory or read back from the file.
+    pub(crate) fn columns<'a>(&self, h: &'a Held, mu: usize, cols: Range<usize>) -> Result<std::borrow::Cow<'a, [C]>, FactorError> {
+        let (from, to) = (fill(cols.start, mu), fill(cols.end, mu));
+        match h {
+            Held::Memory(u) => {
+                u.values.get(from..to).map(std::borrow::Cow::Borrowed).ok_or_else(|| FactorError::Dimension("an update shorter than its rows".into()))
+            }
+            Held::Disk { offset, len, .. } => {
+                if to > *len {
+                    return Err(FactorError::Dimension("an update on disk shorter than its rows".into()));
+                }
+                let guard = self.file.lock().map_err(|_| FactorError::Scratch("the updates' file's lock was poisoned".into()))?;
+                let file = guard.as_ref().ok_or_else(|| FactorError::Scratch("an update on disk without a file".into()))?;
+                Ok(std::borrow::Cow::Owned(file.read(offset + (from as u64) * 16, to - from, "an update's columns read back")?))
+            }
+        }
+    }
+
+    fn take(&self, h: Held) -> Result<Update, FactorError> {
+        match h {
+            Held::Memory(u) => Ok(u),
+            Held::Disk { rows, offset, len } => {
+                let guard = self.file.lock().map_err(|_| FactorError::Scratch("the updates' file's lock was poisoned".into()))?;
+                let file = guard.as_ref().ok_or_else(|| FactorError::Scratch("an update on disk without a file".into()))?;
+                Ok(Update { rows, values: file.read(offset, len, "an update matrix read back")? })
+            }
+        }
+    }
+}
+
 /// What a factorization counts.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Counts {
@@ -178,6 +266,24 @@ pub(crate) trait FrontKernel: Sync {
 
     /// Eliminates the front's first k variables.
     fn eliminate(&self, front: Front) -> Result<Eliminated<Self::Node>, FactorError>;
+
+    /// Whether a front of `m` rows is factored by panels, never formed whole
+    /// ([`FrontKernel::eliminate_panels`]).
+    fn by_panels(&self, _m: usize) -> bool {
+        false
+    }
+
+    /// Assembles and eliminates supernode `columns`' front of `rows` panel by panel, reading its
+    /// children's updates from `waiting` a panel's columns at a time.
+    fn eliminate_panels(
+        &self,
+        _columns: Range<usize>,
+        _rows: Vec<usize>,
+        _children: Vec<Child>,
+        _waiting: &Waiting,
+    ) -> Result<Eliminated<Self::Node>, FactorError> {
+        Err(FactorError::Dimension("not supported yet: this factorization by panels".into()))
+    }
 }
 
 /// Refuses a matrix that is not of `an`'s pattern, has a non-finite entry or is zero.
@@ -261,16 +367,37 @@ struct Subtree<N> {
 }
 
 /// Assembles supernode `s`'s front from A and its children's `updates` (in the children's
-/// order) and eliminates it.
-fn node<K: FrontKernel>(kernel: &K, an: &Analysis, s: usize, rows: Vec<usize>, updates: Vec<Update>) -> Result<Eliminated<K::Node>, FactorError> {
+/// order, each taken from `waiting` as it is added) and eliminates it.
+fn node<K: FrontKernel>(
+    kernel: &K,
+    an: &Analysis,
+    s: usize,
+    rows: Vec<usize>,
+    updates: Vec<Held>,
+    waiting: &Waiting,
+) -> Result<Eliminated<K::Node>, FactorError> {
     let columns = an.columns(s);
     let m = rows.len();
     if m > MAX_FRONT {
         return Err(FactorError::FrontTooLarge { rows: m, limit: MAX_FRONT });
     }
+    if kernel.by_panels(m) {
+        let children = updates
+            .into_iter()
+            .map(|held| {
+                let place = held.rows().iter().map(|p| rows.binary_search(p).ok()).collect::<Option<Vec<usize>>>();
+                let place = place.ok_or_else(|| FactorError::Dimension("an update outside its parent's front".into()))?;
+                Ok(Child { place, held })
+            })
+            .collect::<Result<Vec<_>, FactorError>>()?;
+        let mut done = kernel.eliminate_panels(columns, rows, children, waiting)?;
+        done.counts.largest_front = m;
+        return Ok(done);
+    }
     let mut front = Front { rows, k: columns.len(), f: crate::memory::zeros(m * m, "a frontal matrix")? };
     kernel.assemble(columns, &mut front)?;
     for u in updates {
+        let u = waiting.take(u)?;
         let place = u.rows.iter().map(|&p| front.place(p)).collect::<Option<Vec<usize>>>();
         let place = place.ok_or_else(|| FactorError::Dimension("an update outside its parent's front".into()))?;
         kernel.extend_add(&mut front.f, m, &place, &u.values);
@@ -290,16 +417,17 @@ fn subtree<K: FrontKernel>(
     list: Vec<(usize, Vec<usize>)>,
 ) -> Result<Subtree<K::Node>, FactorError> {
     let _alone = memory::SubtreeGuard::enter();
-    let mut pending: BTreeMap<usize, Vec<Update>> = BTreeMap::new();
+    let mut pending: BTreeMap<usize, Vec<Held>> = BTreeMap::new();
     let mut out = Subtree { root, nodes: Vec::with_capacity(list.len()), update: None, counts: Counts::default() };
+    let in_memory = Waiting::new(false);
     for (s, rows) in list {
         let updates = pending.remove(&s).unwrap_or_default();
-        let f = node(kernel, an, s, rows, updates)?;
+        let f = node(kernel, an, s, rows, updates, &in_memory)?;
         out.counts.add(f.counts);
         if s == root {
             out.update = f.update;
         } else if let (Some(u), Some(p)) = (f.update, tree.parent.get(s).copied().flatten()) {
-            pending.entry(p).or_default().push(u);
+            pending.entry(p).or_default().push(Held::Memory(u));
         }
         out.nodes.push((s, f.node));
     }
@@ -311,21 +439,37 @@ pub(crate) fn threads() -> usize {
     std::thread::available_parallelism().map_or(1, std::num::NonZero::get)
 }
 
-/// Factors every supernode of `an` with `kernel` on `threads` threads (a [`Plan`]'s): the light
-/// subtrees on threads, the top after them on the calling thread (where [`crate::accel`]'s
-/// device is). Returns the nodes by supernode and the counts.
-pub(crate) fn factor_tree<K: FrontKernel>(kernel: &K, an: &Analysis, threads: usize) -> Result<(Vec<K::Node>, Counts), FactorError> {
-    let ns = an.supernodes();
-    let tree = Tree::new(an);
-    let (tasks, top) = tree.split(threads);
+/// A light subtree for a thread: its root, and each of its supernodes with its rows.
+type Job = (usize, Vec<(usize, Vec<usize>)>);
 
-    let mut nodes: Vec<Option<K::Node>> = (0..ns).map(|_| None).collect();
-    let mut super_rows: Vec<Option<Vec<usize>>> = an.super_rows.iter().cloned().map(Some).collect();
-    // Each task's subtree: its rows taken out for the thread.
-    let jobs: Vec<(usize, Vec<(usize, Vec<usize>)>)> =
-        tasks.iter().map(|&s| (s, (tree.first[s]..=s).map(|t| (t, super_rows[t].take().unwrap_or_default())).collect())).collect();
-    let factor_jobs = || -> Vec<Result<Subtree<K::Node>, FactorError>> {
-        jobs.into_par_iter().map(|(root, list)| subtree(kernel, an, &tree, root, list)).collect()
+/// The jobs of the subtrees `tasks`, their rows taken out of `super_rows`.
+fn jobs(tree: &Tree, tasks: &[usize], super_rows: &mut [Option<Vec<usize>>]) -> Vec<Job> {
+    tasks.iter().map(|&s| (s, (tree.first[s]..=s).map(|t| (t, super_rows[t].take().unwrap_or_default())).collect())).collect()
+}
+
+/// The light subtrees `jobs` factored on `threads` threads, each root's update for its parent
+/// handed to `waiting` on the subtree's own thread as it finishes: when the plan spills, it is on
+/// disk from then on, not held in memory until every subtree is done (the plan counts none of
+/// them held).
+fn subtrees<K: FrontKernel>(
+    kernel: &K,
+    an: &Analysis,
+    tree: &Tree,
+    jobs: Vec<Job>,
+    threads: usize,
+    waiting: &Waiting,
+) -> Result<Vec<(Subtree<K::Node>, Option<Held>)>, FactorError> {
+    let factor_jobs = || -> Vec<Result<(Subtree<K::Node>, Option<Held>), FactorError>> {
+        jobs.into_par_iter()
+            .map(|(root, list)| {
+                let mut d = subtree(kernel, an, tree, root, list)?;
+                let held = match (d.update.take(), tree.parent[d.root]) {
+                    (Some(u), Some(_)) => Some(waiting.hold(u)?),
+                    _ => None,
+                };
+                Ok((d, held))
+            })
+            .collect()
     };
     // Fewer threads than the machine's: a pool of that many.
     let done = if threads >= self::threads().min(rayon::current_num_threads()) {
@@ -333,16 +477,44 @@ pub(crate) fn factor_tree<K: FrontKernel>(kernel: &K, an: &Analysis, threads: us
     } else {
         rayon::ThreadPoolBuilder::new().num_threads(threads).build().map_err(|e| FactorError::Threads(e.to_string()))?.install(factor_jobs)
     };
+    done.into_iter().collect()
+}
+
+/// For tests: whether each light subtree's update for its parent is on disk when the subtrees
+/// on `threads` threads are done, the updates spilled.
+#[cfg(test)]
+pub(crate) fn subtree_updates_on_disk<K: FrontKernel>(kernel: &K, an: &Analysis, threads: usize) -> Result<Vec<bool>, FactorError> {
+    let tree = Tree::new(an);
+    let (tasks, _) = tree.split(threads);
+    let mut super_rows: Vec<Option<Vec<usize>>> = an.super_rows.iter().cloned().map(Some).collect();
+    let waiting = Waiting::new(true);
+    let done = subtrees(kernel, an, &tree, jobs(&tree, &tasks, &mut super_rows), threads, &waiting)?;
+    Ok(done.iter().filter_map(|(_, held)| held.as_ref().map(|h| matches!(h, Held::Disk { .. }))).collect())
+}
+
+/// Factors every supernode of `an` with `kernel` as `plan` says: the light subtrees on its
+/// threads, the top after them on the calling thread (where [`crate::accel`]'s device is), the
+/// updates waiting for a top front on disk when it spills them. Returns the nodes by supernode
+/// and the counts.
+pub(crate) fn factor_tree<K: FrontKernel>(kernel: &K, an: &Analysis, plan: &Plan) -> Result<(Vec<K::Node>, Counts), FactorError> {
+    let threads = plan.threads;
+    let waiting = Waiting::new(plan.spill);
+    let ns = an.supernodes();
+    let tree = Tree::new(an);
+    let (tasks, top) = tree.split(threads);
+
+    let mut nodes: Vec<Option<K::Node>> = (0..ns).map(|_| None).collect();
+    let mut super_rows: Vec<Option<Vec<usize>>> = an.super_rows.iter().cloned().map(Some).collect();
+    let done = subtrees(kernel, an, &tree, jobs(&tree, &tasks, &mut super_rows), threads, &waiting)?;
     // Updates waiting for a top supernode: (child, update).
-    let mut pending: Vec<Vec<(usize, Update)>> = (0..ns).map(|_| Vec::new()).collect();
+    let mut pending: Vec<Vec<(usize, Held)>> = (0..ns).map(|_| Vec::new()).collect();
     let mut counts = Counts::default();
-    for d in done {
-        let d = d?;
+    for (d, held) in done {
         counts.add(d.counts);
         for (s, node) in d.nodes {
             nodes[s] = Some(node);
         }
-        if let (Some(u), Some(p)) = (d.update, tree.parent[d.root]) {
+        if let (Some(u), Some(p)) = (held, tree.parent[d.root]) {
             pending[p].push((d.root, u));
         }
     }
@@ -351,10 +523,10 @@ pub(crate) fn factor_tree<K: FrontKernel>(kernel: &K, an: &Analysis, threads: us
         let mut from_children = std::mem::take(&mut pending[s]);
         from_children.sort_by_key(|c| c.0);
         let updates = from_children.into_iter().map(|(_, u)| u).collect();
-        let f = node(kernel, an, s, rows, updates)?;
+        let f = node(kernel, an, s, rows, updates, &waiting)?;
         counts.add(f.counts);
         if let (Some(u), Some(p)) = (f.update, tree.parent[s]) {
-            pending[p].push((s, u));
+            pending[p].push((s, waiting.hold(u)?));
         }
         nodes[s] = Some(f.node);
     }

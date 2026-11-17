@@ -89,7 +89,9 @@ impl Driven {
 
     /// Factors a [`System`], its border last.
     pub(crate) fn factor(&self, s: &System) -> Result<Ldlt> {
-        let (mut f, analysis) = self.factor_with(&s.a, &self.dofs.points, s.border, |an| Ok(Ldlt::factor_analysed(&s.a, an, memory_budget())?))?;
+        let (mut f, analysis) = self.factor_with(&s.a, &self.dofs.points, s.border, |an| {
+            Ok(crate::ldlt::with_compression(self.compress, || Ldlt::factor_analysed(&s.a, an, memory_budget()))?)
+        })?;
         f.analysis_seconds = analysis;
         Ok(f)
     }
