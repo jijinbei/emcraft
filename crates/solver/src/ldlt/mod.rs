@@ -136,7 +136,7 @@ fn compressed(f: &[C], m: usize, k: usize, tol: f64, tile: usize) -> Result<(Vec
             let t: Vec<C> = (0..cols).flat_map(|c| f[(c0 + c) * m + r0..(c0 + c) * m + r0 + rows].iter().copied()).collect();
             lowrank::compress(&t, rows, cols, tol * ((rows * cols) as f64).sqrt())
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
     let mut diagonal = crate::memory::with_capacity(k * k, "the factor's diagonal block")?;
     for c in 0..k {
         diagonal.extend_from_slice(&f[c * m..c * m + k]);

@@ -18,6 +18,8 @@ use faer::linalg::matmul::matmul;
 use faer::{Accum, MatMut, MatRef, Par};
 use num_complex::Complex64 as C;
 
+use crate::memory::OutOfMemory;
+
 /// A tile as kept: dense (rows × columns by column) or X Yᵀ.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Tile {
@@ -31,8 +33,8 @@ pub(super) enum Tile {
 
 /// Tile `t` (rows × columns, by column) as X Yᵀ to within `tol` in the Frobenius norm, or dense
 /// when no rank below rows · columns / (rows + columns) reaches it.
-pub(super) fn compress(t: &[C], rows: usize, cols: usize, tol: f64) -> Tile {
-    let dense = || Tile::Dense(t.to_vec());
+pub(super) fn compress(t: &[C], rows: usize, cols: usize, tol: f64) -> Result<Tile, OutOfMemory> {
+    let dense = || Ok(Tile::Dense(t.to_vec()));
     if rows == 0 || cols == 0 || t.len() != rows * cols || !(tol >= 0.0) {
         return dense();
     }
@@ -83,7 +85,7 @@ pub(super) fn compress(t: &[C], rows: usize, cols: usize, tol: f64) -> Tile {
         rank += 1;
     }
     // X = Q's first `rank` columns: H₁ ⋯ H_r applied to e_t.
-    let mut xy = vec![C::new(0.0, 0.0); rank * (rows + cols)];
+    let mut xy = crate::memory::zeros(rank * (rows + cols), "a low-rank tile")?;
     for t in 0..rank {
         let col = &mut xy[t * rows..(t + 1) * rows];
         col[t] = C::new(1.0, 0.0);
@@ -102,7 +104,7 @@ pub(super) fn compress(t: &[C], rows: usize, cols: usize, tol: f64) -> Tile {
             y[t * cols + orig] = a[j * rows + t];
         }
     }
-    Tile::LowRank { rank, xy }
+    Ok(Tile::LowRank { rank, xy })
 }
 
 impl Tile {
@@ -138,7 +140,7 @@ pub(super) fn entries(rank: Option<usize>, rows: usize, cols: usize) -> usize {
 }
 
 /// dst (rows × n, by row) −= T src (columns × n, by row): the forward solve's product.
-pub(super) fn sub_mul(t: TileRef<'_>, src: &[C], dst: &mut [C], n: usize) {
+pub(super) fn sub_mul(t: TileRef<'_>, src: &[C], dst: &mut [C], n: usize) -> Result<(), OutOfMemory> {
     let TileRef { rank, data, rows, cols } = t;
     let minus = C::new(-1.0, 0.0);
     let s = MatRef::from_row_major_slice(src, cols, n);
@@ -150,15 +152,16 @@ pub(super) fn sub_mul(t: TileRef<'_>, src: &[C], dst: &mut [C], n: usize) {
             let (x, y) = xy.split_at(rows * rank);
             let x = MatRef::from_column_major_slice(x, rows, *rank);
             let y = MatRef::from_column_major_slice(y, cols, *rank);
-            let mut w = vec![C::new(0.0, 0.0); rank * n];
+            let mut w = crate::memory::zeros(rank * n, "a low-rank product")?;
             matmul(MatMut::from_row_major_slice_mut(&mut w, *rank, n), Accum::Replace, y.transpose(), s, C::new(1.0, 0.0), Par::Seq);
             matmul(d, Accum::Add, x, MatRef::from_row_major_slice(&w, *rank, n), minus, Par::Seq);
         }
     }
+    Ok(())
 }
 
 /// dst (columns × n, by row) −= Tᵀ src (rows × n, by row): the backward solve's product.
-pub(super) fn sub_mul_transposed(t: TileRef<'_>, src: &[C], dst: &mut [C], n: usize) {
+pub(super) fn sub_mul_transposed(t: TileRef<'_>, src: &[C], dst: &mut [C], n: usize) -> Result<(), OutOfMemory> {
     let TileRef { rank, data, rows, cols } = t;
     let minus = C::new(-1.0, 0.0);
     let s = MatRef::from_row_major_slice(src, rows, n);
@@ -170,11 +173,12 @@ pub(super) fn sub_mul_transposed(t: TileRef<'_>, src: &[C], dst: &mut [C], n: us
             let (x, y) = xy.split_at(rows * rank);
             let x = MatRef::from_column_major_slice(x, rows, *rank);
             let y = MatRef::from_column_major_slice(y, cols, *rank);
-            let mut w = vec![C::new(0.0, 0.0); rank * n];
+            let mut w = crate::memory::zeros(rank * n, "a low-rank product")?;
             matmul(MatMut::from_row_major_slice_mut(&mut w, *rank, n), Accum::Replace, x.transpose(), s, C::new(1.0, 0.0), Par::Seq);
             matmul(d, Accum::Add, y, MatRef::from_row_major_slice(&w, *rank, n), minus, Par::Seq);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -188,7 +192,7 @@ mod tests {
         let eye: Vec<C> = (0..cols * cols).map(|i| if i / cols == i % cols { C::new(1.0, 0.0) } else { C::new(0.0, 0.0) }).collect();
         let mut by_row = vec![C::new(0.0, 0.0); rows * cols];
         let (rank, data) = tile.parts();
-        sub_mul(TileRef { rank, data, rows, cols }, &eye, &mut by_row, cols);
+        sub_mul(TileRef { rank, data, rows, cols }, &eye, &mut by_row, cols).unwrap();
         for r in 0..rows {
             for c in 0..cols {
                 out[c * rows + r] = -by_row[r * cols + c];
@@ -220,7 +224,7 @@ mod tests {
         let mut rng = Rng(7);
         for (noise, tol) in [(0.0, 1e-10), (1e-9, 1e-6)] {
             let t = tile_of_rank(60, 40, 5, noise, &mut rng);
-            let c = compress(&t, 60, 40, tol);
+            let c = compress(&t, 60, 40, tol).unwrap();
             let Tile::LowRank { rank, .. } = c else { panic!("not compressed") };
             assert_eq!(rank, 5);
             assert!(frobenius(&dense_of(&c, 60, 40), &t) <= tol * 1.0001, "{}", frobenius(&dense_of(&c, 60, 40), &t));
@@ -231,7 +235,7 @@ mod tests {
     fn a_tile_of_full_rank_stays_dense() {
         let mut rng = Rng(11);
         let t: Vec<C> = (0..30 * 20).map(|_| rng.c()).collect();
-        assert_eq!(compress(&t, 30, 20, 1e-8), Tile::Dense(t));
+        assert_eq!(compress(&t, 30, 20, 1e-8).unwrap(), Tile::Dense(t));
     }
 
     #[test]
@@ -240,18 +244,18 @@ mod tests {
         // right-hand sides.
         let mut rng = Rng(3);
         let t = tile_of_rank(50, 30, 4, 0.0, &mut rng);
-        let c = compress(&t, 50, 30, 1e-12);
+        let c = compress(&t, 50, 30, 1e-12).unwrap();
         assert!(matches!(c, Tile::LowRank { rank: 4, .. }));
         let d = Tile::Dense(t);
         let src: Vec<C> = (0..30 * 3).map(|_| rng.c()).collect();
         let (mut a, mut b) = (vec![C::new(0.0, 0.0); 50 * 3], vec![C::new(0.0, 0.0); 50 * 3]);
-        sub_mul(TileRef { rank: c.parts().0, data: c.parts().1, rows: 50, cols: 30 }, &src, &mut a, 3);
-        sub_mul(TileRef { rank: d.parts().0, data: d.parts().1, rows: 50, cols: 30 }, &src, &mut b, 3);
+        sub_mul(TileRef { rank: c.parts().0, data: c.parts().1, rows: 50, cols: 30 }, &src, &mut a, 3).unwrap();
+        sub_mul(TileRef { rank: d.parts().0, data: d.parts().1, rows: 50, cols: 30 }, &src, &mut b, 3).unwrap();
         assert!(frobenius(&a, &b) < 1e-10, "{}", frobenius(&a, &b));
         let src: Vec<C> = (0..50 * 3).map(|_| rng.c()).collect();
         let (mut a, mut b) = (vec![C::new(0.0, 0.0); 30 * 3], vec![C::new(0.0, 0.0); 30 * 3]);
-        sub_mul_transposed(TileRef { rank: c.parts().0, data: c.parts().1, rows: 50, cols: 30 }, &src, &mut a, 3);
-        sub_mul_transposed(TileRef { rank: d.parts().0, data: d.parts().1, rows: 50, cols: 30 }, &src, &mut b, 3);
+        sub_mul_transposed(TileRef { rank: c.parts().0, data: c.parts().1, rows: 50, cols: 30 }, &src, &mut a, 3).unwrap();
+        sub_mul_transposed(TileRef { rank: d.parts().0, data: d.parts().1, rows: 50, cols: 30 }, &src, &mut b, 3).unwrap();
         assert!(frobenius(&a, &b) < 1e-10, "{}", frobenius(&a, &b));
     }
 
@@ -259,8 +263,8 @@ mod tests {
     fn hostile_tiles_are_kept_dense() {
         // Wrong lengths, an empty tile, a tolerance that is not a number: kept as given.
         let t = vec![C::new(1.0, 0.0); 6];
-        assert_eq!(compress(&t, 4, 2, 1e-8), Tile::Dense(t.clone()));
-        assert_eq!(compress(&[], 0, 3, 1e-8), Tile::Dense(Vec::new()));
-        assert_eq!(compress(&t, 3, 2, f64::NAN), Tile::Dense(t));
+        assert_eq!(compress(&t, 4, 2, 1e-8).unwrap(), Tile::Dense(t.clone()));
+        assert_eq!(compress(&[], 0, 3, 1e-8).unwrap(), Tile::Dense(Vec::new()));
+        assert_eq!(compress(&t, 3, 2, f64::NAN).unwrap(), Tile::Dense(t));
     }
 }

@@ -88,7 +88,7 @@ impl Ldlt {
                     // Rows below the columns: split the buffer between them.
                     let (head, tail) = local.split_at_mut(t.row0 * r);
                     let src = &head[t.col0 * r..(t.col0 + t.cols) * r];
-                    lowrank::sub_mul(lowrank::TileRef { rank: t.rank, data: &data, rows: t.rows, cols: t.cols }, src, &mut tail[..t.rows * r], r);
+                    lowrank::sub_mul(lowrank::TileRef { rank: t.rank, data: &data, rows: t.rows, cols: t.cols }, src, &mut tail[..t.rows * r], r)?;
                 }
             }
         }
@@ -124,7 +124,7 @@ impl Ldlt {
                         &tail[..t.rows * r],
                         dst,
                         r,
-                    );
+                    )?;
                 }
                 let block = self.piece(s, d.0, d.1.len())?;
                 diagonal_backward(Diagonal { block: &block, n: d.1.rows, from: d.1.col0, to: d.1.col0 + d.1.cols, pivots: &s.pivots }, local, r, acc);

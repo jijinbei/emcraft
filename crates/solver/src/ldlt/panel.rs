@@ -45,12 +45,12 @@ fn ranges(m: usize, k: usize, width: usize) -> Vec<Range<usize>> {
 }
 
 /// A kept tile as a dense matrix (rows × cols, by column).
-fn dense(t: &Placed, data: &[C]) -> Vec<C> {
+fn dense(t: &Placed, data: &[C]) -> Result<Vec<C>, FactorError> {
     match t.rank {
-        None => data.to_vec(),
+        None => Ok(data.to_vec()),
         Some(r) => {
             let (x, y) = data.split_at(t.rows * r);
-            let mut out = vec![C::new(0.0, 0.0); t.rows * t.cols];
+            let mut out = crate::memory::zeros(t.rows * t.cols, "a tile made dense")?;
             matmul(
                 MatMut::from_column_major_slice_mut(&mut out, t.rows, t.cols),
                 Accum::Replace,
@@ -59,15 +59,15 @@ fn dense(t: &Placed, data: &[C]) -> Vec<C> {
                 C::new(1.0, 0.0),
                 Par::Seq,
             );
-            out
+            Ok(out)
         }
     }
 }
 
 /// D Lᵀ for a panel's `pivots` and a tile `l` (rows × w, by column) of its columns: w × rows,
 /// by column.
-fn d_lt(pivots: &[Pivot], l: &[C], rows: usize, w: usize) -> Vec<C> {
-    let mut out = vec![C::new(0.0, 0.0); w * rows];
+fn d_lt(pivots: &[Pivot], l: &[C], rows: usize, w: usize) -> Result<Vec<C>, FactorError> {
+    let mut out = crate::memory::zeros(w * rows, "a panel's D Lᵀ")?;
     let at = |i: usize, t: usize| l[t * rows + i];
     let mut t = 0;
     while t < w {
@@ -89,18 +89,18 @@ fn d_lt(pivots: &[Pivot], l: &[C], rows: usize, w: usize) -> Vec<C> {
             _ => t += 1,
         }
     }
-    out
+    Ok(out)
 }
 
 /// out (rows × cols, by column) = T W for a kept tile T (rows × w) and W (w × cols, by column).
-fn product(t: &Placed, data: &[C], w_mat: &[C], cols: usize, out: &mut [C]) {
+fn product(t: &Placed, data: &[C], w_mat: &[C], cols: usize, out: &mut [C]) -> Result<(), FactorError> {
     let wm = MatRef::from_column_major_slice(w_mat, t.cols, cols);
     let dst = MatMut::from_column_major_slice_mut(out, t.rows, cols);
     match t.rank {
         None => matmul(dst, Accum::Replace, MatRef::from_column_major_slice(data, t.rows, t.cols), wm, C::new(1.0, 0.0), Par::Seq),
         Some(r) => {
             let (x, y) = data.split_at(t.rows * r);
-            let mut yw = vec![C::new(0.0, 0.0); r * cols];
+            let mut yw = crate::memory::zeros(r * cols, "a low-rank product")?;
             matmul(
                 MatMut::from_column_major_slice_mut(&mut yw, r, cols),
                 Accum::Replace,
@@ -119,6 +119,7 @@ fn product(t: &Placed, data: &[C], w_mat: &[C], cols: usize, out: &mut [C]) {
             );
         }
     }
+    Ok(())
 }
 
 /// Swaps rows p and q of a kept tile.
@@ -173,17 +174,17 @@ pub(super) fn factor_by_panels(
         for (kk, &base) in first.iter().enumerate() {
             let tile_j = base + (j - kk);
             let (tj, kcols) = (out.tiles[tile_j], &panels[kk]);
-            let w_mat = d_lt(&out.pivots[kcols.clone()], &dense(&tj, &out.pieces[tile_j]), tj.rows, kcols.len());
+            let w_mat = d_lt(&out.pivots[kcols.clone()], &dense(&tj, &out.pieces[tile_j])?, tj.rows, kcols.len())?;
             let below: Vec<usize> = (tile_j..base + (panels.len() - kk)).collect();
             let products: Vec<Vec<C>> = below
                 .par_iter()
                 .map(|&i| {
                     let t = &out.tiles[i];
-                    let mut prod = vec![C::new(0.0, 0.0); t.rows * w];
-                    product(t, &out.pieces[i], &w_mat, w, &mut prod);
-                    prod
+                    let mut prod = crate::memory::zeros(t.rows * w, "a tile's update")?;
+                    product(t, &out.pieces[i], &w_mat, w, &mut prod)?;
+                    Ok(prod)
                 })
-                .collect();
+                .collect::<Result<_, FactorError>>()?;
             for (&i, prod) in below.iter().zip(&products) {
                 let t = &out.tiles[i];
                 for c in 0..w {
@@ -226,7 +227,7 @@ pub(super) fn factor_by_panels(
             let entries: Vec<C> = (0..w).flat_map(|c| panel[c * mj + r0..c * mj + r0 + rr.len()].iter().copied()).collect();
             let diagonal = rr.start == c0;
             let tile = match compress {
-                Some(tol) if !diagonal => lowrank::compress(&entries, rr.len(), w, tol * ((rr.len() * w) as f64).sqrt()),
+                Some(tol) if !diagonal => lowrank::compress(&entries, rr.len(), w, tol * ((rr.len() * w) as f64).sqrt())?,
                 _ => lowrank::Tile::Dense(entries),
             };
             out.tiles.push(Placed { row0: rr.start, rows: rr.len(), col0: c0, cols: w, rank: tile.parts().0 });
