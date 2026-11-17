@@ -1,5 +1,5 @@
 //! `cargo xtask designs`: the SolidCraft designs built from their sources
-//! (docs/adr/0010-geometry-from-solidcraft.md). Each design `<dir>/<name>.solidcraft` — the
+//! (docs/adr/0010-geometry-from-solidcraft.md). Each design `<dir>/<name>.sc` — the
 //! templates' in `crates/templates/designs`, an oracle case's in its folder — comes from a
 //! SolidCraft command script beside it, `<name>.script.json`, run by SolidCraft's own command
 //! line (`solidcraft-cli run <script> --save <name>.json`: the design as JSON, no evaluated cache)
@@ -68,7 +68,7 @@ fn designs(root: &Path) -> Vec<Design> {
         .chain(&cases)
         .flat_map(|dir| scripts(dir).into_iter().map(move |(name, script)| (dir, name, script)))
         .map(|(dir, name, script)| {
-            let file = format!("{name}.solidcraft");
+            let file = format!("{name}.sc");
             let copies = cases.iter().map(|c| c.join(&file)).filter(|p| *dir == templates && p.exists());
             let files = std::iter::once(dir.join(&file)).chain(copies).collect();
             Design { name, script, files }

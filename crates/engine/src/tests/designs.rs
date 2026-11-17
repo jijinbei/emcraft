@@ -36,10 +36,10 @@ fn a_template_opens_its_design_and_passes_its_parameters() {
 #[test]
 fn a_design_no_template_has_is_refused() {
     let mut s = Session::new();
-    let e = s.execute("geometry.import", &json!({"path": "template:nothing.solidcraft"})).unwrap_err();
-    assert!(matches!(&e, EngineError::Params(m) if m.contains("taper.solidcraft")), "{e}");
+    let e = s.execute("geometry.import", &json!({"path": "template:nothing.sc"})).unwrap_err();
+    assert!(matches!(&e, EngineError::Params(m) if m.contains("taper.sc")), "{e}");
     // An expression of the project's variables needs them: an unknown one is refused.
-    let e = s.execute("geometry.import", &json!({"path": "template:taper.solidcraft", "parameters": {"l": "=nothing"}})).unwrap_err();
+    let e = s.execute("geometry.import", &json!({"path": "template:taper.sc", "parameters": {"l": "=nothing"}})).unwrap_err();
     assert!(matches!(&e, EngineError::Params(_)), "{e}");
 }
 
@@ -68,7 +68,7 @@ fn the_horn_meshes_finer() {
     }
 }
 
-/// The horn as it was first drawn (`data/horn-crease.solidcraft`): its air goes straight on for
+/// The horn as it was first drawn (`data/horn-crease.sc`): its air goes straight on for
 /// the last millimetre past the mouth, so the crease where it turns lies exactly in the walls'
 /// front face. The Boolean once left a vertex on an edge there from 6 elements per wavelength
 /// up; the crease is moved off the face to the side the union merges (`emcraft_mesh::flush::
@@ -76,7 +76,7 @@ fn the_horn_meshes_finer() {
 #[test]
 #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
 fn a_crease_lying_in_another_bodys_face_meshes() {
-    let path = format!("{}/src/tests/data/horn-crease.solidcraft", env!("CARGO_MANIFEST_DIR"));
+    let path = format!("{}/src/tests/data/horn-crease.sc", env!("CARGO_MANIFEST_DIR"));
     for n in [6, 8] {
         let mut s = Session::new();
         s.execute("geometry.import", &json!({"path": path, "materials": {"inside": "vacuum"}, "open": true, "thickness": 6, "margin": 14})).unwrap();
@@ -108,7 +108,7 @@ fn the_corrugated_wall_bends_the_elements_onto_its_sine() {
 #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
 fn a_design_in_a_box_bends_its_elements_onto_its_moved_surfaces() {
     let mut s = Session::new();
-    let import = json!({"path": "template:heart-wire.solidcraft", "open": true, "thickness": 15, "margin": 30, "tolerance": 0.4});
+    let import = json!({"path": "template:heart-wire.sc", "open": true, "thickness": 15, "margin": 30, "tolerance": 0.4});
     s.execute("geometry.import", &import).unwrap();
     s.execute("mesh.generate", &json!({"size": 20})).unwrap();
     let mesh = s.model.mesh.as_ref().unwrap();
@@ -176,7 +176,7 @@ fn the_termination_is_matched_over_the_band() {
 #[test]
 fn a_part_is_inspected_without_importing_it() {
     let mut s = Session::new();
-    let r = s.execute("geometry.import.inspect", &json!({"path": "template:taper.solidcraft"})).unwrap();
+    let r = s.execute("geometry.import.inspect", &json!({"path": "template:taper.sc"})).unwrap();
     assert_eq!(r["format"], "solidcraft");
     assert_eq!(r["units"], "file");
     assert!(r["parameters"].as_array().is_some_and(|p| p.iter().any(|q| q["name"] == "l")), "{r}");
@@ -255,8 +255,8 @@ fn the_helical_compressor_runs_its_3d_bloch_waves_and_compresses_its_pulse() {
 /// taper's z extent is its parameter `l` (mm).
 #[test]
 fn a_design_saved_again_or_set_here_is_read_again() {
-    let bytes = emcraft_templates::design("template:taper.solidcraft").unwrap();
-    let path = super::scratch("reload-taper.solidcraft");
+    let bytes = emcraft_templates::design("template:taper.sc").unwrap();
+    let path = super::scratch("reload-taper.sc");
     let write_l = |l: &str| {
         let mut d: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         for p in d["params"].as_array_mut().unwrap() {
@@ -284,7 +284,7 @@ fn a_design_saved_again_or_set_here_is_read_again() {
     assert_eq!(crate::geometry::designs(&s)[0].set.get("l"), Some(&json!(25.0)));
     for (params, what) in [
         (json!({"design": path, "name": "nothing", "value": "3"}), "name"),
-        (json!({"design": "other.solidcraft", "name": "l", "value": "3"}), "design"),
+        (json!({"design": "other.sc", "name": "l", "value": "3"}), "design"),
         (json!({"design": path, "name": "l", "value": " "}), "value"),
     ] {
         let e = s.execute("geometry.design", &params).unwrap_err();
@@ -299,8 +299,8 @@ fn a_design_saved_again_or_set_here_is_read_again() {
 /// port. Analytic evidence: the taper's far end lies at z = `l`.
 #[test]
 fn a_port_on_a_named_face_follows_it() {
-    let bytes = emcraft_templates::design("template:taper.solidcraft").unwrap();
-    let path = super::scratch("named-face-taper.solidcraft");
+    let bytes = emcraft_templates::design("template:taper.sc").unwrap();
+    let path = super::scratch("named-face-taper.sc");
     let write_l = |l: &str| {
         let mut d: serde_json::Value = serde_json::from_slice(bytes).unwrap();
         for p in d["params"].as_array_mut().unwrap() {
@@ -342,7 +342,7 @@ fn a_design_lies_in_the_box_its_corner_gives() {
     assert!(s.model.domain.open.is_some());
     let mut s = Session::new();
     let at = |extra: serde_json::Value| {
-        let mut p = json!({"path": "template:sphere-scattering.solidcraft", "open": true, "thickness": 12});
+        let mut p = json!({"path": "template:sphere-scattering.sc", "open": true, "thickness": 12});
         p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
         p
     };

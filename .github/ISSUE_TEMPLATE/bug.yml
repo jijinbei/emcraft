@@ -13,7 +13,7 @@ body:
     id: reproduction
     attributes:
       label: Reproduction
-      description: Numbered steps, or a script (`emcraft-cli run script.json`, control-channel JSON lines), with the sample, template or attached `.emcraft` / `.solidcraft` file that shows it.
+      description: Numbered steps, or a script (`emcraft-cli run script.json`, control-channel JSON lines), with the sample, template or attached `.emcraft` / `.sc` file that shows it.
       placeholder: |
         1. emcraft --sample highpass
         2. Solve ▸ Frequency ▸ 6–9 GHz

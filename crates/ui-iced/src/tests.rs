@@ -1270,7 +1270,7 @@ fn the_mesh_steps_play_meshes_with_its_forms_defaults() {
 }
 
 /// An agent makes a new SolidCraft design where it says, with no file dialog (which a window on
-/// a display of its own cannot answer): the empty design is written there, `.solidcraft` added,
+/// a display of its own cannot answer): the empty design is written there, `.sc` added,
 /// and watched for the save that imports it; no path is refused.
 #[test]
 fn an_agent_makes_a_new_design_without_the_file_dialog() {
@@ -1280,7 +1280,7 @@ fn an_agent_makes_a_new_design_without_the_file_dialog() {
     let mut app = App::new(None);
     app.prefs.solidcraft = "/nonexistent/solidcraft".into();
     let reply = crate::scenario::call(&mut app, "ui.new_design", json!({ "path": path.to_string_lossy() })).unwrap_or_else(|e| panic!("{e}"));
-    let made = dir.join("pillbox.solidcraft");
+    let made = dir.join("pillbox.sc");
     assert_eq!(std::fs::read_to_string(&made).ok().as_deref(), Some(crate::designs::EMPTY), "{reply}");
     assert_eq!(app.watch.new.as_ref().map(|(p, _)| p.as_str()), Some(made.to_string_lossy().as_ref()));
     let refused = crate::scenario::call(&mut app, "ui.new_design", json!({ "path": " " })).unwrap_or_else(|e| panic!("{e}"));
@@ -1765,7 +1765,7 @@ fn a_design_goes_to_solidcraft_and_comes_back() {
         .map_or_else(std::env::temp_dir, std::path::PathBuf::from)
         .join(format!("iced-designs-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
-    let taper: &[u8] = include_bytes!("../../templates/designs/taper.solidcraft");
+    let taper: &[u8] = include_bytes!("../../templates/designs/taper.sc");
     let write = |path: &std::path::Path, l: &str| {
         let mut d: serde_json::Value = serde_json::from_slice(taper).unwrap_or_default();
         for p in d["params"].as_array_mut().into_iter().flatten() {
@@ -1778,7 +1778,7 @@ fn a_design_goes_to_solidcraft_and_comes_back() {
         let later = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
         let _ = std::fs::File::options().write(true).open(path).and_then(|f| f.set_modified(later));
     };
-    let path = dir.join("taper.solidcraft");
+    let path = dir.join("taper.sc");
     write(&path, "30");
     let p = path.display().to_string();
     let mut app = App::new(None);
@@ -1809,7 +1809,7 @@ fn a_design_goes_to_solidcraft_and_comes_back() {
     blank.prefs.solidcraft = "/nonexistent/solidcraft".into();
     let fresh = dir.join("new");
     blank.update(Message::File(FileAction::Chosen(Purpose::NewDesign, Some(fresh.display().to_string()))));
-    let made = dir.join("new.solidcraft");
+    let made = dir.join("new.sc");
     assert_eq!(std::fs::read_to_string(&made).ok().as_deref(), Some(crate::designs::EMPTY));
     let inspected = blank.session.execute("geometry.import.inspect", &json!({"path": made.display().to_string()}));
     assert!(inspected.is_ok(), "the empty design reads: {inspected:?}");

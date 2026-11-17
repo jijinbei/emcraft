@@ -7,7 +7,7 @@
  {"command": "project.variable", "params": {"name": "hx", "label": "H-arm post offset", "value": 8, "quantity": "length"}},
  {"command": "project.variable", "params": {"name": "ez", "label": "E-arm post height", "value": 5, "quantity": "length"}},
  {"command": "project.variable", "params": {"name": "ey", "label": "E-arm post position", "value": 5, "quantity": "length"}},
- {"command": "geometry.import", "params": {"path": "template:magic-tee.solidcraft", "parameters": {"a": "=a", "b": "=b", "l": "=l", "rp": "=rp", "hp": "=hp", "hx": "=hx", "ez": "=ez", "ey": "=ey"}, "materials": {"tee": "interior", "cap": "metal", "post1": "metal", "post2": "metal", "post3": "metal"}}},
+ {"command": "geometry.import", "params": {"path": "template:magic-tee.sc", "parameters": {"a": "=a", "b": "=b", "l": "=l", "rp": "=rp", "hp": "=hp", "hx": "=hx", "ez": "=ez", "ey": "=ey"}, "materials": {"tee": "interior", "cap": "metal", "post1": "metal", "post2": "metal", "post3": "metal"}}},
  {"command": "model.walls", "params": {"thickness": 1.27}},
  {"command": "mesh.generate", "params": {"size": "=a/6"}},
  {"command": "model.port.create", "params": {"name": "1", "end": "start", "modes": 4, "axis": "x", "face": [0, 0, 0, "=a", "=b"]}},

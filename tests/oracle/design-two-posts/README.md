@@ -1,6 +1,6 @@
 # Two posts across a guide drawn along y in SolidCraft
 
-`two-posts.solidcraft` was drawn in SolidCraft 0.42 by hand (the README's demo recording): a
+`two-posts.sc` was drawn in SolidCraft 0.42 by hand (the README's demo recording): a
 22.86 × 10.16 mm rectangle sketched on the XZ plane and extruded 60 mm along −y as the body
 `guide`, and two full-height cylinders of 3 mm diameter, `post1` and `post2`, at y = −20 and
 −40 mm on the guide's centre line, each a body of its own. It is SolidCraft's own document as

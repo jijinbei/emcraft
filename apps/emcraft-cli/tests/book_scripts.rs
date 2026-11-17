@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// The design the SolidCraft tutorial's script imports, which its reader downloads beside it.
-const DESIGN: &str = "tests/oracle/design-post/post.solidcraft";
+const DESIGN: &str = "tests/oracle/design-post/post.sc";
 
 /// Runs every script of `folder` (under docs/book/scripts) with `emcraft-cli run`.
 fn run_scripts(folder: &str) {
@@ -16,7 +16,7 @@ fn run_scripts(folder: &str) {
     // a folder of the test's own.
     let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join("book-scripts").join(folder);
     std::fs::create_dir_all(&scratch).unwrap();
-    std::fs::copy(root.join(DESIGN), scratch.join("post.solidcraft")).unwrap();
+    std::fs::copy(root.join(DESIGN), scratch.join("post.sc")).unwrap();
     let mut ran = 0;
     for entry in std::fs::read_dir(&scripts).unwrap() {
         let script = entry.unwrap().path();

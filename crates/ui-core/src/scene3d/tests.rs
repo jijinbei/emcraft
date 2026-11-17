@@ -491,8 +491,7 @@ fn an_imported_cavitys_walls_show_before_and_after_meshing() {
 #[test]
 fn a_carved_part_is_drawn_open_before_meshing() {
     let mut s = Session::new();
-    let horn =
-        serde_json::json!({"path": "template:horn.solidcraft", "materials": {"inside": "vacuum"}, "open": true, "thickness": 10, "margin": 18});
+    let horn = serde_json::json!({"path": "template:horn.sc", "materials": {"inside": "vacuum"}, "open": true, "thickness": 10, "margin": 18});
     s.execute("geometry.import", &horn).unwrap();
     let b = build_with(&s, Overlay::Plain, &[], &[]);
     let walls = super::Pick::Feature(0).tag();

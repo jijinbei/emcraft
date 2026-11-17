@@ -1,12 +1,12 @@
 # A pyramidal horn from a template's SolidCraft design
 
 The `horn` template is a SolidCraft design compiled into EMCraft
-(`crates/templates/designs/horn.solidcraft`, built from `horn.script.json` by `cargo xtask designs`): two bodies, the
+(`crates/templates/designs/horn.sc`, built from `horn.script.json` by `cargo xtask designs`): two bodies, the
 metal `walls` (2 mm thick round a WR-90 feed 5 mm long and a flare to a 40 × 30 mm mouth 30 mm
 further on) and the air `inside` (flaring on 1 mm past the mouth in one ruled piece, so the surfaces
 meet in general position: an air body that went straight on for that millimetre had its crease
 in the walls' front face, which the Boolean could not mesh finer than five elements per
-wavelength). The template opens it with `geometry.import {path: "template:horn.solidcraft",
+wavelength). The template opens it with `geometry.import {path: "template:horn.sc",
 materials: {"inside": "vacuum"}, open: true}`, its parameters passed to the design's, in a box
 of air lined with a 6 mm perfectly matched layer, 8 mm of air between it and the horn (10 mm of
 layer gave 11.543 dBi in 28 s, 6 mm 11.564 in 19 s; 6 mm of air too near: the power balance

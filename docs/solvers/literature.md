@@ -703,7 +703,7 @@ overlap tests).
   multigigawatt rf radiation*, Phys. Rev. Lett. 92(11):118301, 2004 — a guide whose wall turns
   as cos(nφ − 2πz/p) couples TE11 of one rotation with TE21 near its cut-off, the operating wave's
   group velocity changing strongly and smoothly with frequency: the helical pulse compressor
-  (template `helical-compressor`, its cell `crates/templates/designs/helical-cell.solidcraft`).
+  (template `helical-compressor`, its cell `crates/templates/designs/helical-cell.sc`).
 - D. M. Pozar, *Microwave Engineering*, 4th ed., Wiley 2012, §4.3–4.4 and Table 4.2 — the
   impedance, admittance and chain (ABCD) matrices read from S on each port's reference
   impedance, and S from Z or Y (`emcraft-solver::SMatrix::impedance`, `admittance`, `chain`,

@@ -1,6 +1,6 @@
 # A post from a SolidCraft design, its diameter a parameter
 
-`post.solidcraft` is a SolidCraft design: a 22.86 × 10.16 × 30 mm guide (parameters `a`, `b`,
+`post.sc` is a SolidCraft design: a 22.86 × 10.16 × 30 mm guide (parameters `a`, `b`,
 `l`) with a full-height post of diameter `d` (3 mm as saved) cut across it at its middle. It was
 built from the SolidCraft command script beside it (`post.script.json`, `cargo xtask designs`). The case opens
 it with `d` set to 4 mm (`geometry.import` `parameters`), so SolidCraft evaluates the design at

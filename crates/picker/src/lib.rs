@@ -31,11 +31,8 @@ impl Picker for SystemPicker {
     fn design(&self, suggested: &str, done: Box<dyn FnOnce(Option<String>) + Send>) {
         let name = suggested.to_owned();
         std::thread::spawn(move || {
-            let path = rfd::FileDialog::new()
-                .set_title("New SolidCraft design")
-                .add_filter("SolidCraft design", &["solidcraft"])
-                .set_file_name(name)
-                .save_file();
+            let path =
+                rfd::FileDialog::new().set_title("New SolidCraft design").add_filter("SolidCraft design", &["sc"]).set_file_name(name).save_file();
             done(path.map(|p| p.to_string_lossy().into_owned()));
         });
     }
@@ -45,7 +42,7 @@ impl Picker for SystemPicker {
             let path = rfd::FileDialog::new()
                 .set_title("Import a part")
                 .add_filter("Parts (SolidCraft, 3MF, STL)", PART_EXTENSIONS)
-                .add_filter("SolidCraft design", &["solidcraft", "sc"])
+                .add_filter("SolidCraft design", &["sc"])
                 .add_filter("3MF", &["3mf"])
                 .add_filter("STL", &["stl"])
                 .add_filter("KiCad PCB", &["kicad_pcb"])

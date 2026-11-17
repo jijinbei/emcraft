@@ -382,7 +382,7 @@ fn read_part(p: &Params, path: &str, unit: f64) -> Result<Vec<PartBody>> {
         read.into_iter().map(|b| PartBody { source: b.surface.tags.clone(), exact: Some(b.surfaces), names: b.face_names, body: b.surface }).collect()
     } else {
         if p.has("parameters") {
-            return Err(p.error("parameters", "only a SolidCraft design (.sc, .solidcraft) has parameters"));
+            return Err(p.error("parameters", "only a SolidCraft design (.sc) has parameters"));
         }
         emcraft_io::read_bodies(path, &bytes, unit)?
             .into_iter()

@@ -9,11 +9,11 @@ itself.
 *What you will get: the reflection of a 4 mm metal post across a WR-90 guide, |S11| = 0.981 at
 10 GHz, the same as the closed form.*
 
-EMCraft reads a `.solidcraft` design directly, not a triangulated export: cylinders stay
+EMCraft reads a `.sc` design directly, not a triangulated export: cylinders stay
 cylinders, so the mesh's curved elements follow the real surface, and the design's parameters
 stay parameters.
 
-The part here is [`post.solidcraft`](https://github.com/jijinbei/emcraft/blob/main/tests/oracle/design-post/post.solidcraft)
+The part here is [`post.sc`](https://github.com/jijinbei/emcraft/blob/main/tests/oracle/design-post/post.sc)
 from the repository: one body, the air inside a 22.86 × 10.16 × 30 mm guide with a round hole
 of diameter `d` through it where the post stands. Download it next to the script.
 
@@ -51,7 +51,7 @@ It takes about ten seconds.
 
 ## In the window
 
-Drop the `.solidcraft` file on the window, or use **＋** on the Geometry step. The import
+Drop the `.sc` file on the window, or use **＋** on the Geometry step. The import
 dialog shows what the file holds (its bodies, size and parameters) before anything is
 imported. The design's row in the tree has a **↗** that opens it in SolidCraft; when you save
 there, EMCraft reads it again.

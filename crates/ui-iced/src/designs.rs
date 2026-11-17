@@ -4,7 +4,6 @@
 //! (`geometry.reload`). A new design is an empty one saved where the person chooses, opened in
 //! SolidCraft and imported once it is saved there with something in it.
 
-use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use emcraft_ui_core::lang::{args, tr, trf};
@@ -98,8 +97,7 @@ impl App {
 
     /// A new design at `path`: written empty, opened in SolidCraft, imported once saved there.
     pub(crate) fn new_design(&mut self, path: &str) {
-        let path =
-            if Path::new(path).extension().is_some_and(|e| e == "solidcraft" || e == "sc") { path.to_owned() } else { format!("{path}.solidcraft") };
+        let path = emcraft_ui_core::files::design_path(path);
         if let Err(e) = std::fs::write(&path, EMPTY) {
             return self.fail(format!("{path}: {e}"));
         }

@@ -6,7 +6,7 @@
   {"expect": {"inspect": {"dialog.command": "geometry.import", "dialog.options": false, "dialog.help": false, "dialog.detected": null},
               "handles": ["dialog:pick", "dialog:options", "dialog:help"]}},
   {"note": "A design's path: its body, size and parameters at once"},
-  {"call": "ui.dialog", "params": {"set": {"path": "../../tests/oracle/design-post/post.solidcraft"}}},
+  {"call": "ui.dialog", "params": {"set": {"path": "../../tests/oracle/design-post/post.sc"}}},
   {"expect": {"inspect": {"dialog.detected.format": "solidcraft", "dialog.detected.units": "file",
                           "dialog.detected.size.0": [22.86, 1e-6], "dialog.detected.size.2": [30, 1e-6]}}},
   {"note": "A parameter changed in its row: written into the dialog's parameters, the design evaluated at it on import"},

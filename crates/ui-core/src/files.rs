@@ -112,7 +112,24 @@ pub trait Picker: Send + Sync {
 }
 
 /// The extensions of the parts `geometry.import` reads.
-pub const PART_EXTENSIONS: &[&str] = &["solidcraft", "sc", "3mf", "stl", "kicad_pcb"];
+pub const PART_EXTENSIONS: &[&str] = &["sc", "3mf", "stl", "kicad_pcb"];
+
+/// The file name a new SolidCraft design is offered under: `.sc`, what SolidCraft writes.
+pub const NEW_DESIGN: &str = "design.sc";
+
+/// Where a new design is written: `path`, `.sc` added unless it ends so (any case).
+///
+/// ```
+/// use emcraft_ui_core::files::{NEW_DESIGN, design_path, is_part};
+/// assert_eq!(design_path("/tmp/pillbox"), "/tmp/pillbox.sc");
+/// assert_eq!(design_path("/tmp/pillbox.SC"), "/tmp/pillbox.SC");
+/// assert_eq!(design_path(NEW_DESIGN), NEW_DESIGN);
+/// assert!(is_part(NEW_DESIGN));
+/// ```
+pub fn design_path(path: &str) -> String {
+    let named = std::path::Path::new(path).extension().is_some_and(|e| e.eq_ignore_ascii_case("sc"));
+    if named { path.to_owned() } else { format!("{path}.sc") }
+}
 
 /// Whether `path` names a part to import, by its extension.
 pub fn is_part(path: &str) -> bool {

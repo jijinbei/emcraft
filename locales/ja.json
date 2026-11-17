@@ -1529,7 +1529,7 @@
         "open": "開放問題：空気の箱の内側に完全整合層 (PML) を張る（既定 false）",
         "thickness": "`open` のときの層の厚さ（既定は帯域の最長波長の 4 分の 1）",
         "fit_surfaces": "各面の厳密な曲面を復元する。頂点に当てはめた平面、円柱、球、円錐、トーラスを、全頂点がその上にあれば採用し、メッシュがネイティブ形状と同様に曲面に沿う（既定 true）。false で多面体のまま",
-        "parameters": "SolidCraft の設計（.sc、.solidcraft）のみ：評価する前に設定するパラメータ。名前 → 設計が表示する単位での数値、または式（\"3 mm\"）。面は近似でなく設計の正確な面になる",
+        "parameters": "SolidCraft の設計（.sc）のみ：評価する前に設定するパラメータ。名前 → 設計が表示する単位での数値、または式（\"3 mm\"）。面は近似でなく設計の正確な面になる",
         "tolerance": "SolidCraft の設計のみ：分割の弦公差（既定は各ボディの大きさの 2e-3。メッシュの曲がった要素は厳密な曲面に沿う）"
       }
     },
@@ -1537,7 +1537,7 @@
       "label": "部品を調べる",
       "doc": "geometry.import と同じように部品を読み、読み込まずに中身を返す：`format`（`solidcraft`、`3mf`、`stl`）、`bodies`（各物体の名前と三角形数）、その `size`（表示単位での x、y、z の大きさ）、ファイルが自身の単位を持つか（`units` が `file`：3MF と SolidCraft の設計）、`unit` で読むか（`display`：STL）、SolidCraft の設計の `parameters`（名前、保存された値、単位）。モデルは変えない。",
       "params": {
-        "path": "ファイル（`.stl`、`.3mf`、SolidCraft の設計 `.sc` または `.solidcraft`）、または `template:<file>`",
+        "path": "ファイル（`.stl`、`.3mf`、SolidCraft の設計 `.sc`）、または `template:<file>`",
         "unit": "STL ファイルの長さ単位（表示単位で。既定 1）"
       }
     },

@@ -1,6 +1,6 @@
 //! The templates built from SolidCraft designs beside their script twins
 //! (docs/adr/0010-geometry-from-solidcraft.md, H5): each pilot template opens its design
-//! (`template:<name>.solidcraft`), and its twin (`crates/templates/twins/<name>.json`) writes the
+//! (`template:<name>.sc`), and its twin (`crates/templates/twins/<name>.json`) writes the
 //! same model with EMCraft's own shape commands. Solved alike, the two agree with each other —
 //! which tests the import, its exact surfaces and the mesh built on them — and with the closed
 //! form where there is one, evaluated here independently of the finite elements.

@@ -4,7 +4,7 @@
  {"command": "project.variable", "params": {"name": "h0", "label": "internal bias field (Oe)", "value": 1000}},
  {"command": "project.variable", "params": {"name": "ms", "label": "magnetization 4πMs (G)", "value": 1780}},
  {"command": "model.material.create", "params": {"name": "yig", "eps_r": 13, "ferrite": {"magnetization": "=ms", "bias": "=h0", "axis": "y"}}},
- {"command": "geometry.import", "params": {"path": "template:ferrite-phase-shifter.solidcraft", "parameters": {"w": "=w", "x": "=x"}, "materials": {"guide": "interior", "slab": "yig"}}},
+ {"command": "geometry.import", "params": {"path": "template:ferrite-phase-shifter.sc", "parameters": {"w": "=w", "x": "=x"}, "materials": {"guide": "interior", "slab": "yig"}}},
  {"command": "model.port.create", "params": {"name": "1", "end": "start", "modes": 2}},
  {"command": "model.port.create", "params": {"name": "2", "end": "end", "modes": 2}},
  {"command": "mesh.generate", "params": {"size": 3}},

@@ -1,6 +1,6 @@
 [
   {"command": "geometry.import", "params": {
-    "path": "post.solidcraft", "materials": {"Body1": "interior"}, "parameters": {"d": 4}
+    "path": "post.sc", "materials": {"Body1": "interior"}, "parameters": {"d": 4}
   }},
   {"command": "model.port.create", "params": {"name": "1", "end": "start", "modes": 4}},
   {"command": "model.port.create", "params": {"name": "2", "end": "end", "modes": 4}},

@@ -1,5 +1,5 @@
 [
- {"command": "geometry.import", "params": {"path": "template:open-waveguide.solidcraft", "open": true, "box": [80, 80, 80], "thickness": 15}},
+ {"command": "geometry.import", "params": {"path": "template:open-waveguide.sc", "open": true, "box": [80, 80, 80], "thickness": 15}},
  {"command": "mesh.generate", "params": {"per_wavelength": 5, "frequency": 10}},
  {"command": "model.port.create", "params": {"name": "feed", "end": "start", "modes": 4, "face": [25, 28.57, 34.92, 22.86, 10.16]}},
  {"command": "project.setup", "params": {"kind": "radiation", "frequency": 10}},

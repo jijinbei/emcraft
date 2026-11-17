@@ -31,7 +31,7 @@ pub enum Error {
     #[error("{0}")]
     Invalid(String),
     /// A file whose extension names no format read here (its name).
-    #[error("`{0}`: not an STL or 3MF file (by its extension)")]
+    #[error("`{0}`: not a SolidCraft design (`.sc`), an STL or a 3MF file (by its extension)")]
     UnknownFormat(String),
 }
 

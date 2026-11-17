@@ -164,7 +164,7 @@ impl App {
             return Task::none();
         };
         let suggested = match purpose {
-            Purpose::NewDesign => "design.solidcraft".to_owned(),
+            Purpose::NewDesign => emcraft_ui_core::files::NEW_DESIGN.to_owned(),
             _ => format!("{}.{}", self.session.name(), emcraft_engine::project::EXTENSION),
         };
         Task::perform(asked(picker, purpose, suggested), move |path| Message::File(FileAction::Chosen(purpose, path)))

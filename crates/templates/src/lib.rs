@@ -915,7 +915,7 @@ pub const TEMPLATES: &[Template] = &[
 
 /// A file a template is built from, compiled in: no file is read when a template opens it.
 pub struct Design {
-    /// Its file name: `<name>.solidcraft`, a SolidCraft design; `<name>.s<n>p`, S-parameters.
+    /// Its file name: `<name>.sc`, a SolidCraft design; `<name>.s<n>p`, S-parameters.
     pub file: &'static str,
     pub bytes: &'static [u8],
 }
@@ -929,39 +929,39 @@ pub const DESIGN_SCHEME: &str = "template:";
 /// files of templates' S as EMCraft solves them (`adsb-receiver`'s antenna and filter; each
 /// file's comment names the template and the solve that wrote it).
 pub const DESIGNS: &[Design] = &[
-    Design { file: "taper.solidcraft", bytes: include_bytes!("../designs/taper.solidcraft") },
-    Design { file: "horn.solidcraft", bytes: include_bytes!("../designs/horn.solidcraft") },
-    Design { file: "corrugated-h.solidcraft", bytes: include_bytes!("../designs/corrugated-h.solidcraft") },
-    Design { file: "corrugated-e.solidcraft", bytes: include_bytes!("../designs/corrugated-e.solidcraft") },
-    Design { file: "corrugated-cell.solidcraft", bytes: include_bytes!("../designs/corrugated-cell.solidcraft") },
-    Design { file: "helical-cell.solidcraft", bytes: include_bytes!("../designs/helical-cell.solidcraft") },
-    Design { file: "heart-wire.solidcraft", bytes: include_bytes!("../designs/heart-wire.solidcraft") },
-    Design { file: "h-bend.solidcraft", bytes: include_bytes!("../designs/h-bend.solidcraft") },
-    Design { file: "cylinder-cavity.solidcraft", bytes: include_bytes!("../designs/cylinder-cavity.solidcraft") },
-    Design { file: "coaxial-line.solidcraft", bytes: include_bytes!("../designs/coaxial-line.solidcraft") },
-    Design { file: "inductive-post.solidcraft", bytes: include_bytes!("../designs/inductive-post.solidcraft") },
-    Design { file: "metal-sphere.solidcraft", bytes: include_bytes!("../designs/metal-sphere.solidcraft") },
-    Design { file: "cross-guide-coupler.solidcraft", bytes: include_bytes!("../designs/cross-guide-coupler.solidcraft") },
-    Design { file: "straight.solidcraft", bytes: include_bytes!("../designs/straight.solidcraft") },
-    Design { file: "circular-guide.solidcraft", bytes: include_bytes!("../designs/circular-guide.solidcraft") },
-    Design { file: "reentrant-cavity.solidcraft", bytes: include_bytes!("../designs/reentrant-cavity.solidcraft") },
-    Design { file: "combline-resonator.solidcraft", bytes: include_bytes!("../designs/combline-resonator.solidcraft") },
-    Design { file: "dielectric-resonator.solidcraft", bytes: include_bytes!("../designs/dielectric-resonator.solidcraft") },
-    Design { file: "ferrite-phase-shifter.solidcraft", bytes: include_bytes!("../designs/ferrite-phase-shifter.solidcraft") },
-    Design { file: "sphere-cavity.solidcraft", bytes: include_bytes!("../designs/sphere-cavity.solidcraft") },
-    Design { file: "loaded-sphere.solidcraft", bytes: include_bytes!("../designs/loaded-sphere.solidcraft") },
-    Design { file: "termination.solidcraft", bytes: include_bytes!("../designs/termination.solidcraft") },
-    Design { file: "h-tee.solidcraft", bytes: include_bytes!("../designs/h-tee.solidcraft") },
-    Design { file: "e-tee.solidcraft", bytes: include_bytes!("../designs/e-tee.solidcraft") },
-    Design { file: "e-bend.solidcraft", bytes: include_bytes!("../designs/e-bend.solidcraft") },
-    Design { file: "h-bend-radius.solidcraft", bytes: include_bytes!("../designs/h-bend-radius.solidcraft") },
-    Design { file: "e-bend-radius.solidcraft", bytes: include_bytes!("../designs/e-bend-radius.solidcraft") },
-    Design { file: "magic-tee.solidcraft", bytes: include_bytes!("../designs/magic-tee.solidcraft") },
-    Design { file: "sphere-scattering.solidcraft", bytes: include_bytes!("../designs/sphere-scattering.solidcraft") },
-    Design { file: "halfwave-dipole.solidcraft", bytes: include_bytes!("../designs/halfwave-dipole.solidcraft") },
-    Design { file: "monopole.solidcraft", bytes: include_bytes!("../designs/monopole.solidcraft") },
-    Design { file: "yagi.solidcraft", bytes: include_bytes!("../designs/yagi.solidcraft") },
-    Design { file: "open-waveguide.solidcraft", bytes: include_bytes!("../designs/open-waveguide.solidcraft") },
+    Design { file: "taper.sc", bytes: include_bytes!("../designs/taper.sc") },
+    Design { file: "horn.sc", bytes: include_bytes!("../designs/horn.sc") },
+    Design { file: "corrugated-h.sc", bytes: include_bytes!("../designs/corrugated-h.sc") },
+    Design { file: "corrugated-e.sc", bytes: include_bytes!("../designs/corrugated-e.sc") },
+    Design { file: "corrugated-cell.sc", bytes: include_bytes!("../designs/corrugated-cell.sc") },
+    Design { file: "helical-cell.sc", bytes: include_bytes!("../designs/helical-cell.sc") },
+    Design { file: "heart-wire.sc", bytes: include_bytes!("../designs/heart-wire.sc") },
+    Design { file: "h-bend.sc", bytes: include_bytes!("../designs/h-bend.sc") },
+    Design { file: "cylinder-cavity.sc", bytes: include_bytes!("../designs/cylinder-cavity.sc") },
+    Design { file: "coaxial-line.sc", bytes: include_bytes!("../designs/coaxial-line.sc") },
+    Design { file: "inductive-post.sc", bytes: include_bytes!("../designs/inductive-post.sc") },
+    Design { file: "metal-sphere.sc", bytes: include_bytes!("../designs/metal-sphere.sc") },
+    Design { file: "cross-guide-coupler.sc", bytes: include_bytes!("../designs/cross-guide-coupler.sc") },
+    Design { file: "straight.sc", bytes: include_bytes!("../designs/straight.sc") },
+    Design { file: "circular-guide.sc", bytes: include_bytes!("../designs/circular-guide.sc") },
+    Design { file: "reentrant-cavity.sc", bytes: include_bytes!("../designs/reentrant-cavity.sc") },
+    Design { file: "combline-resonator.sc", bytes: include_bytes!("../designs/combline-resonator.sc") },
+    Design { file: "dielectric-resonator.sc", bytes: include_bytes!("../designs/dielectric-resonator.sc") },
+    Design { file: "ferrite-phase-shifter.sc", bytes: include_bytes!("../designs/ferrite-phase-shifter.sc") },
+    Design { file: "sphere-cavity.sc", bytes: include_bytes!("../designs/sphere-cavity.sc") },
+    Design { file: "loaded-sphere.sc", bytes: include_bytes!("../designs/loaded-sphere.sc") },
+    Design { file: "termination.sc", bytes: include_bytes!("../designs/termination.sc") },
+    Design { file: "h-tee.sc", bytes: include_bytes!("../designs/h-tee.sc") },
+    Design { file: "e-tee.sc", bytes: include_bytes!("../designs/e-tee.sc") },
+    Design { file: "e-bend.sc", bytes: include_bytes!("../designs/e-bend.sc") },
+    Design { file: "h-bend-radius.sc", bytes: include_bytes!("../designs/h-bend-radius.sc") },
+    Design { file: "e-bend-radius.sc", bytes: include_bytes!("../designs/e-bend-radius.sc") },
+    Design { file: "magic-tee.sc", bytes: include_bytes!("../designs/magic-tee.sc") },
+    Design { file: "sphere-scattering.sc", bytes: include_bytes!("../designs/sphere-scattering.sc") },
+    Design { file: "halfwave-dipole.sc", bytes: include_bytes!("../designs/halfwave-dipole.sc") },
+    Design { file: "monopole.sc", bytes: include_bytes!("../designs/monopole.sc") },
+    Design { file: "yagi.sc", bytes: include_bytes!("../designs/yagi.sc") },
+    Design { file: "open-waveguide.sc", bytes: include_bytes!("../designs/open-waveguide.sc") },
     Design { file: "adsb-patch.s1p", bytes: include_bytes!("../designs/adsb-patch.s1p") },
     Design { file: "adsb-bandpass.s2p", bytes: include_bytes!("../designs/adsb-bandpass.s2p") },
 ];
@@ -970,10 +970,10 @@ pub const DESIGNS: &[Design] = &[
 /// user's) or a design no template has.
 ///
 /// ```
-/// let taper = emcraft_templates::design("template:taper.solidcraft");
+/// let taper = emcraft_templates::design("template:taper.sc");
 /// assert!(taper.is_some_and(|b| !b.is_empty()));
-/// assert!(emcraft_templates::design("taper.solidcraft").is_none());
-/// assert!(emcraft_templates::design("template:nothing.solidcraft").is_none());
+/// assert!(emcraft_templates::design("taper.sc").is_none());
+/// assert!(emcraft_templates::design("template:nothing.sc").is_none());
 /// ```
 pub fn design(path: &str) -> Option<&'static [u8]> {
     let file = path.strip_prefix(DESIGN_SCHEME)?;

@@ -5,7 +5,7 @@ Status: accepted (2026-10-31); pin moved to the rebuilt #8845 on SolidCraft's so
 
 ## Decision
 
-`geometry.import` opens SolidCraft designs (`.sc`, `.solidcraft`) itself, through one SolidCraft
+`geometry.import` opens SolidCraft designs (`.sc`) itself, through one SolidCraft
 crate: `solidcraft-exchange`, SolidCraft's typed, stable data view of a design for analysis tools
 (its exchange snapshot). EMCraft calls nothing else of SolidCraft: it opens a design, lists its
 parameters, sets some of them (`parameters`: name → a number in the design's unit, or an

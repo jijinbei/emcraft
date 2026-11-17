@@ -56,7 +56,7 @@ function askBody(asks) {
   const lines = ['Thanks for the report! To reproduce it we need a little more:'];
   lines.push(
     '- **Steps to reproduce**: numbered steps from a sample (`emcraft --sample highpass`) or a script ' +
-      '(`emcraft-cli run script.json`), and the `.emcraft` or `.solidcraft` file that shows it if it is your own model.',
+      '(`emcraft-cli run script.json`), and the `.emcraft` or `.sc` file that shows it if it is your own model.',
   );
   if (asks.includes('version')) lines.push('- **EMCraft version** (or commit) and your OS.');
   lines.push(

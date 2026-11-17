@@ -1,4 +1,4 @@
-//! SolidCraft designs (`.sc`, `.solidcraft`), opened through SolidCraft's exchange snapshot
+//! SolidCraft designs (`.sc`), opened through SolidCraft's exchange snapshot
 //! (`solidcraft-exchange`, the one SolidCraft crate EMCraft depends on): each body a surface in
 //! metres whose triangles carry their B-rep face, and each face's exact surface from the design
 //! itself, not fitted.
@@ -26,10 +26,13 @@ pub struct Parameter {
     pub unit: String,
 }
 
-/// Whether a file is a SolidCraft design, by its extension.
+/// The extension of a SolidCraft design, the one SolidCraft writes; no other is read as a design
+/// (a `.solidcraft` file of an earlier SolidCraft is saved again there, or renamed).
+pub const EXTENSION: &str = "sc";
+
+/// Whether a file is a SolidCraft design, by its extension (any case).
 pub fn is_design(name: &str) -> bool {
-    let ext = name.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-    matches!(ext.as_str(), "sc" | "solidcraft")
+    name.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case(EXTENSION))
 }
 
 fn failed(e: sx::Error) -> Error {
@@ -73,14 +76,14 @@ fn design(bytes: &[u8]) -> Result<Arc<sx::Design>> {
 /// which follow those).
 ///
 /// ```
-/// let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/oracle/design-post/post.solidcraft");
+/// let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/oracle/design-post/post.sc");
 /// let bytes = std::fs::read(path).unwrap_or_default();
 /// let p = emcraft_io::solidcraft::parameters(&bytes).unwrap_or_default();
 /// // The post's diameter, 3 mm as saved; its four parameters and none of the dimensions'.
 /// assert!(p.iter().any(|q| q.name == "d" && q.value == Some(3.0) && q.unit == "mm"));
 /// assert_eq!(p.iter().map(|q| q.name.as_str()).collect::<Vec<_>>(), ["a", "b", "l", "d"]);
 /// assert!(emcraft_io::solidcraft::parameters(b"not a design").is_err());
-/// assert!(emcraft_io::solidcraft::is_design("post.solidcraft") && !emcraft_io::solidcraft::is_design("post.3mf"));
+/// assert!(emcraft_io::solidcraft::is_design("post.sc") && !emcraft_io::solidcraft::is_design("post.3mf"));
 /// ```
 pub fn parameters(bytes: &[u8]) -> Result<Vec<Parameter>> {
     Ok(design(bytes)?
@@ -170,7 +173,7 @@ fn body(b: &sx::Body) -> Result<Body> {
 mod tests {
     use super::*;
 
-    const POST: &[u8] = include_bytes!("../../../tests/oracle/design-post/post.solidcraft");
+    const POST: &[u8] = include_bytes!("../../../tests/oracle/design-post/post.sc");
 
     /// The same file is opened once and its design kept; another file replaces it; the kept
     /// design gives what a fresh one gives.
