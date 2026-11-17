@@ -235,6 +235,15 @@ impl Plane {
     }
 }
 
+/// A component of the field sampled on its lattice ([`AxiPic::sampled`]): the radii and z (m)
+/// of its points and its values, row by row along z (V/m or T).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Sampled {
+    pub r: Vec<f64>,
+    pub z: Vec<f64>,
+    pub values: Vec<f64>,
+}
+
 /// An axisymmetric particle-in-cell run.
 pub struct AxiPic {
     grid: AxiGrid,
@@ -575,6 +584,44 @@ impl AxiPic {
             et: (0..g.nr).map(|i| value(ET, &self.f.et, i, node)).collect(),
             br: (0..g.nr).map(|i| mean(BR, &self.f.br, i)).collect(),
             node: (0..g.nr).map(|i| g.area(i)).collect(),
+        }
+    }
+
+    /// A component of the field on its own lattice, every `every_r`-th point across and
+    /// `every_z`-th along (both at least 1): the points' radii and z (m from the low end) and
+    /// the values, row by row along z.
+    ///
+    /// ```
+    /// use emcraft_fdtd::axi::{AxiGrid, AxiPic, Component};
+    /// use emcraft_fdtd::pic::{Axis, Wall};
+    /// use emcraft_particles::Pusher;
+    /// let g = AxiGrid::new(10, 1e-3, Axis { cells: 20, h: 1e-3, wall: Wall::Conductor })?;
+    /// let mut pic = AxiPic::new(g, g.time_step(0.9), Pusher::Boris)?;
+    /// pic.set(Component::Ez, |r, _| 1.0 - r * 100.0);
+    /// let map = pic.sampled(Component::Ez, 2, 4);
+    /// assert_eq!((map.r.len(), map.z.len(), map.values.len()), (6, 5, 30)); // r nodes 0..10, z cells' centres
+    /// assert!((map.values[0] - 1.0).abs() < 1e-12);
+    /// # Ok::<(), emcraft_fdtd::FdtdError>(())
+    /// ```
+    pub fn sampled(&self, component: Component, every_r: usize, every_z: usize) -> Sampled {
+        let which = component.lattice();
+        let lat = self.lats[which];
+        let values = match which {
+            ER => &self.f.er,
+            EZ => &self.f.ez,
+            ET => &self.f.et,
+            BR => &self.f.br,
+            BZ => &self.f.bz,
+            _ => &self.f.bt,
+        };
+        let g = self.grid;
+        let (every_r, every_z) = (every_r.max(1), every_z.max(1));
+        let is: Vec<usize> = (0..lat.nr).step_by(every_r).collect();
+        let ks: Vec<usize> = (0..lat.nz).step_by(every_z).collect();
+        Sampled {
+            r: is.iter().map(|&i| (i as f64 + if lat.r_node { 0.0 } else { 0.5 }) * g.dr).collect(),
+            z: ks.iter().map(|&k| (k as f64 + if lat.z_node { 0.0 } else { 0.5 }) * g.z.h).collect(),
+            values: ks.iter().flat_map(|&k| is.iter().map(move |&i| values.get(lat.at(i, k)).copied().unwrap_or(0.0))).collect(),
         }
     }
 

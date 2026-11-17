@@ -1,7 +1,8 @@
 //! `results.particles.export`: a particle run's records as CSV for other programs — its history
 //! (time, the field's and the particles' energy, the particles held, the current emitted, the
-//! power through each output plane), its probes' fields over time, or its particles at the end
-//! (position, momentum, energy: the phase space). Times in ns, lengths in the display's unit,
+//! power through each output plane), its probes' fields over time, its particles at the end
+//! (position, momentum, energy: the phase space), or at the moments kept along the run
+//! (`frames`) its particles and E_z on the r–z plane. Times in ns, lengths in the display's unit,
 //! fields in V/m, momenta γv in m/s, energies in J or eV as each column's header says.
 
 use std::fmt::Write as _;
@@ -19,6 +20,8 @@ emcraft_macros::named_enum! {
         History = "history",
         Probes = "probes",
         Particles = "particles",
+        Frames = "frames",
+        Maps = "maps",
     }
 }
 
@@ -33,6 +36,8 @@ pub fn export(s: &mut Session, p: &Params) -> Result<Value> {
         What::History => history(s, &run),
         What::Probes => probes(s, &run),
         What::Particles => particles(s, &run),
+        What::Frames => frames(s, &run),
+        What::Maps => maps(s, &run),
     };
     let mut file = std::fs::File::create(path).map_err(|e| EngineError::cannot_write(path, e))?;
     file.write_all(text.as_bytes()).map_err(|e| EngineError::cannot_write(path, e))?;
@@ -98,4 +103,39 @@ fn particles(s: &Session, run: &PicResult) -> (String, usize) {
         let _ = writeln!(text, "{x},{y},{z},{},{},{},{},{}", p.u[0], p.u[1], p.u[2], p.energy, p.population);
     }
     (text, run.snapshot.len())
+}
+
+/// The particles at each moment along the run (`frames`): a header, then a row each, its moment
+/// and time first.
+fn frames(s: &Session, run: &PicResult) -> (String, usize) {
+    let l = s.display.length.symbol();
+    let mut text = format!("moment,t (ns),x ({l}),y ({l}),z ({l}),ux (m/s),uy (m/s),uz (m/s),energy (eV),population\n");
+    let mut rows = 0;
+    for (k, m) in run.moments.iter().enumerate() {
+        for p in &m.particles {
+            let [x, y, z] = p.x.map(|c| s.show_length(c));
+            let _ = writeln!(text, "{k},{},{x},{y},{z},{},{},{},{},{}", m.t * 1e9, p.u[0], p.u[1], p.u[2], p.energy, p.population);
+            rows += 1;
+        }
+    }
+    (text, rows)
+}
+
+/// E_z on the r–z plane at each moment (a body of revolution's `frames`): a header, then a row
+/// each point, its moment and time first.
+fn maps(s: &Session, run: &PicResult) -> (String, usize) {
+    let l = s.display.length.symbol();
+    let mut text = format!("moment,t (ns),r ({l}),z ({l}),Ez (V/m)\n");
+    let mut rows = 0;
+    for (k, m) in run.moments.iter().enumerate() {
+        let Some(map) = &m.map else { continue };
+        for (j, z) in map.z.iter().enumerate() {
+            for (i, r) in map.r.iter().enumerate() {
+                let ez = map.ez.get(j * map.r.len() + i).copied().unwrap_or(0.0);
+                let _ = writeln!(text, "{k},{},{},{},{ez}", m.t * 1e9, s.show_length(*r), s.show_length(*z));
+                rows += 1;
+            }
+        }
+    }
+    (text, rows)
 }

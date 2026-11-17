@@ -277,7 +277,7 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
             ("particles.probe", json!({"at": [7, 0, 30]})),
         ],
     );
-    let r = s.execute("solve.particles", &json!({"time": 2, "cell": 0.5, "axisymmetric": true})).unwrap();
+    let r = s.execute("solve.particles", &json!({"time": 2, "cell": 0.5, "axisymmetric": true, "frames": 4})).unwrap();
     let (eps0, c0, mc2) = (8.854_187_812_8e-12, 299_792_458.0, 510_998.95);
     let gamma: f64 = 1.0 + 1e5 / mc2;
     let v = c0 * (1.0 - 1.0 / (gamma * gamma)).sqrt();
@@ -314,6 +314,27 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
     let r = s.execute("results.particles.export", &json!({"path": probes, "what": "probes"})).unwrap();
     let text = std::fs::read_to_string(&probes).unwrap();
     assert!(r["rows"].as_u64().unwrap() > 100 && text.starts_with("t (ns),probe 1 (7 0 30 mm) Ex (V/m)"), "{text:.80}");
+    // Four moments along the run: their particles and E_z on the r–z plane, in time order.
+    let kept = s.results.particles.clone().unwrap();
+    assert_eq!(kept.moments.len(), 4);
+    assert!(kept.moments.windows(2).all(|w| w[0].t < w[1].t) && (kept.moments[3].t - 2e-9).abs() < 0.01e-9);
+    assert!(kept.moments.iter().all(|m| !m.particles.is_empty() && m.particles.len() <= crate::particles::FRAME_PARTICLES));
+    let map = kept.moments[3].map.as_ref().unwrap();
+    assert!(
+        map.ez.len() == map.r.len() * map.z.len()
+            && map.ez.len() <= crate::particles::MAP_POINTS
+            && map.z[0] < 1e-3
+            && map.z[map.z.len() - 1] > 0.059
+    );
+    let frames = scratch("frames.csv");
+    let r = s.execute("results.particles.export", &json!({"path": frames, "what": "frames"})).unwrap();
+    let rows = kept.moments.iter().map(|m| m.particles.len()).sum::<usize>();
+    assert_eq!(r["rows"].as_u64().unwrap() as usize, rows);
+    let maps = scratch("maps.csv");
+    let r = s.execute("results.particles.export", &json!({"path": maps, "what": "maps"})).unwrap();
+    assert_eq!(r["rows"].as_u64().unwrap() as usize, 4 * map.ez.len());
+    assert!(std::fs::read_to_string(&maps).unwrap().starts_with("moment,t (ns),r (mm),z (mm),Ez (V/m)\n0,"));
+    assert!(s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1, "axisymmetric": true, "frames": 61})).is_err());
     assert!(s.execute("results.particles.export", &json!({"path": phase, "what": "nope"})).is_err());
     assert!(Session::new().execute("results.particles.export", &json!({"path": phase})).is_err());
 }

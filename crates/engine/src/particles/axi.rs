@@ -27,7 +27,10 @@ use emcraft_model::ParticleRun;
 use emcraft_particles::ELECTRON;
 use serde_json::Value;
 
-use super::{COURANT, EV, Frame, INSET, LAYER, Run, SNAPSHOT, Snap, cells_along, fdtd, injections, open_on_periodic, run_to_end, steps_of};
+use super::{
+    COURANT, EV, FieldMap, Frame, INSET, LAYER, MAP_POINTS, MAX_FRAMES, Run, SNAPSHOT, Snap, cells_along, fdtd, injections, open_on_periodic,
+    run_to_end, steps_of,
+};
 use crate::{EngineError, Params, Result, Session};
 
 /// A run in a body of revolution, its radius R (m) and the z of its grid's low end (m): the
@@ -73,6 +76,17 @@ impl Run for Axi {
     }
     fn plane(&self, z: f64) -> Option<emcraft_fdtd::axi::Plane> {
         Some(self.pic.plane(z))
+    }
+    /// E_z on the r–z plane, every few points so it holds at most [`MAP_POINTS`]: at most 60
+    /// across, the rest along z.
+    fn field_map(&self) -> Option<FieldMap> {
+        let g = self.pic.grid();
+        let across = g.nr + 1;
+        let every_r = across.div_ceil(60).max(1);
+        let along = (MAP_POINTS / across.div_ceil(every_r)).max(1);
+        let every_z = g.z.cells.div_ceil(along).max(1);
+        let m = self.pic.sampled(emcraft_fdtd::axi::Component::Ez, every_r, every_z);
+        Some(FieldMap { r: m.r, z: m.z.iter().map(|z| z + self.z_origin).collect(), ez: m.values })
     }
     fn now(&self) -> f64 {
         self.pic.time()
@@ -197,8 +211,11 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize,
     if let Some(why) = unsupported(s) {
         return Err(EngineError::failed(why));
     }
-    if gpu.is_some() && !s.model.particles.outputs.is_empty() {
-        return Err(EngineError::failed("not supported yet: output planes (particles.output) on a device; run on the CPU's threads (`device`: cpu)"));
+    let frames = p.integer("frames", 0..=MAX_FRAMES).or(0)?;
+    if gpu.is_some() && (!s.model.particles.outputs.is_empty() || frames > 0) {
+        return Err(EngineError::failed(
+            "not supported yet: output planes (particles.output) or moments (`frames`) on a device; run on the CPU's threads (`device`: cpu)",
+        ));
     }
     let b =
         s.model.bounds().ok_or_else(|| EngineError::failed("no geometry: the body of revolution particles run in is its bounds (geometry.solid)"))?;
@@ -268,7 +285,7 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize,
     let frame = Frame { origin, cells: [2 * nr, 2 * nr, nz + below + above], h: [dr, dr, dz], dt, steps, axisymmetric: true };
     let mut axi = Axi { pic: run, radius, z_origin };
     match gpu {
-        Some(gpu) => run_to_end(s, &mut OnDevice::new(axi, gpu, &probes)?, frame, &probes),
-        None => run_to_end(s, &mut axi, frame, &probes),
+        Some(gpu) => run_to_end(s, &mut OnDevice::new(axi, gpu, &probes)?, frame, &probes, frames),
+        None => run_to_end(s, &mut axi, frame, &probes, frames),
     }
 }

@@ -867,6 +867,7 @@ pub static COMMANDS: &[CommandSpec] = &[
             opt("fine", K::Integer, "in a body of revolution, cells this many times finer along z than across, 1 to 16: 8 for beams faster than about 0.6c (default the confirmed settings', else 1)").labelled(text!("Finer along z")),
             opt("device", K::String, "where a body of revolution runs: `cpu` (the CPU's threads), `cuda` (an NVIDIA GPU) or `cubecl-cpu` (the GPU's kernels on the CPU, to check them without a GPU); default solve.device's; the Cartesian grid runs on the CPU's threads (the reply's `device` says where it ran)").one_of(&Device::IDS).labelled(text!("Device")),
             opt("precision", K::String, "the fields' and rings' floating point on a GPU device: `single` or `double`, default solve.device's; the CPU's threads run in double").one_of(&Precision::IDS).labelled(text!("Precision")),
+            opt("frames", K::Integer, "moments along the run to keep, 0 to 60 (default 0): at each, its particles (at most 4000) and, in a body of revolution, E_z on the r–z plane — for pictures of the run as it goes (results.particles.export `frames`, `maps`); on the CPU's threads").labelled(text!("Moments kept")),
         ],
         effect: Effect::Solve,
         invalidates: None,
@@ -2015,10 +2016,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "results.particles.export",
         label: "Export particle run",
-        doc: "Writes the last particle run's records as CSV for other programs: `history` (default) the run's records — time (ns), the field's and the particles' energy (J), the particles held, the current emitted (A) and the power through each output plane (W, averaged between records); `probes` each probe's E (V/m) over time; `particles` the particles at the end, the phase space — position in the display's length unit, momentum γv (m/s), kinetic energy (eV), population.",
+        doc: "Writes the last particle run's records as CSV for other programs: `history` (default) the run's records — time (ns), the field's and the particles' energy (J), the particles held, the current emitted (A) and the power through each output plane (W, averaged between records); `probes` each probe's E (V/m) over time; `particles` the particles at the end, the phase space — position in the display's length unit, momentum γv (m/s), kinetic energy (eV), population; `frames` the particles at each moment kept along the run (solve.particles `frames`), `maps` E_z on the r–z plane at each (a body of revolution), each row's moment and time first.",
         params: &[
             req("path", K::String, "the CSV file").labelled(text!("File")),
-            opt("what", K::String, "`history` (default), `probes` or `particles`").one_of(&crate::particles::export::What::IDS).labelled(text!("Contents")),
+            opt("what", K::String, "`history` (default), `probes`, `particles`, `frames` or `maps`").one_of(&crate::particles::export::What::IDS).labelled(text!("Contents")),
         ],
         effect: Effect::None,
         invalidates: None,
