@@ -818,8 +818,12 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "particles.magnetic",
         label: "Static magnetic field",
-        doc: "A uniform static magnetic field through the particle run's box (a beam's focusing field, a magnetron's). Undo goes back.",
-        params: &[req("b", K::Array, "[Bx, By, Bz] in T").labelled(text!("Static field (T)"))],
+        doc: "A static magnetic field through the particle run's box (a beam's focusing field, a magnetron's): uniform, or in a body of revolution falling away past `end` along z — B_z times ½(1 − tanh((z − end)/fall)), with the B_r that keeps it free of divergence near the axis — so a beam spreads to the wall there (a collector). Undo goes back.",
+        params: &[
+            req("b", K::Array, "[Bx, By, Bz] in T").labelled(text!("Static field (T)")),
+            opt("end", K::Number, "where the field along z is halfway down (a body of revolution's run only; default none: uniform)").of(L).labelled(text!("Field ends at")),
+            opt("fall", K::Number, "the length it falls over (default 10 mm)").of(L).labelled(text!("Fall length")),
+        ],
         effect: Effect::Record,
         invalidates: Some(Change::Particles),
         run: crate::particles::magnetic,

@@ -247,7 +247,15 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize,
         }
     }
     if m.magnetic[2] != 0.0 {
-        run.set(emcraft_fdtd::axi::Component::Bz, |_, _| m.magnetic[2]);
+        // Uniform, or falling away past `end` with the B_r that keeps it free of divergence.
+        let b0 = m.magnetic[2];
+        match m.magnetic_end {
+            None => run.set(emcraft_fdtd::axi::Component::Bz, |_, _| b0),
+            Some(end) => {
+                run.set(emcraft_fdtd::axi::Component::Bz, |_, z| b0 * end.share(z + z_origin).0);
+                run.set(emcraft_fdtd::axi::Component::Br, |r, z| -0.5 * r * b0 * end.share(z + z_origin).1);
+            }
+        }
     }
     let population = run.add(Rings { species: ELECTRON, rings: Vec::new() }).map_err(fdtd)?;
     for i in injections(&m) {

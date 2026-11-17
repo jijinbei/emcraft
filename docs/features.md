@@ -563,11 +563,13 @@ Leaves a face of the particle run's box open: a convolutional perfectly matched 
 
 ## `particles.magnetic` — Static magnetic field
 
-A uniform static magnetic field through the particle run's box (a beam's focusing field, a magnetron's). Undo goes back.
+A static magnetic field through the particle run's box (a beam's focusing field, a magnetron's): uniform, or in a body of revolution falling away past `end` along z — B_z times ½(1 − tanh((z − end)/fall)), with the B_r that keeps it free of divergence near the axis — so a beam spreads to the wall there (a collector). Undo goes back.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
 | `b` | array |  | yes | [Bx, By, Bz] in T |
+| `end` | number | length | no | where the field along z is halfway down (a body of revolution's run only; default none: uniform) |
+| `fall` | number | length | no | the length it falls over (default 10 mm) |
 
 ## `particles.probe` — Field probe
 

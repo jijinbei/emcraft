@@ -292,8 +292,16 @@ pub fn open(s: &mut Session, p: &Params) -> Result<Value> {
 /// `particles.magnetic`: the uniform static magnetic field.
 pub fn magnetic(s: &mut Session, p: &Params) -> Result<Value> {
     let b = p.vector("b").required()?;
+    let end = p.length("end").optional()?;
+    let fall = p.positive_length("fall").optional()?;
+    let end = match (end, fall) {
+        (Some(z), fall) => Some(emcraft_model::particles::MagneticEnd { z, fall: fall.unwrap_or(0.01) }),
+        (None, Some(_)) => return Err(p.error("fall", "goes with `end`, where the field falls away")),
+        (None, None) => None,
+    };
     change(s, |m| {
         m.magnetic = [b.x, b.y, b.z];
+        m.magnetic_end = end;
         Ok(())
     })
 }
@@ -903,6 +911,11 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
     if !s.model.particles.outputs.is_empty() {
         return Err(EngineError::failed(
             "not supported yet: output planes (particles.output) on the Cartesian grid; run the geometry as a body of revolution (`axisymmetric`)",
+        ));
+    }
+    if s.model.particles.magnetic_end.is_some() {
+        return Err(EngineError::failed(
+            "not supported yet: a magnetic field that falls away (particles.magnetic `end`) on the Cartesian grid; run the geometry as a body of revolution (`axisymmetric`)",
         ));
     }
     let (grid, region) = grid(s, set.cell.get())?;

@@ -765,6 +765,10 @@ overlap tests).
   particle run's output plane records, (E × H)·ẑ over its disc, taken as the Yee lattice holds
   the fields; checked by the energy a packet takes out of a tube, and by a ring beam's own
   field, P = I² ln(a/r_b)/(2πε₀v) (§2.8 and §5.3: a line charge's and a current's fields).
+- J. D. Jackson, *Classical Electrodynamics*, 3rd ed., §12.5 — the magnetic flux a gyrating
+  particle encloses is kept as the field changes slowly: a beam on a field that falls away
+  spreads with its field lines (πr²B_z kept), the collector `particles.magnetic` `end` makes,
+  B_r = −(r/2)∂B_z/∂z keeping the field free of divergence near the axis.
 - T. P. Wangler, *RF Linear Accelerators*, 2nd ed., Wiley 2008, §2.2–2.3 — the energy a particle
   gains crossing a gap, qV₀T cos φ, that tracking through a pillbox's TM010 is checked against.
 - C. K. Birdsall, A. B. Langdon, *Plasma Physics via Computer Simulation*, IOP 1991, §4-2,

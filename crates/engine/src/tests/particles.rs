@@ -319,6 +319,51 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
 }
 
 #[test]
+fn a_field_that_falls_away_spreads_its_beam_to_the_wall() {
+    // A ring beam follows its field lines: where B_z falls the lines spread (the flux πr²B_z
+    // they hold is kept, Jackson §12.5's adiabatic invariant), so a 5 mm beam reaches the 10 mm
+    // wall once the field is down to a quarter, short of the far end; in a uniform field it
+    // reaches the end.
+    let reaching_the_end = |end: Option<f64>| {
+        let mut s = Session::new();
+        let mut field = json!({"b": [0, 0, 1]});
+        if let Some(z) = end {
+            field["end"] = json!(z);
+            field["fall"] = json!(5);
+        }
+        run(
+            &mut s,
+            &[
+                ("geometry.solid", json!({"shape": "cylinder", "radius": 10, "length": 80})),
+                ("project.analysis", json!({"kind": "particles"})),
+                ("particles.magnetic", field),
+                ("particles.beam", json!({"face": "z-", "current": 20, "energy": 1e5, "radius": 5.1, "inner": 4.9, "rise": 100})),
+                ("particles.open", json!({"face": "z+"})),
+            ],
+        );
+        let r = s.execute("solve.particles", &json!({"time": 2, "cell": 0.5, "axisymmetric": true})).unwrap();
+        -r["walls"]["z+"]["current"].as_f64().unwrap_or(0.0)
+    };
+    let (uniform, falling) = (reaching_the_end(None), reaching_the_end(Some(40.0)));
+    assert!(uniform > 19.0 && falling < 0.5, "into the open end: {uniform} A in a uniform field, {falling} A past its end");
+    let mut s = Session::new();
+    assert!(s.execute("particles.magnetic", &json!({"b": [0, 0, 1], "fall": 5})).is_err());
+    assert!(s.execute("particles.magnetic", &json!({"b": [0, 0, 1], "end": 40, "fall": -1})).is_err());
+    // The Cartesian grid refuses it rather than leave it out.
+    run(
+        &mut s,
+        &[
+            ("geometry.solid", json!({"shape": "cylinder", "radius": 10, "length": 80})),
+            ("project.analysis", json!({"kind": "particles"})),
+            ("particles.beam", json!({"face": "z-", "current": 20, "energy": 1e5, "radius": 5})),
+            ("particles.magnetic", json!({"b": [0, 0, 1], "end": 40})),
+        ],
+    );
+    let err = s.execute("solve.particles", &json!({"time": 0.1, "cell": 2})).unwrap_err().to_string();
+    assert!(err.contains("falls away"), "{err}");
+}
+
+#[test]
 fn a_relativistic_ring_beam_in_a_body_of_revolution_sinks_to_its_closed_form() {
     // Bogdankevich & Rukhadze's ring (Sov. Phys. Usp. 14:163, 1971) at γ₀ = 3 and 0.7 of its
     // limiting current, confirmed as the job's settings: on cells 8 times finer along z its

@@ -324,6 +324,12 @@ pub struct Particles {
     pub voltage: Option<Voltage>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub magnetic: [f64; 3],
+    /// Where the static field along z falls away (a body of revolution's run only): B_z times
+    /// ½(1 − tanh((z − end)/fall)), its B_r = −(r/2) ∂B_z/∂z keeping it free of divergence near
+    /// the axis — the field ending past the interaction, its beam spreading to the wall (a
+    /// collector). `None`: uniform.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub magnetic_end: Option<MagneticEnd>,
     /// Faces left open: what reaches them leaves the box (an absorbing layer beyond them, the
     /// geometry carried on into it).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -335,6 +341,29 @@ pub struct Particles {
     /// model's coordinates). A body of revolution's run only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<f64>,
+}
+
+/// Where a static field along z falls away: the z (m) it is halfway down and the length (m) it
+/// falls over.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MagneticEnd {
+    pub z: f64,
+    pub fall: f64,
+}
+
+impl MagneticEnd {
+    /// The share of the field at `z`, and its derivative along z (1/m).
+    ///
+    /// ```
+    /// use emcraft_model::particles::MagneticEnd;
+    /// let end = MagneticEnd { z: 0.1, fall: 0.01 };
+    /// assert!((end.share(0.1).0 - 0.5).abs() < 1e-12 && end.share(0.0).0 > 0.99 && end.share(0.2).0 < 0.01);
+    /// assert!(end.share(0.1).1 < 0.0); // falling
+    /// ```
+    pub fn share(&self, z: f64) -> (f64, f64) {
+        let t = ((z - self.z) / self.fall).tanh();
+        (0.5 * (1.0 - t), -0.5 * (1.0 - t * t) / self.fall)
+    }
 }
 
 fn is_zero(b: &[f64; 3]) -> bool {
@@ -447,7 +476,10 @@ impl Particles {
         {
             return Err(invalid("voltage", format!("{v:?}: an axis and a finite voltage")));
         }
-        if !self.magnetic.iter().all(|b| within(*b, MAX_MAGNETIC, true)) || !self.probes.iter().flatten().chain(&self.outputs).all(|x| x.is_finite())
+        let end = self.magnetic_end.is_none_or(|e| e.z.is_finite() && within(e.fall, MAX_LENGTH, false) && e.fall > 0.0);
+        if !end
+            || !self.magnetic.iter().all(|b| within(*b, MAX_MAGNETIC, true))
+            || !self.probes.iter().flatten().chain(&self.outputs).all(|x| x.is_finite())
         {
             return Err(invalid("particles", "the magnetic field and the probes must be finite"));
         }
