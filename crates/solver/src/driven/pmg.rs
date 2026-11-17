@@ -30,6 +30,11 @@ const RESTART: usize = 50;
 pub const MAX_ITERATIONS: usize = 1000;
 /// The relative residual ‖b − A x‖/‖b‖ a solve stops at.
 pub const TOLERANCE: f64 = 1e-6;
+/// A restart cycle that leaves the residual above this share of where it began has stalled:
+/// restarted GMRES that gains nothing in a cycle gains nothing in the next (the restarted Krylov
+/// space is built from the same residual; M. Embree, *The tortoise and the hare restart GMRES*,
+/// SIAM Review 45(2):259–266, 2003), so the solve stops rather than run out its iterations.
+const STALL: f64 = 0.99;
 /// The relaxation of the higher-order unknowns' sweeps.
 const DAMPING: f64 = 1.0;
 /// Gauss–Seidel sweeps before and after the coarse solve.
@@ -138,92 +143,146 @@ impl TwoLevel {
         }
     }
 
-    /// Solves `a x = b` by GMRES right-preconditioned by the cycle: the solution and its
-    /// relative residual. Refused when it has not reached [`TOLERANCE`] in [`MAX_ITERATIONS`].
+    /// Solves `a x = b` by GMRES right-preconditioned by the cycle ([`gmres`]).
     pub(crate) fn solve(&self, a: &Csr, b: &[C]) -> Result<(Vec<C>, f64, usize)> {
-        let bn = norm(b);
-        let zero = C::new(0.0, 0.0);
-        let mut x = vec![zero; b.len()];
-        if bn == 0.0 {
-            return Ok((x, 0.0, 0));
-        }
-        let mut iterations = 0;
-        let mut residual = 1.0;
-        while iterations < MAX_ITERATIONS {
-            let ax = product(a, &x);
-            let r: Vec<C> = b.iter().zip(&ax).map(|(bi, ai)| bi - ai).collect();
-            let beta = norm(&r);
-            residual = beta / bn;
-            if residual <= TOLERANCE {
-                return Ok((x, residual, iterations));
-            }
-            // Arnoldi with modified Gram–Schmidt; Givens rotations keep the least squares'
-            // residual as it goes.
-            let mut v: Vec<Vec<C>> = vec![r.iter().map(|ri| ri / beta).collect()];
-            let mut h: Vec<Vec<C>> = Vec::new();
-            let (mut cs, mut sn): (Vec<C>, Vec<C>) = (Vec::new(), Vec::new());
-            let mut g = vec![C::new(beta, 0.0)];
-            for j in 0..RESTART {
-                iterations += 1;
-                let mut w = product(a, &self.apply(a, &v[j])?);
-                let mut hj = vec![zero; j + 2];
-                for (i, vi) in v.iter().enumerate() {
-                    hj[i] = dot(vi, &w);
-                    for (wk, vk) in w.iter_mut().zip(vi) {
-                        *wk -= hj[i] * vk;
-                    }
-                }
-                let wn = norm(&w);
-                hj[j + 1] = C::new(wn, 0.0);
-                for i in 0..j {
-                    let t = cs[i].conj() * hj[i] + sn[i].conj() * hj[i + 1];
-                    hj[i + 1] = -sn[i] * hj[i] + cs[i] * hj[i + 1];
-                    hj[i] = t;
-                }
-                let d = (hj[j].norm_sqr() + hj[j + 1].norm_sqr()).sqrt();
-                let (c, s) = if d == 0.0 { (C::new(1.0, 0.0), zero) } else { (hj[j] / d, hj[j + 1] / d) };
-                hj[j] = C::new(d, 0.0);
-                hj[j + 1] = zero;
-                g.push(-s * g[j]);
-                g[j] = c.conj() * g[j];
-                cs.push(c);
-                sn.push(s);
-                h.push(hj);
-                residual = g[j + 1].norm() / bn;
-                if residual <= TOLERANCE || wn == 0.0 || iterations >= MAX_ITERATIONS {
-                    break;
-                }
-                v.push(w.iter().map(|wi| wi / wn).collect());
-            }
-            // Back substitution for y, then x += M⁻¹ V y (the cycle is linear: one more
-            // application, rather than keeping each M⁻¹ v).
-            let m = h.len();
-            let mut y = vec![zero; m];
-            for i in (0..m).rev() {
-                let s: C = (i + 1..m).map(|k| h[k][i] * y[k]).sum();
-                y[i] = if h[i][i].norm() == 0.0 { zero } else { (g[i] - s) / h[i][i] };
-            }
-            let mut vy = vec![zero; b.len()];
-            for (yk, vk) in y.iter().zip(&v) {
-                for (s, vi) in vy.iter_mut().zip(vk) {
-                    *s += yk * vi;
-                }
-            }
-            for (xi, zi) in x.iter_mut().zip(self.apply(a, &vy)?) {
-                *xi += zi;
-            }
-        }
+        gmres(a, b, |v| self.apply(a, v))
+    }
+}
+
+/// Solves `a x = b` by restarted GMRES right-preconditioned by `apply` (M⁻¹ v): the solution,
+/// its relative residual and the iterations. Refused when it has not reached [`TOLERANCE`] in
+/// [`MAX_ITERATIONS`], or as soon as a restart cycle stalls ([`STALL`]).
+fn gmres(a: &Csr, b: &[C], apply: impl Fn(&[C]) -> Result<Vec<C>>) -> Result<(Vec<C>, f64, usize)> {
+    let bn = norm(b);
+    let zero = C::new(0.0, 0.0);
+    let mut x = vec![zero; b.len()];
+    if bn == 0.0 {
+        return Ok((x, 0.0, 0));
+    }
+    let mut iterations = 0;
+    let mut residual = 1.0;
+    // The residual the last restart cycle began from.
+    let mut began: Option<f64> = None;
+    while iterations < MAX_ITERATIONS {
         let ax = product(a, &x);
         let r: Vec<C> = b.iter().zip(&ax).map(|(bi, ai)| bi - ai).collect();
-        let final_residual = norm(&r) / bn;
-        if final_residual <= TOLERANCE * 10.0 {
-            return Ok((x, final_residual, iterations));
+        let beta = norm(&r);
+        residual = beta / bn;
+        if residual <= TOLERANCE {
+            return Ok((x, residual, iterations));
         }
-        Err(invalid(
-            "iterative solve",
-            format!(
-                "did not converge in {MAX_ITERATIONS} iterations (relative residual {final_residual:.1e}, was {residual:.1e}); solve directly or refine the mesh"
-            ),
-        ))
+        if let Some(before) = began.filter(|&before| residual > STALL * before) {
+            return Err(invalid(
+                "iterative solve",
+                format!(
+                    "stalled after {iterations} iterations: a restart cycle of {RESTART} took the relative residual only from {before:.1e} to {residual:.1e}; solve directly or refine the mesh"
+                ),
+            ));
+        }
+        began = Some(residual);
+        // Arnoldi with modified Gram–Schmidt; Givens rotations keep the least squares'
+        // residual as it goes.
+        let mut v: Vec<Vec<C>> = vec![r.iter().map(|ri| ri / beta).collect()];
+        let mut h: Vec<Vec<C>> = Vec::new();
+        let (mut cs, mut sn): (Vec<C>, Vec<C>) = (Vec::new(), Vec::new());
+        let mut g = vec![C::new(beta, 0.0)];
+        for j in 0..RESTART {
+            iterations += 1;
+            let mut w = product(a, &apply(&v[j])?);
+            let mut hj = vec![zero; j + 2];
+            for (i, vi) in v.iter().enumerate() {
+                hj[i] = dot(vi, &w);
+                for (wk, vk) in w.iter_mut().zip(vi) {
+                    *wk -= hj[i] * vk;
+                }
+            }
+            let wn = norm(&w);
+            hj[j + 1] = C::new(wn, 0.0);
+            for i in 0..j {
+                let t = cs[i].conj() * hj[i] + sn[i].conj() * hj[i + 1];
+                hj[i + 1] = -sn[i] * hj[i] + cs[i] * hj[i + 1];
+                hj[i] = t;
+            }
+            let d = (hj[j].norm_sqr() + hj[j + 1].norm_sqr()).sqrt();
+            let (c, s) = if d == 0.0 { (C::new(1.0, 0.0), zero) } else { (hj[j] / d, hj[j + 1] / d) };
+            hj[j] = C::new(d, 0.0);
+            hj[j + 1] = zero;
+            g.push(-s * g[j]);
+            g[j] = c.conj() * g[j];
+            cs.push(c);
+            sn.push(s);
+            h.push(hj);
+            residual = g[j + 1].norm() / bn;
+            if residual <= TOLERANCE || wn == 0.0 || iterations >= MAX_ITERATIONS {
+                break;
+            }
+            v.push(w.iter().map(|wi| wi / wn).collect());
+        }
+        // Back substitution for y, then x += M⁻¹ V y (the cycle is linear: one more
+        // application, rather than keeping each M⁻¹ v).
+        let m = h.len();
+        let mut y = vec![zero; m];
+        for i in (0..m).rev() {
+            let s: C = (i + 1..m).map(|k| h[k][i] * y[k]).sum();
+            y[i] = if h[i][i].norm() == 0.0 { zero } else { (g[i] - s) / h[i][i] };
+        }
+        let mut vy = vec![zero; b.len()];
+        for (yk, vk) in y.iter().zip(&v) {
+            for (s, vi) in vy.iter_mut().zip(vk) {
+                *s += yk * vi;
+            }
+        }
+        for (xi, zi) in x.iter_mut().zip(apply(&vy)?) {
+            *xi += zi;
+        }
+    }
+    let ax = product(a, &x);
+    let r: Vec<C> = b.iter().zip(&ax).map(|(bi, ai)| bi - ai).collect();
+    let final_residual = norm(&r) / bn;
+    if final_residual <= TOLERANCE * 10.0 {
+        return Ok((x, final_residual, iterations));
+    }
+    Err(invalid(
+        "iterative solve",
+        format!(
+            "did not converge in {MAX_ITERATIONS} iterations (relative residual {final_residual:.1e}, was {residual:.1e}); solve directly or refine the mesh"
+        ),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The cyclic shift of n unknowns (x_{i+1} = b_i): restarted GMRES with fewer than n
+    /// iterations a cycle gains nothing on it from b = e₁ (each Krylov vector is another unit
+    /// vector, and the residual's projection on them is zero until the n-th).
+    fn shift(n: usize) -> Csr {
+        let mut builder = Csr::builder(n);
+        for i in 0..n {
+            builder.row([((i + n - 1) % n, C::new(1.0, 0.0))]);
+        }
+        builder.finish()
+    }
+
+    #[test]
+    fn a_stalled_restart_cycle_stops_the_solve_at_once() {
+        // Two cycles, not MAX_ITERATIONS: the second begins where the first did.
+        let n = 4 * RESTART;
+        let mut b = vec![C::new(0.0, 0.0); n];
+        b[0] = C::new(1.0, 0.0);
+        let err = gmres(&shift(n), &b, |v| Ok(v.to_vec())).unwrap_err().to_string();
+        assert!(err.contains(&format!("stalled after {RESTART} iterations")), "{err}");
+    }
+
+    #[test]
+    fn a_well_preconditioned_system_converges() {
+        // The shift preconditioned by its exact inverse: one iteration.
+        let n = 4 * RESTART;
+        let b: Vec<C> = (0..n).map(|i| C::new(i as f64, 1.0)).collect();
+        let inverse = |v: &[C]| Ok((0..n).map(|i| v[(i + 1) % n]).collect());
+        let (x, residual, iterations) = gmres(&shift(n), &b, inverse).unwrap();
+        assert!(residual <= TOLERANCE && iterations <= 2, "{residual} after {iterations}");
+        assert!(x.iter().enumerate().all(|(i, xi)| (xi - b[(i + 1) % n]).norm() < 1e-9));
     }
 }
