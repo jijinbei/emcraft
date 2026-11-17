@@ -29,6 +29,7 @@ macro_rules! put {
 const USAGE: &str = "\
 usage: emcraft-cli <command>
 
+  --version                the version, as reports and run records cite it
   commands                 list every command with its parameters
   features                 the command reference as Markdown (docs/features.md)
   run SCRIPT.json          run a command script (a JSON array of {\"command\", \"params\"})
@@ -63,6 +64,10 @@ fn main() -> ExitCode {
             Some("run") => run(args.get(1)),
             Some("exec") => exec(args.get(1), args.get(2)),
             Some("sample") => sample(&args[1..]),
+            Some("-V" | "--version" | "version") => {
+                out!("emcraft-cli {}", env!("CARGO_PKG_VERSION"));
+                Ok(())
+            }
             Some("-h" | "--help" | "help") | None => {
                 put!("{USAGE}");
                 Ok(())
