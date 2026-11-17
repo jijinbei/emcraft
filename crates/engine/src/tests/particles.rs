@@ -335,6 +335,16 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
     assert_eq!(r["rows"].as_u64().unwrap() as usize, 4 * map.ez.len());
     assert!(std::fs::read_to_string(&maps).unwrap().starts_with("moment,t (ns),r (mm),z (mm),Ez (V/m)\n0,"));
     assert!(s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1, "axisymmetric": true, "frames": 61})).is_err());
+    // Moments over the run's last half nanosecond, each at its own step (not at the records').
+    let mut late = s.clone();
+    late.execute("solve.particles", &json!({"time": 2, "cell": 0.5, "axisymmetric": true, "frames": 4, "frames_from": 1.5})).unwrap();
+    let at: Vec<f64> = late.results.particles.as_ref().unwrap().moments.iter().map(|m| m.t * 1e9).collect();
+    let dt = late.results.particles.as_ref().unwrap().dt * 1e9;
+    assert_eq!(at.len(), 4);
+    for (t, want) in at.iter().zip([1.625, 1.75, 1.875, 2.0]) {
+        assert!((t - want).abs() <= 1.01 * dt, "{at:?}");
+    }
+    assert!(s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1, "axisymmetric": true, "frames": 2, "frames_from": 0.2})).is_err());
     assert!(s.execute("results.particles.export", &json!({"path": phase, "what": "nope"})).is_err());
     assert!(Session::new().execute("results.particles.export", &json!({"path": phase})).is_err());
 }

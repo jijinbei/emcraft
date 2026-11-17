@@ -211,8 +211,7 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize,
     if let Some(why) = unsupported(s) {
         return Err(EngineError::failed(why));
     }
-    let frames = p.integer("frames", 0..=MAX_FRAMES).or(0)?;
-    if gpu.is_some() && (!s.model.particles.outputs.is_empty() || frames > 0) {
+    if gpu.is_some() && (!s.model.particles.outputs.is_empty() || p.integer("frames", 0..=MAX_FRAMES).or(0)? > 0) {
         return Err(EngineError::failed(
             "not supported yet: output planes (particles.output) or moments (`frames`) on a device; run on the CPU's threads (`device`: cpu)",
         ));
@@ -283,6 +282,7 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize,
     let origin = [-radius, -radius, z_origin];
     let probes: Vec<[f64; 3]> = m.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
     let frame = Frame { origin, cells: [2 * nr, 2 * nr, nz + below + above], h: [dr, dr, dz], dt, steps, axisymmetric: true };
+    let frames = super::frames_of(p, steps, dt)?;
     let mut axi = Axi { pic: run, radius, z_origin };
     match gpu {
         Some(gpu) => run_to_end(s, &mut OnDevice::new(axi, gpu, &probes)?, frame, &probes, frames),

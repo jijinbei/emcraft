@@ -489,6 +489,23 @@ impl Run for Cartesian {
     }
 }
 
+/// The moments a run keeps (`frames`): how many, evenly spaced after its step `from`
+/// (`frames_from`) up to its end.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Frames {
+    pub count: usize,
+    pub from: usize,
+}
+
+/// The moments `p` asks of a run of `steps` steps of `dt` (s): `frames` (0 to [`MAX_FRAMES`])
+/// from `frames_from` (ns, within the run).
+pub(crate) fn frames_of(p: &Params, steps: usize, dt: f64) -> Result<Frames> {
+    let count = p.integer("frames", 0..=MAX_FRAMES).or(0)?;
+    let span = steps as f64 * dt * 1e9;
+    let from_ns = p.number("frames_from").check(|t| *t >= 0.0 && *t < span, "at or after 0 and before the run's end").optional()?.unwrap_or(0.0);
+    Ok(Frames { count, from: ((from_ns * 1e-9 / dt).floor() as usize).min(steps) })
+}
+
 /// A run's record: its history, each probe's E samples, the second half's tallies, the
 /// particles dropped and the charge emitted.
 struct Recording {
@@ -507,7 +524,7 @@ struct Recording {
 
 /// `steps` of `run` (each `dt`, s), its history, the field at `probes` and the power through
 /// the planes at `outputs` (m from the grid's corner) recorded.
-fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], outputs: &[f64], frames: usize) -> Result<Recording> {
+fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], outputs: &[f64], frames: Frames) -> Result<Recording> {
     let (every, probe_every) = (steps.div_ceil(HISTORY), steps.div_ceil(PROBE_SAMPLES));
     let mut history = Vec::new();
     let mut probe_fields: Vec<Vec<[f64; 3]>> = vec![Vec::new(); probes.len()];
@@ -516,9 +533,9 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], output
     let (mut power_since, mut power_late) = (vec![0.0; outputs.len()], vec![0.0; outputs.len()]);
     let mut planes_late: Vec<Plane> = vec![Plane::default(); outputs.len()];
     let (mut steps_since, mut steps_late) = (0usize, 0usize);
-    // The steps after which each moment is taken (at the history's records: within a record's
-    // span of where it falls).
-    let mut due: Vec<usize> = (1..=frames).map(|k| (k * steps).div_ceil(frames)).collect();
+    // The steps after which each moment is taken: evenly from `frames.from` to the end.
+    let from = frames.from.min(steps);
+    let mut due: Vec<usize> = (1..=frames.count).map(|k| from + (k * (steps - from)).div_ceil(frames.count)).collect();
     due.reverse();
     let mut moments = Vec::new();
     let (mut since, mut late) = (pic::Moved::default(), pic::Moved::default());
@@ -529,7 +546,8 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], output
     // Spans to each record of the history, the run's energy read at their ends.
     while n < steps {
         let first = n;
-        let stop = ((n / every + 1) * every).min(steps);
+        // To the next record, or the next moment if it comes first.
+        let stop = ((n / every + 1) * every).min(steps).min(due.last().copied().unwrap_or(steps).max(n + 1));
         for (moved, sample, planes) in run.span(stop - n, probes, outputs, &|b| (first + b + 1) % probe_every == 0)? {
             let power: Vec<f64> = planes.iter().map(Plane::flux).collect();
             if n % (steps / PROGRESS_REPORTS).max(1) == 0 {
@@ -565,14 +583,14 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], output
                 since = pic::Moved::default();
                 power_since.fill(0.0);
                 steps_since = 0;
-                while due.last().is_some_and(|d| n + 1 >= *d) {
-                    due.pop();
-                    let all = run.snapshot();
-                    let stride = all.len().div_ceil(FRAME_PARTICLES).max(1);
-                    moments.push(Moment { t: run.now(), particles: all.into_iter().step_by(stride).collect(), map: run.field_map() });
-                }
             }
             n += 1;
+        }
+        while due.last().is_some_and(|d| n >= *d) {
+            due.pop();
+            let all = run.snapshot();
+            let stride = all.len().div_ceil(FRAME_PARTICLES).max(1);
+            moments.push(Moment { t: run.now(), particles: all.into_iter().step_by(stride).collect(), map: run.field_map() });
         }
     }
     let mean = 1.0 / steps_late.max(1) as f64;
@@ -592,7 +610,7 @@ fn second_half(steps: usize) -> usize {
 
 /// `steps` of `run` (each `dt`, s) recorded, the field at `probes` and the power through the
 /// output planes (m from the grid's corner), and its result kept: the reply.
-fn run_to_end(s: &mut Session, run: &mut impl Run, frame: Frame, probes: &[[f64; 3]], frames: usize) -> Result<Value> {
+fn run_to_end(s: &mut Session, run: &mut impl Run, frame: Frame, probes: &[[f64; 3]], frames: Frames) -> Result<Value> {
     let before = run.energy()?.field;
     let outputs: Vec<f64> = s.model.particles.outputs.iter().map(|z| z - frame.origin[2]).collect();
     let rec = record(run, frame.steps, frame.dt, probes, &outputs, frames)?;
@@ -981,7 +999,7 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
     let probes: Vec<[f64; 3]> = s.model.particles.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
     let frame = Frame { origin, cells: grid.axes.map(|a| a.cells), h: grid.axes.map(|a| a.h), dt, steps, axisymmetric: false };
     // The Cartesian grid runs on the CPU's threads.
-    let frames = p.integer("frames", 0..=MAX_FRAMES).or(0)?;
+    let frames = frames_of(p, steps, dt)?;
     let reply = run_to_end(s, &mut Cartesian { pic, origin }, frame, &probes, frames)?;
     Ok(ran_on(reply, crate::solve::Device::Cpu, None))
 }

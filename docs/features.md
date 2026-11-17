@@ -607,6 +607,7 @@ Particle-in-cell in time (docs/adr/0012-particles.md): the particles' own fields
 | `device` | string |  | no | where a body of revolution runs: `cpu` (the CPU's threads), `cuda` (an NVIDIA GPU) or `cubecl-cpu` (the GPU's kernels on the CPU, to check them without a GPU); default solve.device's; the Cartesian grid runs on the CPU's threads (the reply's `device` says where it ran) |
 | `precision` | string |  | no | the fields' and rings' floating point on a GPU device: `single` or `double`, default solve.device's; the CPU's threads run in double |
 | `frames` | integer |  | no | moments along the run to keep, 0 to 60 (default 0): at each, its particles (at most 4000) and, in a body of revolution, E_z on the r–z plane — for pictures of the run as it goes (results.particles.export `frames`, `maps`); on the CPU's threads |
+| `frames_from` | number |  | no | when the moments start, in ns (default 0): they fall evenly from it to the run's end, each at its own step — a short span at the end, finer than an oscillation's period, for an animation of it |
 
 ## `filter.synthesize` — Synthesize filter
 
