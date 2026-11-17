@@ -13,6 +13,7 @@ on:
     branches: [develop, main]
     tags: ["v*"]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 # A newer push to a pull request makes its build moot; on a branch the build in progress runs to
@@ -36,6 +37,8 @@ env:
 
 jobs:
   build:
+    # A draft starts no build; marking it ready for review does.
+    if: ${{ !github.event.pull_request.draft }}
     strategy:
       fail-fast: false
       matrix:

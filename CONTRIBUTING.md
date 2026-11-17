@@ -105,7 +105,8 @@ published benchmark or a measurement — never output from a commercial EM tool.
 2. Before pushing: `cargo fmt --all`, and `cargo clippy -p <crate> --all-targets -- -D warnings`
    and `cargo test -p <crate>` for the crates you touched (`cargo xtask test --changed` runs the
    tests of everything your change reaches). CI runs the gate on your pull request once the
-   maintainer approves the run (a draft starts none).
+   maintainer approves the run (a draft starts none); the heavy tests (hours) run once it has
+   landed on `develop`.
 3. Write the code as [docs/style.md](docs/style.md) says, and look in
    [docs/architecture.md](docs/architecture.md) for a shared building block before writing a helper
    (`cargo xtask dupes` finds copies).

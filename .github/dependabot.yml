@@ -1,5 +1,5 @@
-# Weekly dependency updates against develop, the trunk, grouped so each ecosystem opens one pull
-# request a week. Security updates are switched on in the repository settings and open their own
+# Monthly dependency updates against develop, the trunk, grouped and few at a time so they leave
+# room on the runners for contributors' pull requests. Security updates are switched on in the repository settings and open their own
 # pull requests as advisories appear. CI runs the gate on Dependabot's pull requests.
 version: 2
 updates:
@@ -7,11 +7,10 @@ updates:
     directory: /
     target-branch: develop
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "05:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 2
     commit-message:
       prefix: deps
     groups:
@@ -34,11 +33,10 @@ updates:
     directory: /
     target-branch: develop
     schedule:
-      interval: weekly
-      day: monday
+      interval: monthly
       time: "05:00"
       timezone: Etc/UTC
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 1
     commit-message:
       prefix: ci
     groups:
