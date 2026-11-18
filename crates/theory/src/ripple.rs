@@ -155,4 +155,32 @@ mod tests {
         let empty = C0 * ((PI / 0.0167f64).powi(2) + (2.404_825_557_695_773 / 0.015f64).powi(2)).sqrt() / (2.0 * PI);
         assert!(f8[0] < empty && f8[1] > empty, "{f8:?} about {empty}");
     }
+
+    #[test]
+    fn hostile_guides_and_searches_are_refused() {
+        let g = RippledGuide { radius: 0.015, ripple: 0.001, period: 0.0167 };
+        let found = |g: RippledGuide, psi: f64, low: f64, high: f64, steps: usize, n: usize| g.frequencies(psi, low, high, steps, n).is_some();
+        assert!(found(g, 1.0, 5e9, 9e9, 50, 2) && found(RippledGuide { ripple: 0.0, ..g }, 1.0, 5e9, 9e9, 50, 2));
+        for bad in [
+            RippledGuide { radius: 0.0, ..g },
+            RippledGuide { radius: f64::INFINITY, ..g },
+            RippledGuide { period: 0.0, ..g },
+            RippledGuide { period: f64::NAN, ..g },
+            RippledGuide { ripple: -1e-4, ..g },
+            RippledGuide { ripple: g.radius, ..g },
+        ] {
+            assert!(!found(bad, 1.0, 5e9, 9e9, 50, 2), "{bad:?}");
+        }
+        for (psi, low, high, steps, n) in [
+            (f64::NAN, 5e9, 9e9, 50, 2),
+            (1.0, 0.0, 9e9, 50, 2),
+            (1.0, 5e9, 5e9, 50, 2),
+            (1.0, 5e9, f64::INFINITY, 50, 2),
+            (1.0, 5e9, 9e9, 1, 2),
+            (1.0, 5e9, 9e9, 1_000_001, 2),
+            (1.0, 5e9, 9e9, 50, MAX_HARMONICS + 1),
+        ] {
+            assert!(!found(g, psi, low, high, steps, n), "{psi} {low} {high} {steps} {n}");
+        }
+    }
 }

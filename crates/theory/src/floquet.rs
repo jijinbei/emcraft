@@ -256,4 +256,31 @@ mod tests {
             approx::assert_abs_diff_eq!(bands[0], exact, epsilon = 1e-9 * exact);
         }
     }
+
+    #[test]
+    fn hostile_stacks_are_refused() {
+        let slab = StackLayer { thickness: 2e-3, eps_r: C::new(4.0, -0.1), mu_r: 1.0 };
+        let st = Stack { layers: vec![air(0.0), slab, air(0.0)], theta: 0.3, polarization: Polarization::Te };
+        assert!(st.s(10e9).is_ok());
+        for f in [0.0, -1e9, f64::NAN, f64::INFINITY] {
+            assert!(st.s(f).is_err(), "{f}");
+        }
+        assert!(Stack { layers: vec![], ..st.clone() }.s(10e9).is_err());
+        // Grazing incidence and beyond, and angles that are no numbers.
+        for theta in [PI / 2.0, 2.0, -0.1, f64::NAN] {
+            assert!(Stack { theta, ..st.clone() }.s(10e9).is_err(), "{theta}");
+        }
+        assert!(Stack { theta: 0.0, ..st.clone() }.s(10e9).is_ok() && Stack { theta: 1.5, ..st.clone() }.s(10e9).is_ok());
+        for bad in [
+            StackLayer { thickness: -1e-3, ..slab },
+            StackLayer { thickness: f64::INFINITY, ..slab },
+            StackLayer { mu_r: 0.0, ..slab },
+            StackLayer { mu_r: f64::NAN, ..slab },
+            StackLayer { eps_r: C::new(0.0, -0.1), ..slab },
+            StackLayer { eps_r: C::new(f64::INFINITY, 0.0), ..slab },
+            StackLayer { eps_r: C::new(4.0, f64::NAN), ..slab },
+        ] {
+            assert!(Stack { layers: vec![air(0.0), bad, air(0.0)], ..st.clone() }.s(10e9).is_err(), "{bad:?}");
+        }
+    }
 }

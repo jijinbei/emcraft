@@ -125,4 +125,52 @@ mod tests {
         // Longer tapers reflect less, on the whole.
         assert!(LinearTaper { length: 200e-3, ..t }.reflection(12e9).unwrap().norm() < t.reflection(12e9).unwrap().norm());
     }
+
+    #[test]
+    fn a_taper_of_both_sides_is_the_integral_of_small_reflections() {
+        // A short one: Γ → ½ ln(Z₂/Z₁), Z ∝ b/β (Pozar §5.8) — the width changes β, the height b.
+        let t = LinearTaper { a1: 22.86e-3, b1: 10.16e-3, a2: 17e-3, b2: 7e-3, length: 1e-7 };
+        let k = 2.0 * PI * 11e9 / C0;
+        let beta = |a: f64| (k * k - (PI / a).powi(2)).sqrt();
+        let step = 0.5 * ((t.b2 / beta(t.a2)) / (t.b1 / beta(t.a1))).ln();
+        let g = t.reflection(11e9).unwrap();
+        assert!((g.re - step).abs() < 1e-6 && g.im.abs() < 1e-4, "{g} {step}");
+        // A long one: Γ = ½ ∫ (d ln Z/dz) e^{−2jθ} dz summed directly, ln Z by differences and θ by
+        // adding β up along the way — neither the closed-form phase nor the slope's formula.
+        let t = LinearTaper { length: 60e-3, ..t };
+        let n = 200_000;
+        let h = t.length / n as f64;
+        let ln_z = |z: f64| {
+            let s = z / t.length;
+            ((t.b1 + (t.b2 - t.b1) * s) / beta(t.a1 + (t.a2 - t.a1) * s)).ln()
+        };
+        let (mut theta, mut sum) = (0.0, C::new(0.0, 0.0));
+        for i in 0..n {
+            let (z0, z1) = (i as f64 * h, (i + 1) as f64 * h);
+            let mid = beta(t.a1 + (t.a2 - t.a1) * (z0 + 0.5 * h) / t.length);
+            sum += 0.5 * (ln_z(z1) - ln_z(z0)) * C::from_polar(1.0, -2.0 * (theta + 0.5 * mid * h));
+            theta += mid * h;
+        }
+        let g = t.reflection(11e9).unwrap();
+        assert!((g - sum).norm() < 1e-7 && g.norm() > 1e-3, "{g} {sum}");
+    }
+
+    #[test]
+    fn hostile_tapers_are_refused() {
+        let t = LinearTaper { a1: 22.86e-3, b1: 10.16e-3, a2: 19.05e-3, b2: 9.525e-3, length: 40e-3 };
+        assert!(t.reflection(10e9).is_ok());
+        for bad in [
+            LinearTaper { a1: f64::NAN, ..t },
+            LinearTaper { b2: 0.0, ..t },
+            LinearTaper { length: -1.0, ..t },
+            LinearTaper { a2: f64::INFINITY, ..t },
+        ] {
+            assert!(bad.reflection(10e9).is_err(), "{bad:?}");
+        }
+        for f in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(t.reflection(f).is_err(), "{f}");
+        }
+        // Cut off at the narrow end alone (19.05 mm: 7.87 GHz; 22.86 mm: 6.56 GHz).
+        assert!(t.reflection(7.5e9).is_err() && LinearTaper { a1: t.a2, a2: t.a1, ..t }.reflection(7.5e9).is_err());
+    }
 }

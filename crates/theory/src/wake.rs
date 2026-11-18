@@ -153,4 +153,42 @@ mod tests {
         // Shorter bunches lose more; the sum is settled well inside its cut.
         assert!(k(3e-12) > k(6e-12) && k(6e-12) > k(12e-12));
     }
+
+    #[test]
+    fn a_mode_with_nodes_along_the_axis_in_a_dielectric_is_its_fields_integrals() {
+        // TM0np's loss factor from its fields summed directly (the module's E_z and E_r, at the
+        // electric energy's peak U = (ε/2)∫|E|² dV): k = |∫E_z e^{jωz/βc} dz|²/(4U), with
+        // ω = c√((x_n/a)² + (pπ/L)²)/√εr.
+        let (a, l, eps, beta) = (0.012, 0.031, 2.1, 0.9);
+        let modes = Pillbox { radius: a, length: l, eps }.modes(beta, 40e9);
+        let x0 = [2.404_825_557_695_773, 5.520_078_110_286_311];
+        for (n, p) in [(1, 0), (1, 1), (2, 3)] {
+            let m = modes.iter().find(|m| m.n == n && m.p == p).unwrap();
+            let (kr, kz) = (x0[n - 1] / a, p as f64 * PI / l);
+            let omega = C0 / eps.sqrt() * (kr * kr + kz * kz).sqrt();
+            assert!((2.0 * PI * m.frequency / omega - 1.0).abs() < 1e-12);
+            let steps = 2000;
+            let (hr, hz) = (a / steps as f64, l / steps as f64);
+            let v: C = (0..steps).map(|i| (i as f64 + 0.5) * hz).map(|z| (kz * z).cos() * C::from_polar(hz, omega / (beta * C0) * z)).sum();
+            let along = |f: fn(f64) -> f64| (0..steps).map(|i| f(kz * (i as f64 + 0.5) * hz).powi(2) * hz).sum::<f64>();
+            let across = |order: usize| (0..steps).map(|i| (i as f64 + 0.5) * hr).map(|r| j(order, kr * r).powi(2) * 2.0 * PI * r * hr).sum::<f64>();
+            let u = 0.5 * EPS0 * eps * (across(0) * along(f64::cos) + (kz / kr).powi(2) * across(1) * along(f64::sin));
+            assert!((m.k / (v.norm_sqr() / (4.0 * u)) - 1.0).abs() < 1e-5, "TM0{n}{p}: {}", m.k);
+        }
+    }
+
+    #[test]
+    fn hostile_pillboxes_have_no_modes() {
+        let ok = Pillbox { radius: 0.01, length: 0.013, eps: 2.0 };
+        assert!(!ok.modes(0.9, 20e9).is_empty());
+        for bad in
+            [Pillbox { radius: 0.0, ..ok }, Pillbox { length: f64::NAN, ..ok }, Pillbox { eps: 0.5, ..ok }, Pillbox { eps: f64::INFINITY, ..ok }]
+        {
+            assert!(bad.modes(0.9, 20e9).is_empty(), "{bad:?}");
+        }
+        for (beta, f_max) in [(0.0, 20e9), (1.1, 20e9), (f64::NAN, 20e9), (0.9, 0.0), (0.9, f64::INFINITY)] {
+            assert!(ok.modes(beta, f_max).is_empty(), "{beta} {f_max}");
+        }
+        assert!(ok.loss_factor(0.9, 0.0).is_none() && ok.loss_factor(0.9, f64::NAN).is_none() && ok.loss_factor(2.0, 1e-12).is_none());
+    }
 }

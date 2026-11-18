@@ -164,14 +164,14 @@ pub fn mutual_impedance_parallel(l1: f64, l2: f64, offset: Vec3, frequency: f64)
 /// directivity in direction (θ, φ). The far field is the element's (a Hertzian dipole's, ∝ sin θ)
 /// times the array factor Σ Iₙ e^{jk r̂·rₙ}; the power is ½ Σ Re(Z_mn I_n I_m*) with the exact
 /// mutual impedances ([`mutual_impedance_parallel`]) and each gap's radiation resistance
-/// 80π²(l/λ)² (C. A. Balanis, *Antenna Theory*, 4th ed., §6.2 and §8.6).
+/// (2π/3) η (l/λ)², 80π²(l/λ)² with η = 120π (C. A. Balanis, *Antenna Theory*, 4th ed., §6.2 and §8.6).
 pub fn gap_array_directivity(positions: &[Point3], currents: &[C], l: f64, frequency: f64, theta: f64, phi: f64) -> f64 {
     let k = 2.0 * PI * frequency / C0;
     let eta = eta0();
     let [r, _, _] = Vec3::spherical(theta, phi);
     let af: C = positions.iter().zip(currents).map(|(p, i)| i * C::from_polar(1.0, k * r.dot(p.to_vec()))).sum();
     let f2 = (eta * k * l * theta.sin() / (4.0 * PI)).powi(2) * af.norm_sqr();
-    let self_resistance = C::new(80.0 * PI * PI * (l * frequency / C0).powi(2), 0.0);
+    let self_resistance = C::new(2.0 * PI / 3.0 * eta * (l * frequency / C0).powi(2), 0.0);
     let elements = || positions.iter().zip(currents).enumerate();
     let p: f64 = elements()
         .flat_map(|(m, (pm, im))| {
@@ -492,5 +492,102 @@ mod tests {
         // E- and H-planes agree forwards and backwards (S₁ = S₂ there up to sign).
         approx::assert_abs_diff_eq!(sphere_rcs(0.01, 4.0, 10e9, 0.0, true), sphere_rcs(0.01, 4.0, 10e9, 0.0, false), epsilon = 1e-12);
         approx::assert_abs_diff_eq!(sphere_rcs(0.01, 4.0, 10e9, PI, true), sphere_rcs(0.01, 4.0, 10e9, PI, false), epsilon = 1e-12);
+    }
+
+    /// The exact field of a Hertzian dipole of moment `il` along ẑ at `at`, on a sphere of
+    /// `radius` round it (Balanis, *Antenna Theory*, 4th ed., eqs. 4-8, 4-10), `centre` its phase
+    /// reference.
+    fn dipole_on_a_sphere(il: f64, f: f64, at: Point3, radius: f64, centre: Point3) -> Huygens {
+        let k = 2.0 * PI * f / C0;
+        let (kr, phase) = (C::new(0.0, k * radius), C::from_polar(1.0, -k * radius));
+        let (u, w) = gauss(24);
+        let turns = 48;
+        let samples = u
+            .iter()
+            .zip(&w)
+            .flat_map(|(u, w)| {
+                (0..turns).map(move |i| ((2.0 * u - 1.0).acos(), 2.0 * PI * i as f64 / turns as f64, 2.0 * w * 2.0 * PI / turns as f64))
+            })
+            .map(|(theta, phi, solid)| {
+                let [r, th, ph] = Vec3::spherical(theta, phi);
+                let (st, ct) = theta.sin_cos();
+                let er = eta0() * il * ct / (2.0 * PI * radius * radius) * (1.0 + 1.0 / kr) * phase;
+                let et = C::new(0.0, eta0() * k * il * st / (4.0 * PI * radius)) * (1.0 + 1.0 / kr - 1.0 / (k * radius).powi(2)) * phase;
+                let hp = C::new(0.0, k * il * st / (4.0 * PI * radius)) * (1.0 + 1.0 / kr) * phase;
+                HuygensSample {
+                    point: Point3::new(at.x + radius * r.x, at.y + radius * r.y, at.z + radius * r.z),
+                    weight: solid * radius * radius,
+                    normal: r,
+                    e: CVec3::from_real(r) * er + CVec3::from_real(th) * et,
+                    h: CVec3::from_real(ph) * hp,
+                }
+            })
+            .collect();
+        Huygens { frequency: f, centre, samples }
+    }
+
+    #[test]
+    fn a_surface_round_a_dipole_radiates_the_dipoles_field() {
+        // The dipole's near field on a sphere a third of a wavelength across gives its far field
+        // jηk Il sin θ/(4π) along θ̂ and nothing along φ̂, its power and the directivity 3/2 sin²θ
+        // (Balanis, Antenna Theory, §4.2; the equivalence, Advanced Engineering
+        // Electromagnetics §6.8).
+        let (il, f) = (2e-3, 3e9);
+        let at = Point3::new(0.01, -0.02, 0.03);
+        let s = dipole_on_a_sphere(il, f, at, C0 / f / 6.0, at);
+        approx::assert_abs_diff_eq!(s.power() / dipole_power(il, f), 1.0, epsilon = 1e-9);
+        for (theta, phi) in [(PI / 2.0, 0.0), (1.0, 2.0), (2.5, -1.0)] {
+            let (a, b) = s.far_field(theta, phi);
+            let want = C::new(0.0, dipole_far_field(il, f, theta));
+            assert!((a - want).norm() < 1e-8 * want.norm() && b.norm() < 1e-8 * want.norm(), "{a} {b} {want}");
+            approx::assert_abs_diff_eq!(s.directivity(theta, phi), 1.5 * theta.sin().powi(2), epsilon = 1e-8);
+        }
+        // Referred to another point the far field turns by e^{jk r̂·(at − centre)}, the power not.
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let moved = dipole_on_a_sphere(il, f, at, C0 / f / 6.0, centre);
+        let [r, _, _] = Vec3::spherical(1.0, 2.0);
+        let turn = C::from_polar(1.0, 2.0 * PI * f / C0 * r.dot(at - centre));
+        assert!((moved.far_field(1.0, 2.0).0 - s.far_field(1.0, 2.0).0 * turn).norm() < 1e-8 * dipole_far_field(il, f, 1.0));
+    }
+
+    #[test]
+    fn dipoles_off_the_half_wave_meet_their_integrals() {
+        // The induced-EMF impedance at the current's maximum, Z_m = −(1/I_m²) ∫ E_z I dz along the
+        // wire's surface with the sinusoidal current's exact field (Balanis, Antenna Theory,
+        // 4th ed., eqs. 8-52 to 8-57a), summed directly: the closed form's R and X at lengths where
+        // none of its terms vanish.
+        let f = 1e9;
+        let (lambda, k) = (C0 / f, 2.0 * PI * f / C0);
+        let radius = 1e-4 * lambda;
+        for length in [0.75 * lambda, 1.25 * lambda, 0.4 * lambda] {
+            let half = 0.5 * length;
+            let n = 400_000;
+            let h = length / n as f64;
+            let sum: C = (0..n)
+                .map(|i| -half + (i as f64 + 0.5) * h)
+                .map(|z| {
+                    let wave = |d: f64| {
+                        let r = radius.hypot(d);
+                        C::from_polar(1.0 / r, -k * r)
+                    };
+                    (k * (half - z.abs())).sin() * (wave(z - half) + wave(z + half) - 2.0 * (k * half).cos() * wave(z)) * h
+                })
+                .sum();
+            let at_max = C::new(0.0, eta0() / (4.0 * PI)) * sum;
+            let z = dipole_impedance(length, radius, f) * (k * half).sin().powi(2);
+            assert!((z - at_max).norm() < 2e-3 * at_max.norm(), "{length}: {z} {at_max}");
+        }
+    }
+
+    #[test]
+    fn directivities_average_to_one_and_a_single_gap_is_the_dipole() {
+        // (1/4π) ∮ D dΩ = 1 for the half-wave dipole, off broadside too.
+        let n = 20_000;
+        let mean: f64 = (0..n).map(|i| PI * (i as f64 + 0.5) / n as f64).map(|t| halfwave_directivity(t) * t.sin() * PI / n as f64 / 2.0).sum();
+        approx::assert_abs_diff_eq!(mean, 1.0, epsilon = 1e-8);
+        assert!(halfwave_directivity(0.0) == 0.0 && halfwave_directivity(1e-6) < 1e-10);
+        // One gap, wherever it is and whatever its current: 3/2 sin²θ.
+        let d = gap_array_directivity(&[Point3::new(0.01, 0.02, -0.03)], &[C::from_polar(0.3, 1.0)], 1e-3, 10e9, 1.0, 2.0);
+        approx::assert_abs_diff_eq!(d, 1.5 * 1f64.sin().powi(2), epsilon = 1e-12);
     }
 }

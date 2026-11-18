@@ -502,4 +502,65 @@ mod tests {
         // κb = 69: the asymptote's next term is 1/(8(κb)²) relative, the wall's e^{−2κ(a−b)}.
         approx::assert_abs_diff_eq!(o.space_charge(current).unwrap() / want, 1.0, epsilon = 1e-3);
     }
+
+    #[test]
+    fn hostile_oscillators_have_no_start() {
+        // One number wrong at a time, the rest a working oscillator's.
+        let ring = Ring { radius: 8e-3, thickness: 1e-3, tube: 10e-3 };
+        let beam = Beam { gamma0: 1.2, species: ELECTRON, ring: Some(ring) };
+        let o = Oscillator { impedance: 0.6, length: 0.24, frequency: 11.8e9, beam };
+        assert!(o.start_current().is_some() && o.space_charge(5.0).is_some());
+        let with = |ring: Ring| Oscillator { beam: Beam { ring: Some(ring), ..beam }, ..o };
+        let species = |charge: f64, mass: f64| Oscillator { beam: Beam { species: Species { charge, mass }, ..beam }, ..o };
+        let bad = [
+            Oscillator { impedance: 0.0, ..o },
+            Oscillator { impedance: f64::INFINITY, ..o },
+            Oscillator { length: 0.0, ..o },
+            Oscillator { length: f64::NAN, ..o },
+            Oscillator { frequency: 0.0, ..o },
+            Oscillator { frequency: f64::INFINITY, ..o },
+            Oscillator { beam: Beam { gamma0: 1.0, ..beam }, ..o },
+            Oscillator { beam: Beam { gamma0: f64::INFINITY, ..beam }, ..o },
+            species(0.0, ELECTRON.mass),
+            species(f64::NAN, ELECTRON.mass),
+            species(ELECTRON.charge, 0.0),
+            species(ELECTRON.charge, f64::INFINITY),
+            with(Ring { radius: 0.0, ..ring }),
+            with(Ring { thickness: 0.0, ..ring }),
+            with(Ring { tube: f64::INFINITY, ..ring }),
+            // The ring's outer edge on the tube: 9.5 mm + 0.5 mm.
+            with(Ring { radius: 9.5e-3, ..ring }),
+            with(Ring { radius: 12e-3, ..ring }),
+        ];
+        for b in bad {
+            assert!(b.start_current().is_none() && b.space_charge(5.0).is_none(), "{b:?}");
+        }
+        assert!(o.space_charge(0.0).is_none() && o.space_charge(f64::NAN).is_none());
+
+        let sample = |f: f64, deg: f64, k: f64| Sample { frequency: f, phase: deg.to_radians(), impedance: k, reflection: Z::new(0.0, 0.0) };
+        let circuit = vec![sample(11.25e9, 80.0, 0.35), sample(11.91e9, 100.0, 0.59), sample(12.58e9, 120.0, 1.13)];
+        let beam = Beam { gamma0: 1.0 + 1e5 / 510_998.95, species: ELECTRON, ring: None };
+        let r = Reflecting { circuit: circuit.clone(), period: 0.01, periods: 24, beam };
+        assert!(r.start().is_some());
+        let second = |s: Sample| Reflecting { circuit: vec![circuit[0], s, circuit[2]], ..r.clone() };
+        let bad = [
+            Reflecting { circuit: vec![circuit[1]], ..r.clone() },
+            Reflecting { circuit: vec![circuit[1], circuit[0], circuit[2]], ..r.clone() },
+            Reflecting { circuit: vec![circuit[0], circuit[0], circuit[2]], ..r.clone() },
+            second(Sample { frequency: f64::NAN, ..circuit[1] }),
+            second(Sample { impedance: 0.0, ..circuit[1] }),
+            second(Sample { phase: 0.0, ..circuit[1] }),
+            second(Sample { phase: std::f64::consts::PI, ..circuit[1] }),
+            second(Sample { reflection: Z::new(0.0, f64::INFINITY), ..circuit[1] }),
+            Reflecting { circuit: vec![Sample { frequency: 0.0, ..circuit[0] }, circuit[1], circuit[2]], ..r.clone() },
+            Reflecting { period: 0.0, ..r.clone() },
+            Reflecting { period: f64::INFINITY, ..r.clone() },
+            Reflecting { periods: 0, ..r.clone() },
+            Reflecting { periods: MAX_PERIODS + 1, ..r.clone() },
+            Reflecting { beam: Beam { gamma0: 1.0, ..beam }, ..r.clone() },
+        ];
+        for b in bad {
+            assert!(b.start().is_none(), "{b:?}");
+        }
+    }
 }

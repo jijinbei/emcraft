@@ -479,6 +479,34 @@ mod tests {
         let d = Te10Line { a: A, layers: vec![Layer::lossy(l, 2.0, 1.5, tm)] }.solve(f).unwrap();
         assert!((d.s21 - s.s21).norm() < 1e-12);
     }
+
+    #[test]
+    fn the_magnetic_field_is_faradays_and_continuous_across_the_sections() {
+        // H = −(1/jωμ) ∇ × E with E's derivatives by differences, in a line with a magnetic
+        // section; the tangential H_x has no jump where μ does (the normal H_z has: μH_z is
+        // continuous).
+        let layers = vec![Layer::lossless(0.015, 2.0, 1.0), Layer::lossless(0.02, 1.5, 3.0), Layer::lossy(0.015, 2.0, 1.0, 0.01)];
+        let f = 7.3e9;
+        let s = Te10Line { a: A, layers }.solve(f).unwrap();
+        let d = 1e-7;
+        for (z, mu) in [(0.004, 1.0), (0.021, 3.0), (0.044, 1.0)] {
+            let p = Point3::new(0.3 * A, 0.004, z);
+            let e = |dx: f64, dz: f64| s.e(Point3::new(p.x + dx, p.y, p.z + dz)).y;
+            let (dedz, dedx) = ((e(0.0, d) - e(0.0, -d)) / (2.0 * d), (e(d, 0.0) - e(-d, 0.0)) / (2.0 * d));
+            let jwmu = J * 2.0 * PI * f * MU0 * mu;
+            let h = s.h(p);
+            assert!((h.x - dedz / jwmu).norm() < 1e-6 * h.x.norm() && (h.z + dedx / jwmu).norm() < 1e-6 * h.z.norm(), "{z}: {h:?}");
+            assert!(h.y.norm() == 0.0 && h.x.norm() > 1e-4 && h.z.norm() > 1e-4);
+        }
+        let at = |z: f64| s.h(Point3::new(0.3 * A, 0.0, z));
+        let (before, after) = (at(0.015 - 1e-12), at(0.015 + 1e-12));
+        assert!((before.x - after.x).norm() < 1e-8 * after.x.norm() && (before.z - 3.0 * after.z).norm() < 1e-8 * before.z.norm());
+        // An empty guide's wave: H_x = −E_y β/(ωμ₀), the wave impedance.
+        let s = Te10Line { a: A, layers: vec![Layer::lossless(0.03, 1.0, 1.0)] }.solve(f).unwrap();
+        let p = Point3::new(0.4 * A, 0.0, 0.011);
+        let beta = ((2.0 * PI * f / C0).powi(2) - (PI / A).powi(2)).sqrt();
+        assert!((s.h(p).x + s.e(p).y * beta / (2.0 * PI * f * MU0)).norm() < 1e-12 * s.h(p).x.norm());
+    }
 }
 
 pub mod pcb;
