@@ -12,6 +12,8 @@ third-party material under an open licence.
 | File | Author | Source | Licence |
 |---|---|---|---|
 | crates/templates/scripts/pcb-{microstrip,split-ground,parallel}.json | EMCraft contributors | Original parameterized PCB routing templates, with continuous, split and neighbouring-trace examples | MIT OR Apache-2.0 |
+| crates/io/tests/data/pcbcraft/sensor-node/ | PCBCraft contributors | PCBCraft's `examples/sensor-node` project (github.com/tangency-labs/pcbcraft at a931b89a), unchanged | MIT OR Apache-2.0 |
+| crates/io/tests/data/pcbcraft/sensor-node-stackup/ | PCBCraft contributors; EMCraft contributors | The same example, its board's dielectric given a 1.5 mm thickness and a test material (Dk 4.3, Df 0.017) by EMCraft's tests | MIT OR Apache-2.0 |
 | crates/io/tests/fixtures/route.kicad_pcb; tests/oracle/pcb-route-line/{recipe,expected,fixture}.json; PCB route examples in crates/engine/src/pcb.rs | EMCraft contributors | Original two-layer routing examples and independently evaluated published HJ/ABCD formulas; no third-party board data or KiCad source code | MIT OR Apache-2.0 |
 | docs/media/app-start.png, docs/media/app-sparameters.png, docs/media/app-pcb-board.png | EMCraft contributors | Original: the desktop app's own window — the start page (`ui.render` over its control channel, docs/control-protocol.md), the two-post resonator's S-parameters (a frame of docs/media/walkthrough.mp4) and the `pcb-board` sample's coupling illustration | MIT OR Apache-2.0 |
 | docs/book/src/img/first-solve-*.png | EMCraft contributors | Original: the desktop app's own window on the `highpass` sample (opened, run, its field at 8 GHz, the Results step), drawn by `ui.render` over its control channel (docs/control-protocol.md) | MIT OR Apache-2.0 |

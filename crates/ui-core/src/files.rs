@@ -105,14 +105,30 @@ pub trait Picker: Send + Sync {
     fn open(&self, done: Box<dyn FnOnce(Option<String>) + Send>);
     /// Where to save a project, `suggested` the file name offered.
     fn save(&self, suggested: &str, done: Box<dyn FnOnce(Option<String>) + Send>);
-    /// A part to import: a SolidCraft design, a 3MF package or an STL file.
+    /// A part to import: a SolidCraft design, a 3MF package or an STL file; or a board (KiCad,
+    /// a packed PCBCraft project).
     fn import(&self, done: Box<dyn FnOnce(Option<String>) + Send>);
     /// Where to make a new SolidCraft design, `suggested` the file name offered.
     fn design(&self, suggested: &str, done: Box<dyn FnOnce(Option<String>) + Send>);
 }
 
-/// The extensions of the parts `geometry.import` reads.
-pub const PART_EXTENSIONS: &[&str] = &["sc", "3mf", "stl", "kicad_pcb"];
+/// The extensions of the parts `geometry.import` reads, and of the boards `pcb.import` reads.
+pub const PART_EXTENSIONS: &[&str] = &["sc", "3mf", "stl", "kicad_pcb", "pc"];
+
+/// The extensions of the boards among them: a KiCad board, a packed PCBCraft project.
+const BOARD_EXTENSIONS: &[&str] = &["kicad_pcb", "pc"];
+
+/// Whether `path` names a board `pcb.import` reads rather than a part, by its extension.
+///
+/// ```
+/// use emcraft_ui_core::files::is_board;
+/// assert!(is_board("/tmp/route.kicad_pcb") && is_board("/tmp/sensor-node.PC"));
+/// assert!(!is_board("/tmp/post.sc"));
+/// ```
+pub fn is_board(path: &str) -> bool {
+    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    ext.is_some_and(|e| BOARD_EXTENSIONS.contains(&e.as_str()))
+}
 
 /// The file name a new SolidCraft design is offered under: `.sc`, what SolidCraft writes.
 pub const NEW_DESIGN: &str = "design.sc";

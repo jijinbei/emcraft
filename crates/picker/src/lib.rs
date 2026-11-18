@@ -41,7 +41,7 @@ impl Picker for SystemPicker {
         std::thread::spawn(move || {
             let path = rfd::FileDialog::new()
                 .set_title("Import a part")
-                .add_filter("Parts (SolidCraft, 3MF, STL)", PART_EXTENSIONS)
+                .add_filter("Parts (SolidCraft, 3MF, STL) and boards (KiCad, PCBCraft)", PART_EXTENSIONS)
                 .add_filter("SolidCraft design", &["sc"])
                 .add_filter("3MF", &["3mf"])
                 .add_filter("STL", &["stl"])

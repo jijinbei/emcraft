@@ -29,6 +29,30 @@ fn board_import_is_embedded_saved_undoable_and_diagnostics_are_explicit() {
 }
 
 #[test]
+fn a_pcbcraft_project_imports_with_its_nets_and_its_stackup() {
+    // PCBCraft's sensor-node example with a known core (crates/io/tests/data/pcbcraft): its
+    // board through PCBCraft's own engine, embedded as a KiCad board is, its nets inspected.
+    let project = concat!(env!("CARGO_MANIFEST_DIR"), "/../io/tests/data/pcbcraft/sensor-node-stackup");
+    let mut s = Session::new();
+    let r = s.execute("pcb.import", &json!({"path": project})).unwrap();
+    assert_eq!(s.history().last().unwrap().command, "pcb.load");
+    let board = s.model().pcb().unwrap();
+    assert_eq!((board.segments.len(), board.vias.len(), board.layers.len()), (123, 26, 2));
+    approx::assert_abs_diff_eq!(board.layers[0].eps_below, 4.3, epsilon = 1e-12);
+    assert_eq!((r["board"].as_str(), r["segments"].as_u64()), (Some("Board"), Some(123)));
+    let report = s.execute("pcb.inspect", &json!({"net": "SDA"})).unwrap();
+    assert_eq!(report["net"], "SDA");
+    // The example's own unknown stackup is refused unless one is given, in display units.
+    let plain = concat!(env!("CARGO_MANIFEST_DIR"), "/../io/tests/data/pcbcraft/sensor-node/project.json");
+    let err = Session::new().execute("pcb.import", &json!({"path": plain})).unwrap_err().to_string();
+    assert!(err.contains("stackup"), "{err}");
+    let stackup = json!([{"name": "Top", "z": 0, "eps_below": 4.4}, {"name": "Bottom", "z": 1.53, "eps_below": 1}]);
+    let mut t = Session::new();
+    t.execute("pcb.import", &json!({"path": plain, "stackup": stackup})).unwrap();
+    approx::assert_abs_diff_eq!(t.model().pcb().unwrap().layers[1].z, 1.53e-3, epsilon = 1e-15);
+}
+
+#[test]
 fn board_commands_refuse_hostile_inputs_and_keep_the_model() {
     let mut s = Session::new();
     s.execute("pcb.sample", &json!({"split": false})).unwrap();

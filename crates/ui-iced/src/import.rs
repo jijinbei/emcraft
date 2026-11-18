@@ -33,11 +33,11 @@ fn key(d: &Dialog) -> String {
 }
 
 impl App {
-    /// Part `path` imported: a KiCad board through the PCB's import; any other part through
+    /// Part `path` imported: a board (KiCad, a packed PCBCraft project) through the PCB's import;
+    /// any other part through
     /// `geometry.import`'s dialog on it (the one open takes the path), the geometry's step open.
     pub(crate) fn import_part(&mut self, path: &str) {
-        let ext = std::path::Path::new(path).extension().and_then(|s| s.to_str()).map(str::to_ascii_lowercase);
-        let (id, values) = if ext.as_deref() == Some("kicad_pcb") { ("pcb.import", json!({"path": path})) } else { (ID, json!({"path": path})) };
+        let (id, values) = if emcraft_ui_core::files::is_board(path) { ("pcb.import", json!({"path": path})) } else { (ID, json!({"path": path})) };
         if let Some(d) = self.dialog.as_mut().filter(|d| d.command.id == id) {
             let _ = d.set("path", &json!(path));
             return;

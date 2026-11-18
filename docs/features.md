@@ -12,11 +12,11 @@ Loads native PCB routing data in the session's length units. Replaces the model;
 
 ## `pcb.import` — Import PCB
 
-Reads a KiCad board's tracks (arcs as chords), vias, footprints' copper pads (a plated hole a via), explicit dielectric stackup (each ply's epsilon_r and loss_tangent) and saved filled copper. Unfilled zones are not treated as copper; mask and copper thickness are excluded. Imported data is embedded so reopening needs no source file.
+Reads a KiCad board's tracks (arcs as chords), vias, footprints' copper pads (a plated hole a via), explicit dielectric stackup (each ply's epsilon_r and loss_tangent) and saved filled copper; or a PCBCraft project's board (its folder, project.json or a packed .pc, through PCBCraft's own engine): its tracks and vias with the nets PCBCraft resolves, its pads, and its stackup from the finished dielectric thicknesses and their materials' Dk/Df reports (unknown ones refused unless `stackup` is given). Unfilled zones are not treated as copper; mask and copper thickness are excluded. Imported data is embedded so reopening needs no source file.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
-| `path` | string |  | yes | KiCad .kicad_pcb file, at most 64 MiB |
+| `path` | string |  | yes | KiCad .kicad_pcb file (at most 64 MiB), or a PCBCraft project: its folder, project.json or .pc |
 | `stackup` | array |  | no | optional copper layers [{name,z,eps_below,loss_below,copper}], lengths in display units; replaces file stackup (copper the thickness on the top or bottom layer, default 0) |
 
 ## `pcb.sample` — PCB return-path example

@@ -53,6 +53,11 @@ quick-xml = "0.42"
 # SolidCraft designs, read through SolidCraft's exchange snapshot: the one SolidCraft crate EMCraft
 # depends on, pinned to a commit (docs/adr/0003-solidcraft-exchange.md).
 solidcraft-exchange = { git = "https://github.com/jijinbei/solidcraft", rev = "4c9ddde19843e5df2b4e782f8738449bffd59d6d" }
+# PCBCraft boards, opened read-only through PCBCraft's own storage and engine, pinned to a commit
+# (docs/adr/0013-pcbcraft-boards.md).
+pcbcraft-engine = { git = "https://github.com/tangency-labs/pcbcraft", rev = "a931b89ab4d8c2c10e6870ea145876c28df39759" }
+pcbcraft-storage = { git = "https://github.com/tangency-labs/pcbcraft", rev = "a931b89ab4d8c2c10e6870ea145876c28df39759" }
+uuid = "1"
 
 # images (PNG field pictures)
 png = "0.18"

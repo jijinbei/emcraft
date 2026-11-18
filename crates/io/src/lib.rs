@@ -10,6 +10,7 @@
 
 pub mod fit;
 pub mod package;
+pub mod pcbcraft;
 pub mod solidcraft;
 pub mod stl;
 pub mod threemf;

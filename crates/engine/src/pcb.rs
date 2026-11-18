@@ -257,12 +257,9 @@ fn embedded(s: &mut Session, board: Board) -> Result<Value> {
     Ok(reply)
 }
 
-/// `pcb.import`: a KiCad board read from `path` (at most 64 MiB).
+/// `pcb.import`: a KiCad board read from `path` (at most 64 MiB), or a PCBCraft project's board.
 pub fn import(s: &mut Session, p: &Params) -> Result<Value> {
     let path = p.string("path").required()?;
-    let file = std::fs::File::open(path).map_err(failed)?;
-    let mut text = String::new();
-    file.take(64 * 1024 * 1024 + 1).read_to_string(&mut text).map_err(failed)?;
     let layers = match p.raw("stackup") {
         None => None,
         Some(v) => {
@@ -273,6 +270,14 @@ pub fn import(s: &mut Session, p: &Params) -> Result<Value> {
             Some(ls)
         }
     };
+    // A PCBCraft project (its folder, entry point or packed archive) names its own board.
+    if emcraft_io::pcbcraft::is_project(std::path::Path::new(path)) {
+        let board = emcraft_io::pcbcraft::read(std::path::Path::new(path), layers).map_err(failed)?;
+        return embedded(s, board);
+    }
+    let file = std::fs::File::open(path).map_err(failed)?;
+    let mut text = String::new();
+    file.take(64 * 1024 * 1024 + 1).read_to_string(&mut text).map_err(failed)?;
     let mut board = emcraft_io::pcb::read(&text, layers).map_err(failed)?;
     board.name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or("PCB").chars().take(128).collect();
     embedded(s, board)

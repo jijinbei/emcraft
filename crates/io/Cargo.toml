@@ -15,6 +15,9 @@ thiserror = { workspace = true }
 zip = { workspace = true }
 quick-xml = { workspace = true }
 solidcraft-exchange = { workspace = true }
+pcbcraft-engine = { workspace = true }
+pcbcraft-storage = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
