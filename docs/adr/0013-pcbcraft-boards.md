@@ -29,6 +29,11 @@ the finite elements — is the same for either source.
   tangent); when unknown — PCBCraft leaves them blank by default — the import is refused unless
   the caller gives the copper layers (`stackup`). Zones are left out, noted: PCBCraft keeps their
   outlines, not filled copper, as the KiCad reader leaves out unfilled zones.
+- **Targets are EMCraft's.** PCBCraft's net classes carry dimensions (clearances, widths,
+  vias), not impedances, and bind to nets through its identity registry. The impedances a net
+  should have are EMCraft's own net classes (`pcb.class`, saved with the board, nets by name);
+  `pcb.check`'s findings name segments by the ids the import kept — a PCBCraft track's UUID — so
+  PCBCraft can point at them.
 
 ## Licences
 

@@ -257,6 +257,29 @@ fn the_four_layer_example_board_meshes_and_its_route_crosses_layers() {
     emcraft_mesh::check_tetrahedra(s.model().mesh.as_ref().unwrap()).unwrap();
 }
 
+/// The example board's DATA route gets its two ports at its pads, the region set round it first:
+/// the top trace's over GND, the bottom one's under the power plane; run again, the same two.
+#[test]
+fn ports_go_at_a_routes_pads() {
+    let mut s = Session::new();
+    s.execute("file.sample", &json!({"name": "pcb-board"})).unwrap();
+    let r = s.execute("pcb.ports", &json!({"net": "DATA"})).unwrap();
+    let ports = r["ports"].as_array().unwrap();
+    assert!(r["region"] == true && ports.len() == 2, "{r}");
+    assert!(ports[0]["name"] == "DATA.1" && ports[0]["segment"] == "data:0" && ports[0]["end"] == "start", "{r}");
+    assert!(ports[1]["segment"] == "data:3" && ports[1]["end"] == "end" && ports[1]["reference"] == "PWR", "{r}");
+    assert!(s.model().pcb().unwrap().region.is_some());
+    let again = s.execute("pcb.ports", &json!({"net": "DATA", "impedance": 75})).unwrap();
+    assert_eq!(again["region"], false);
+    let lumped = &s.model().lumped;
+    assert!(lumped.len() == 2 && lumped.iter().all(|l| l.impedance.get() == 75.0));
+    let before = s.model().clone();
+    for bad in [json!({"net": "NOPE"}), json!({"net": "DATA", "impedance": -1}), json!({})] {
+        assert!(s.execute("pcb.ports", &bad).is_err(), "{bad}");
+        assert_eq!(s.model(), &before);
+    }
+}
+
 /// Lumped ports in a board's shielded region are what an S-parameter job's box is for: no
 /// warning to open it; an antenna's (radiation) still gets one.
 #[test]

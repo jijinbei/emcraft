@@ -73,15 +73,7 @@ pub fn region(s: &mut Session, p: &Params) -> Result<Value> {
     let t = outer_gap(&board);
     let margin = p.length("margin").check(|m| *m >= 0.0, "must be ≥ 0").or(MARGIN * t)?;
     let around = match p.string("net").optional()? {
-        Some(net) => {
-            let ends: Vec<[f64; 2]> = board.segments.iter().filter(|g| g.net == net).flat_map(|g| [g.start, g.end]).collect();
-            if ends.is_empty() {
-                return Err(p.error("net", "name a routed net of the board"));
-            }
-            let lo = ends.iter().fold([f64::INFINITY; 2], |l, q| [l[0].min(q[0]), l[1].min(q[1])]);
-            let hi = ends.iter().fold([f64::NEG_INFINITY; 2], |h, q| [h[0].max(q[0]), h[1].max(q[1])]);
-            (lo, hi)
-        }
+        Some(net) => routes_bounds(&board, net).ok_or_else(|| p.error("net", "name a routed net of the board"))?,
         None => board.bounds().ok_or_else(|| failed("the board has no copper"))?,
     };
     let corner = |name: &str, fallback: [f64; 2]| -> Result<[f64; 2]> {
@@ -99,6 +91,14 @@ pub fn region(s: &mut Session, p: &Params) -> Result<Value> {
     install(s, board, region)?;
     let show = |v: [f64; 2]| json!([s.show_length(v[0]), s.show_length(v[1])]);
     Ok(json!({"lo": show(lo), "hi": show(hi), "above": s.show_length(above), "below": s.show_length(below)}))
+}
+
+/// The bounds (m) of `net`'s routes, `None` when it has none.
+fn routes_bounds(board: &Board, net: &str) -> Option<([f64; 2], [f64; 2])> {
+    let ends: Vec<[f64; 2]> = board.segments.iter().filter(|g| g.net == net).flat_map(|g| [g.start, g.end]).collect();
+    let lo = ends.iter().fold([f64::INFINITY; 2], |l, q| [l[0].min(q[0]), l[1].min(q[1])]);
+    let hi = ends.iter().fold([f64::NEG_INFINITY; 2], |h, q| [h[0].max(q[0]), h[1].max(q[1])]);
+    (!ends.is_empty()).then_some((lo, hi))
 }
 
 /// The model's geometry the box of `board`'s `region`, its substrates materials.
@@ -412,11 +412,21 @@ fn barrels(
 /// solve.frequency reads S of the lumped ports.
 pub fn port(s: &mut Session, p: &Params) -> Result<Value> {
     let board = s.model.pcb().cloned().ok_or_else(|| failed("load a PCB first"))?;
-    let region = board.region.ok_or_else(|| failed("set the region first: pcb.region"))?;
+    board.region.ok_or_else(|| failed("set the region first: pcb.region"))?;
     let name = p.string("name").required()?.to_owned();
     let id = p.string("segment").required()?;
     let g = board.segments.iter().find(|g| g.id == id).ok_or_else(|| p.error("segment", "name a segment of the board"))?;
-    let at = g.at(p.pick("end").or(End::Start)?);
+    let end = p.pick("end").or(End::Start)?;
+    let impedance: Ohms = p.checked("impedance").or(Ohms::new(50.0)?)?;
+    let reference = place(s, &board, &name, g, end, impedance)?;
+    Ok(json!({"name": name, "reference": reference, "lumped_ports": s.model.lumped.len()}))
+}
+
+/// A lumped port named `name` at `g`'s `end` in the board's `region` (`pcb.port`'s rule); the
+/// name of the layer it refers to, or `floor`.
+fn place(s: &mut Session, board: &Board, name: &str, g: &Segment, end: End, impedance: Ohms) -> Result<String> {
+    let region = board.region.ok_or_else(|| failed("set the region first: pcb.region"))?;
+    let at = g.at(end);
     let heights = board.heights();
     let layer = board.layers.iter().position(|l| l.name == g.layer).ok_or_else(|| failed("the segment's layer is missing"))?;
     let top = heights[layer];
@@ -439,9 +449,8 @@ pub fn port(s: &mut Session, p: &Params) -> Result<Value> {
     let d = [g.end[0] - g.start[0], g.end[1] - g.start[1]];
     let len = d[0].hypot(d[1]);
     let across = Vec3::new(-d[1] / len, 0.0, d[0] / len) * (0.5 * g.width);
-    let impedance: Ohms = p.checked("impedance").or(Ohms::new(50.0)?)?;
     s.model.add_lumped_port(LumpedPort {
-        name: name.clone(),
+        name: name.to_owned(),
         from: Point3::new(x, region.below + bottom, y),
         to: Point3::new(x, region.below + top, y),
         impedance,
@@ -449,8 +458,81 @@ pub fn port(s: &mut Session, p: &Params) -> Result<Value> {
         radius: 0.0,
         across: Some(across),
     })?;
-    let reference = reference.map_or_else(|| "floor".to_owned(), |l| board.layers[l].name.clone());
-    Ok(json!({"name": name, "reference": reference, "lumped_ports": s.model.lumped.len()}))
+    Ok(reference.map_or_else(|| "floor".to_owned(), |l| board.layers[l].name.clone()))
+}
+
+/// The most ports `pcb.ports` sets on a net.
+const MAX_PORTS: usize = 32;
+
+/// `pcb.ports`: a lumped port at every free end of `net`'s route that lies on a pad (or other
+/// copper) of the net on its layer, named `<net>.1`, `<net>.2`, … in the order of the segments
+/// (ports of those names set before are replaced); the region round the net first, when none is
+/// set. A free end at a via, or on no copper of its net, is reported and left without a port.
+pub fn ports(s: &mut Session, p: &Params) -> Result<Value> {
+    let board = s.model.pcb().cloned().ok_or_else(|| failed("load a PCB first: pcb.import, pcb.load or pcb.sample"))?;
+    let net = p.string("net").required()?.to_owned();
+    let impedance: Ohms = p.checked("impedance").or(Ohms::new(50.0)?)?;
+    if !board.segments.iter().any(|g| g.net == net) {
+        return Err(p.error("net", "names no routed net of this board"));
+    }
+    let on_copper = |g: &Segment, q: [f64; 2]| board.copper.iter().position(|c| c.net == net && c.layer == g.layer && inside(&c.polygon, q));
+    let at_via = |q: [f64; 2]| board.vias.iter().any(|v| v.net == net && emcraft_model::pcb::distance(v.at, q) <= 0.5 * v.diameter);
+    let (mut pads, mut skipped) = (Vec::new(), Vec::new());
+    for (id, end) in route_ends(&board, &net) {
+        let Some(i) = board.segments.iter().position(|g| g.id == id) else { continue };
+        let g = &board.segments[i];
+        let q = g.at(end);
+        match on_copper(g, q) {
+            Some(pad) => pads.push((i, end, pad)),
+            None => skipped.push(json!({"segment": id, "end": end.id(), "why": if at_via(q) { "a via: the route goes on" } else { "on no pad of the net: an open end" }})),
+        }
+    }
+    if pads.is_empty() {
+        return Err(p.error("net", "has no route end on a pad of its own"));
+    }
+    if pads.len() > MAX_PORTS {
+        return Err(p.error("net", format!("has {} route ends on pads, more than {MAX_PORTS}", pads.len())));
+    }
+    let made_region = board.region.is_none();
+    let board = match board.region {
+        Some(_) => board,
+        None => {
+            let (lo, hi) = routes_bounds(&board, &net).ok_or_else(|| p.error("net", "names no routed net of this board"))?;
+            let t = outer_gap(&board);
+            let (margin, air) = (MARGIN * t, AIR * t);
+            let region = Region { lo: [lo[0] - margin, lo[1] - margin], hi: [hi[0] + margin, hi[1] + margin], above: air, below: air };
+            region.check()?;
+            install(s, board, region)?;
+            s.model.pcb().cloned().ok_or_else(|| failed("the board was lost setting its region"))?
+        }
+    };
+    let named = |k: usize| format!("{net}.{k}");
+    s.model.lumped.retain(|l| !(1..=MAX_PORTS).any(|k| l.name == named(k)));
+    let length = s.display.length;
+    let mut made = Vec::new();
+    for (k, (i, end, pad)) in pads.into_iter().enumerate() {
+        let name = named(k + 1);
+        let g = board.segments.get(i).ok_or_else(|| failed("a segment was lost setting the region"))?;
+        let reference = place(s, &board, &name, g, end, impedance)?;
+        let q = g.at(end);
+        made.push(json!({
+            "name": name,
+            "segment": g.id,
+            "end": end.id(),
+            "layer": g.layer,
+            "at": [length.from_si(q[0]), length.from_si(q[1])],
+            "pad": pad + 1,
+            "reference": reference,
+        }));
+    }
+    Ok(json!({
+        "net": net,
+        "ports": made,
+        "skipped": skipped,
+        "region": made_region,
+        "impedance": impedance.get(),
+        "next": "mesh.generate, then solve.frequency for S of these ports; results.tdr for each port's step response",
+    }))
 }
 
 /// `pcb.element`: a lumped element on a layer of the board's region, from one board point to

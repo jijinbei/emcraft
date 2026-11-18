@@ -121,6 +121,90 @@ pub struct Board {
     /// The region solved by the finite elements (`pcb.region`), if one is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<Region>,
+    /// The classes of nets and the impedances their lines should have (`pcb.class`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub classes: Vec<NetClass>,
+}
+
+/// The most net classes a board may have.
+pub const MAX_CLASSES: usize = 64;
+
+/// A class of nets and the impedance their lines should have: its nets by name, each name a
+/// pattern (`*` any run of characters), the single-ended `z0` and the differential `z_diff` it
+/// asks for (Ω, either or both) within `tolerance` (a fraction of the target).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NetClass {
+    pub name: String,
+    pub nets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z0: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub z_diff: Option<f64>,
+    pub tolerance: f64,
+}
+
+impl NetClass {
+    /// Whether the class takes `net`: one of its names matches it, `*` any run of characters.
+    ///
+    /// ```
+    /// use emcraft_model::pcb::NetClass;
+    /// let c = NetClass { name: "USB".into(), nets: vec!["USB_D*".into(), "VBUS".into()], z0: None, z_diff: Some(90.0), tolerance: 0.1 };
+    /// assert!(c.matches("USB_D+") && c.matches("VBUS"));
+    /// assert!(!c.matches("SDA") && !c.matches("VBUS2"));
+    /// ```
+    pub fn matches(&self, net: &str) -> bool {
+        self.nets.iter().any(|p| glob(p, net))
+    }
+
+    /// Refuses a class with no name or nets, no target, a target outside 0.1–10 000 Ω or a
+    /// tolerance outside (0, 1].
+    ///
+    /// ```
+    /// use emcraft_model::pcb::NetClass;
+    /// let c = NetClass { name: "50".into(), nets: vec!["*".into()], z0: Some(50.0), z_diff: None, tolerance: 0.1 };
+    /// assert!(c.check().is_ok());
+    /// assert!(NetClass { z0: None, ..c.clone() }.check().is_err());
+    /// assert!(NetClass { tolerance: f64::NAN, ..c }.check().is_err());
+    /// ```
+    pub fn check(&self) -> Result<()> {
+        let name = |s: &str| !s.trim().is_empty() && s.chars().count() <= 128;
+        let target = |z: Option<f64>| z.is_none_or(|z| z.is_finite() && (0.1..=1e4).contains(&z));
+        let ok = name(&self.name)
+            && !self.nets.is_empty()
+            && self.nets.len() <= 256
+            && self.nets.iter().all(|n| name(n))
+            && (self.z0.is_some() || self.z_diff.is_some())
+            && target(self.z0)
+            && target(self.z_diff)
+            && self.tolerance.is_finite()
+            && self.tolerance > 0.0
+            && self.tolerance <= 1.0;
+        if ok {
+            Ok(())
+        } else {
+            Err(invalid("net class", "needs a name, nets, a z0 or z_diff target of 0.1–10000 Ω and a tolerance of (0, 100] %"))
+        }
+    }
+}
+
+/// Whether `text` matches `pattern`, `*` any run of characters (none included), by the
+/// two-pointer walk that backtracks to the last `*` only: linear in the lengths times the stars.
+fn glob(pattern: &str, text: &str) -> bool {
+    let (p, t): (Vec<char>, Vec<char>) = (pattern.chars().collect(), text.chars().collect());
+    let (mut i, mut j, mut star, mut mark) = (0, 0, None, 0);
+    while j < t.len() {
+        if i < p.len() && p[i] != '*' && p[i] == t[j] {
+            (i, j) = (i + 1, j + 1);
+        } else if i < p.len() && p[i] == '*' {
+            (star, mark, i) = (Some(i), j, i + 1);
+        } else if let Some(s) = star {
+            (i, mark) = (s + 1, mark + 1);
+            j = mark;
+        } else {
+            return false;
+        }
+    }
+    p[i..].iter().all(|c| *c == '*')
 }
 
 impl Board {
@@ -128,7 +212,7 @@ impl Board {
     ///
     /// ```
     /// use emcraft_model::pcb::{Board, Layer, Segment};
-    /// let empty = Board { name: "empty".into(), layers: vec![], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None };
+    /// let empty = Board { name: "empty".into(), layers: vec![], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![] };
     /// assert!(empty.bounds().is_none());
     /// let segment = Segment { id: "0".into(), net: "A".into(), layer: "F.Cu".into(), start: [0.0, 0.001], end: [0.01, 0.002], width: 2e-4 };
     /// let line = Board { segments: vec![segment], layers: vec![Layer { name: "F.Cu".into(), z: 0.0, eps_below: 4.2, loss_below: 0.0, copper: 0.0 }], ..empty };
@@ -149,7 +233,7 @@ impl Board {
     /// Validate a board before storing it. Empty layers, unknown layers and non-finite geometry
     /// are refused. Coordinates and lengths are SI metres.
     /// ```
-    /// let b=emcraft_model::pcb::Board{name:"empty".into(),layers:vec![],segments:vec![],vias:vec![],copper:vec![],notes:vec![],region:None};
+    /// let b=emcraft_model::pcb::Board{name:"empty".into(),layers:vec![],segments:vec![],vias:vec![],copper:vec![],notes:vec![],region:None,classes:vec![]};
     /// assert!(b.check().is_err());
     /// ```
     pub fn check(&self) -> Result<()> {
@@ -221,6 +305,15 @@ impl Board {
         if let Some(r) = &self.region {
             r.check()?;
         }
+        if self.classes.len() > MAX_CLASSES {
+            return Err(bad());
+        }
+        for (i, c) in self.classes.iter().enumerate() {
+            c.check()?;
+            if self.classes[..i].iter().any(|q| q.name == c.name) {
+                return Err(invalid("net class", format!("`{}` is named twice", c.name)));
+            }
+        }
         Ok(())
     }
 
@@ -229,7 +322,7 @@ impl Board {
     /// ```
     /// use emcraft_model::pcb::{Board, Layer};
     /// let layers = vec![Layer { name: "F.Cu".into(), z: 0.0, eps_below: 4.2, loss_below: 0.0, copper: 0.0 }, Layer { name: "B.Cu".into(), z: 1.6e-3, eps_below: 1.0, loss_below: 0.0, copper: 0.0 }];
-    /// let b = Board { name: "b".into(), layers, segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None };
+    /// let b = Board { name: "b".into(), layers, segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![] };
     /// assert_eq!(b.heights(), vec![1.6e-3, 0.0]);
     /// ```
     pub fn heights(&self) -> Vec<f64> {
@@ -242,7 +335,7 @@ impl Board {
     ///
     /// ```
     /// use emcraft_model::pcb::{Board, Layer};
-    /// let mut b = Board { name: "b".into(), layers: vec![Layer { name: "F.Cu".into(), z: 1.6, eps_below: 4.2, loss_below: 0.0, copper: 0.0 }], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None };
+    /// let mut b = Board { name: "b".into(), layers: vec![Layer { name: "F.Cu".into(), z: 1.6, eps_below: 4.2, loss_below: 0.0, copper: 0.0 }], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![] };
     /// b.map_lengths(|mm| mm * 1e-3);
     /// assert_eq!(b.layers[0].z, 1.6e-3);
     /// ```

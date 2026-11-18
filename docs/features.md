@@ -116,6 +116,15 @@ Puts a lumped port at a trace's end in the board's region (pcb.region): a sheet 
 | `end` | string |  | no | `start` or `end` of the segment (default start) |
 | `impedance` | number |  | no | the port's impedance in ohms (default 50) |
 
+## `pcb.ports` — PCB ports at pads
+
+Puts a lumped port at every free end of `net`'s route that lies on a pad (or other copper) of the net on its layer, as pcb.port puts one — named `<net>.1`, `<net>.2`, … in the order of the segments, replacing ports of those names — after setting the region round the net when none is set (pcb.region's defaults). Free ends at a via or on no copper of the net are listed and get none. Then mesh.generate and solve.frequency give S of the ports, results.tdr their step responses.
+
+| Parameter | Type | Unit | Required | Description |
+|---|---|---|---|---|
+| `net` | string |  | yes | the net whose pads get ports |
+| `impedance` | number |  | no | the ports' impedance in ohms (default 50) |
+
 ## `pcb.element` — PCB lumped element
 
 A lumped element on a layer of the board's region (pcb.region), from the board point `from` to `to` — a chip resistor bridging two traces, a capacitor across a gap in one — as model.element.create puts one: its resistance, inductance and capacitance in series or in parallel, a sheet `width` wide across the gap's line when given.
@@ -140,6 +149,34 @@ The impedance of every routed segment of a net, its cross-section solved quasi-s
 |---|---|---|---|---|
 | `net` | string |  | yes | the signal net |
 | `pair` | string |  | no | its differential partner (default: the net its name pairs with, if the board has it) |
+
+## `pcb.class` — Net class
+
+Makes a class of nets and the impedance their lines should have, or changes the class named `name` (only what is given): its nets by name (`*` any characters), a single-ended `z0` and a differential `z_diff` target in ohms (either or both) within `tolerance` percent. pcb.check checks every segment against them. Saved with the board; undoable.
+
+| Parameter | Type | Unit | Required | Description |
+|---|---|---|---|---|
+| `name` | string |  | yes | the class's name |
+| `nets` | array |  | no | its nets: names or patterns, `*` any characters (a new class needs them) |
+| `z0` | number |  | no | the single-ended impedance its lines should have, ohms |
+| `z_diff` | number |  | no | the differential impedance its pairs should have, ohms |
+| `tolerance` | number |  | no | how far from the target passes, percent (default 10) |
+
+## `pcb.class.delete` — Delete net class
+
+Removes the net class named `name`. Undoable.
+
+| Parameter | Type | Unit | Required | Description |
+|---|---|---|---|---|
+| `name` | string |  | yes | the class |
+
+## `pcb.check` — Check line impedances
+
+Checks every segment of each net class's routed nets (or of `class`'s) against its targets, solved as pcb.impedance solves them: alone against `z0`, beside the partner its name pairs with against `z_diff` (2 z_odd). A class passes when every segment is within its tolerance. Each finding — off target, no reference plane, not beside its partner — names its class, net, segment (by the id its source gave it: a PCBCraft board's track id), layer, middle and length, its value, target and deviation.
+
+| Parameter | Type | Unit | Required | Description |
+|---|---|---|---|---|
+| `class` | string |  | no | the class to check (default every class) |
 
 ## `pcb.inspect` — Inspect PCB route
 

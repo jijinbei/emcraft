@@ -185,86 +185,152 @@ fn key(b: &Built) -> String {
     format!("{:?}{:?}{:?}{:?}", [nm(s.half_width), nm(s.floor), nm(s.ceiling)], strips, slabs, (b.below, b.above))
 }
 
-/// `pcb.impedance`: the impedance of every segment of `net` (and of its pair), its cross-section
-/// solved (module docs).
-pub fn impedance(s: &mut Session, p: &Params) -> Result<Value> {
-    let board = s.model.pcb().ok_or_else(|| failed("load a PCB with pcb.import, pcb.load or pcb.sample"))?;
-    let net = p.string("net").required()?;
-    if !board.segments.iter().any(|g| g.net == net) {
-        return Err(p.error("net", "names no routed net of this board"));
-    }
-    let has = |n: &str| board.segments.iter().any(|g| g.net == n);
-    let partner = match p.string("pair").optional()? {
-        Some(q) if q == net => return Err(p.error("pair", "must be another net")),
-        Some(q) if has(q) => Some(q.to_owned()),
-        Some(_) => return Err(p.error("pair", "names no routed net of this board")),
-        None => partner_name(net, has),
-    };
+/// What a segment's cross-section gives: nothing (and why), a single line's impedance (with its
+/// closed form, if its kind has one) or a pair's odd and even modes beside its partner.
+pub(crate) enum Outcome {
+    None(String),
+    Single {
+        z: f64,
+        eps_eff: f64,
+        closed: Option<f64>,
+    },
+    /// The partner, the gap between the strips' edges (m), the odd and even modes' (Z, ε_eff).
+    Pair {
+        partner: String,
+        gap: f64,
+        odd: (f64, f64),
+        even: (f64, f64),
+    },
+}
+
+/// A segment of a net and what its cross-section gives: its references' layers (below, above)
+/// and its kind (`microstrip`, `embedded microstrip`, `stripline`) when it has a reference.
+pub(crate) struct Solved<'a> {
+    pub segment: &'a Segment,
+    pub below: Option<usize>,
+    pub above: Option<usize>,
+    pub kind: Option<&'static str>,
+    pub outcome: Outcome,
+}
+
+/// The most segments of a net solved at once.
+const MAX_ROUTE: usize = 512;
+
+/// Every segment of `net` solved (its pair's segments beside it with `partner`), each distinct
+/// cross-section once, on the threads. Refused: more than [`MAX_ROUTE`] segments.
+pub(crate) fn solve_net<'a>(board: &'a Board, net: &str, partner: Option<&str>) -> std::result::Result<Vec<Solved<'a>>, String> {
     let segments: Vec<&Segment> = board.segments.iter().filter(|g| g.net == net).collect();
-    if segments.len() > 512 {
-        return Err(p.error("net", "has more than 512 segments"));
+    if segments.len() > MAX_ROUTE {
+        return Err(format!("`{net}` has more than {MAX_ROUTE} segments"));
     }
-    let built: Vec<Option<Built>> = segments.iter().map(|g| build(board, g, net, partner.as_deref())).collect();
-    // Each distinct cross-section solved once, on the threads.
+    let built: Vec<Option<Built>> = segments.iter().map(|g| build(board, g, net, partner)).collect();
     let mut distinct: BTreeMap<String, &Section> = BTreeMap::new();
     for b in built.iter().flatten().filter(|b| !b.section.strips.is_empty()) {
         distinct.entry(key(b)).or_insert(&b.section);
     }
     let solved: BTreeMap<String, std::result::Result<Line, String>> =
         distinct.into_par_iter().map(|(k, section)| (k, section.solve().map_err(|e| e.to_string()))).collect();
-    let (length, ohms) = (s.display.length, |z: f64| (z * 1e3).round() / 1e3);
+    let last = board.layers.len().saturating_sub(1);
+    let rows = segments
+        .into_iter()
+        .zip(built)
+        .map(|(g, b)| {
+            let Some(b) = b else {
+                return Solved { segment: g, below: None, above: None, kind: None, outcome: Outcome::None("its layer is not in the stackup".into()) };
+            };
+            let (below, above) = (b.below, b.above);
+            if b.section.strips.is_empty() {
+                let why = "no reference plane above or below: no impedance is defined".into();
+                return Solved { segment: g, below, above, kind: None, outcome: Outcome::None(why) };
+            }
+            let li = board.layers.iter().position(|l| l.name == g.layer).unwrap_or(0);
+            let kind = match (below.is_some() && above.is_some(), li == 0 || li == last) {
+                (true, _) => "stripline",
+                (false, true) => "microstrip",
+                (false, false) => "embedded microstrip",
+            };
+            let outcome = match solved.get(&key(&b)) {
+                Some(Ok(line)) => match (line.single(), line.pair(), b.partner) {
+                    (Some(z), _, _) => Outcome::Single { z, eps_eff: line.modes[0].eps_eff, closed: b.closed },
+                    (None, Some((odd, even)), Some((partner, gap))) => {
+                        Outcome::Pair { partner, gap, odd: (odd.impedance, odd.eps_eff), even: (even.impedance, even.eps_eff) }
+                    }
+                    _ => Outcome::None("the pair's modes could not be told apart".into()),
+                },
+                Some(Err(e)) => Outcome::None(e.clone()),
+                None => Outcome::None("not solved".into()),
+            };
+            Solved { segment: g, below, above, kind: Some(kind), outcome }
+        })
+        .collect();
+    Ok(rows)
+}
+
+/// The differential partner of `net`: `pair` when given (another routed net), else the one its
+/// name pairs with. `has` tells a routed net of the board.
+pub(crate) fn partner(p: &Params, net: &str, has: impl Fn(&str) -> bool) -> Result<Option<String>> {
+    match p.string("pair").optional()? {
+        Some(q) if q == net => Err(p.error("pair", "must be another net")),
+        Some(q) if has(q) => Ok(Some(q.to_owned())),
+        Some(_) => Err(p.error("pair", "names no routed net of this board")),
+        None => Ok(partner_name(net, has)),
+    }
+}
+
+/// Rounded to a milliohm, as replies show impedances.
+pub(crate) fn ohms(z: f64) -> f64 {
+    (z * 1e3).round() / 1e3
+}
+
+/// `pcb.impedance`: the impedance of every segment of `net` (and of its pair), its cross-section
+/// solved (module docs).
+pub fn impedance(s: &mut Session, p: &Params) -> Result<Value> {
+    let board = s.model.pcb().ok_or_else(|| failed("load a PCB with pcb.import, pcb.load or pcb.sample"))?;
+    let net = p.string("net").required()?;
+    let has = |n: &str| board.segments.iter().any(|g| g.net == n);
+    if !has(net) {
+        return Err(p.error("net", "names no routed net of this board"));
+    }
+    let partner = partner(p, net, has)?;
+    let rows = solve_net(board, net, partner.as_deref()).map_err(|e| p.error("net", &e))?;
+    let length = s.display.length;
     let name = |l: Option<usize>| l.and_then(|l| board.layers.get(l)).map(|l| l.name.clone());
-    let mut rows = Vec::new();
+    let mut shown = Vec::new();
     let mut weighted: Vec<(f64, f64)> = Vec::new();
-    for (g, b) in segments.iter().zip(&built) {
+    for r in &rows {
+        let g = r.segment;
         let len = direction(g).1;
         let mut row = json!({"segment": g.id, "layer": g.layer, "width": length.from_si(g.width), "length": length.from_si(len)});
-        let Some(b) = b else {
-            row["note"] = json!("its layer is not in the stackup");
-            rows.push(row);
-            continue;
-        };
-        row["below"] = json!(name(b.below));
-        row["above"] = json!(name(b.above));
-        if b.section.strips.is_empty() {
-            row["note"] = json!("no reference plane above or below: no impedance is defined");
-            rows.push(row);
-            continue;
+        if r.kind.is_some() || r.below.is_some() || r.above.is_some() {
+            row["below"] = json!(name(r.below));
+            row["above"] = json!(name(r.above));
         }
-        let li = board.layers.iter().position(|l| l.name == g.layer).unwrap_or(0);
-        let outer = li == 0 || li + 1 == board.layers.len();
-        row["kind"] = json!(match (b.below.is_some() && b.above.is_some(), outer) {
-            (true, _) => "stripline",
-            (false, true) => "microstrip",
-            (false, false) => "embedded microstrip",
-        });
-        match solved.get(&key(b)) {
-            Some(Ok(line)) => match (line.single(), line.pair(), &b.partner) {
-                (Some(z), _, _) => {
-                    row["z0"] = json!(ohms(z));
-                    row["eps_eff"] = json!(line.modes[0].eps_eff);
-                    if let Some(c) = b.closed {
-                        row["closed_form"] = json!(ohms(c));
-                    }
-                    weighted.push((z, len));
-                }
-                (None, Some((odd, even)), Some((pname, gap))) => {
-                    row["pair"] = json!(pname);
-                    row["gap"] = json!(length.from_si(*gap));
-                    row["z_odd"] = json!(ohms(odd.impedance));
-                    row["z_even"] = json!(ohms(even.impedance));
-                    row["z_diff"] = json!(ohms(2.0 * odd.impedance));
-                    row["z_common"] = json!(ohms(0.5 * even.impedance));
-                    row["eps_eff_odd"] = json!(odd.eps_eff);
-                    row["eps_eff_even"] = json!(even.eps_eff);
-                    weighted.push((2.0 * odd.impedance, len));
-                }
-                _ => row["note"] = json!("the pair's modes could not be told apart"),
-            },
-            Some(Err(e)) => row["note"] = json!(e),
-            None => row["note"] = json!("not solved"),
+        if let Some(kind) = r.kind {
+            row["kind"] = json!(kind);
         }
-        rows.push(row);
+        match &r.outcome {
+            Outcome::None(why) => row["note"] = json!(why),
+            Outcome::Single { z, eps_eff, closed } => {
+                row["z0"] = json!(ohms(*z));
+                row["eps_eff"] = json!(eps_eff);
+                if let Some(c) = closed {
+                    row["closed_form"] = json!(ohms(*c));
+                }
+                weighted.push((*z, len));
+            }
+            Outcome::Pair { partner, gap, odd, even } => {
+                row["pair"] = json!(partner);
+                row["gap"] = json!(length.from_si(*gap));
+                row["z_odd"] = json!(ohms(odd.0));
+                row["z_even"] = json!(ohms(even.0));
+                row["z_diff"] = json!(ohms(2.0 * odd.0));
+                row["z_common"] = json!(ohms(0.5 * even.0));
+                row["eps_eff_odd"] = json!(odd.1);
+                row["eps_eff_even"] = json!(even.1);
+                weighted.push((2.0 * odd.0, len));
+            }
+        }
+        shown.push(row);
     }
     let total: f64 = weighted.iter().map(|w| w.1).sum();
     let summary = (!weighted.is_empty()).then(|| {
@@ -275,7 +341,7 @@ pub fn impedance(s: &mut Session, p: &Params) -> Result<Value> {
         "net": net,
         "pair": partner,
         "length_unit": length.symbol(),
-        "sections": rows,
+        "sections": shown,
         "impedance": summary,
         "model": "each segment's cross-section by the finite elements, quasi-statically (its capacitances with and without the dielectrics): quasi-TEM, lossless, copper of no thickness, references the nearest planes of other nets above and below; a pair's segments with the partner's parallel segment beside (z_diff = 2 z_odd); the summary is length-weighted, of z0 or of z_diff",
     }))

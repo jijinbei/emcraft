@@ -106,6 +106,55 @@ fn line_impedances_come_from_their_cross_sections() {
     }
 }
 
+/// Net classes' targets checked segment by segment: the microstrip (52.8 Ω) within 10 % of 50 Ω,
+/// the stripline (67.0 Ω) off it, the far trace with no plane under it; the pair against its own
+/// z_diff within 1 %. Each finding names its segment by its id.
+#[test]
+fn net_classes_pass_and_fail_their_segments_by_id() {
+    let mut s = Session::new();
+    s.execute("pcb.load", &json!({"data": lines_board()})).unwrap();
+    let diff = s.execute("pcb.impedance", &json!({"net": "USB_D+"})).unwrap()["sections"][0]["z_diff"].as_f64().unwrap();
+    s.execute("pcb.class", &json!({"name": "50", "nets": ["MS", "SL", "FA*"], "z0": 50})).unwrap();
+    s.execute("pcb.class", &json!({"name": "USB", "nets": ["USB_D*"], "z_diff": diff, "tolerance": 1})).unwrap();
+    let r = s.execute("pcb.check", &json!({})).unwrap();
+    assert_eq!(r["verdict"], "fail");
+    let class = |name: &str| r["classes"].as_array().unwrap().iter().find(|c| c["class"] == name).cloned().unwrap();
+    assert!(class("50")["verdict"] == "fail" && class("50")["failing"] == 2 && class("50")["segments"] == 3, "{r}");
+    // The pair checked once, from USB_D+ beside USB_D-.
+    assert!(class("USB")["verdict"] == "pass" && class("USB")["segments"] == 1, "{r}");
+    let found = |id: &str| r["findings"].as_array().unwrap().iter().find(|f| f["segment"] == id).cloned();
+    let sl = found("sl").unwrap();
+    assert!(sl["problem"] == "off target" && sl["net"] == "SL" && sl["deviation_percent"].as_f64().unwrap() > 30.0, "{sl}");
+    assert_eq!(found("far").unwrap()["problem"], "no reference plane");
+    assert!(found("ms").is_none());
+    // Loosened, the class passes but for the far trace; one class checked alone.
+    s.execute("pcb.class", &json!({"name": "50", "tolerance": 40})).unwrap();
+    let r = s.execute("pcb.check", &json!({"class": "50"})).unwrap();
+    assert!(r["classes"].as_array().unwrap().len() == 1 && r["findings_total"] == 1, "{r}");
+    // Saved with the board; removed again.
+    assert_eq!(s.model().pcb().unwrap().classes.len(), 2);
+    s.execute("pcb.class.delete", &json!({"name": "USB"})).unwrap();
+    assert_eq!(s.model().pcb().unwrap().classes.len(), 1);
+    let before = s.model().clone();
+    for (command, bad) in [
+        ("pcb.class", json!({"name": "new", "z0": 50})),
+        ("pcb.class", json!({"name": "new", "nets": ["MS"]})),
+        ("pcb.class", json!({"name": "new", "nets": ["MS"], "z0": -5})),
+        ("pcb.class", json!({"name": "new", "nets": ["MS"], "z0": 1e9})),
+        ("pcb.class", json!({"name": "new", "nets": ["MS"], "z0": 50, "tolerance": 0})),
+        ("pcb.class", json!({"name": "new", "nets": ["MS"], "z0": 50, "tolerance": 500})),
+        ("pcb.class", json!({"name": "new", "nets": [3], "z0": 50})),
+        ("pcb.class", json!({"name": " ", "nets": ["MS"], "z0": 50})),
+        ("pcb.class.delete", json!({"name": "nope"})),
+        ("pcb.check", json!({"class": "nope"})),
+    ] {
+        assert!(s.execute(command, &bad).is_err(), "{command} {bad}");
+        assert_eq!(s.model(), &before);
+    }
+    s.execute("pcb.class.delete", &json!({"name": "50"})).unwrap();
+    assert!(s.execute("pcb.check", &json!({})).is_err());
+}
+
 #[test]
 fn board_commands_refuse_hostile_inputs_and_keep_the_model() {
     let mut s = Session::new();

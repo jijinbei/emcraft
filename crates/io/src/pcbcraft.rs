@@ -88,6 +88,7 @@ pub fn read(path: &Path, override_layers: Option<Vec<Layer>>) -> Result<Board> {
         copper: Vec::new(),
         notes: vec!["Packages, solder mask and copper thickness are not included in this routing model; pads are copper of their nets.".into()],
         region: None,
+        classes: vec![],
     };
     let note = |board: &mut Board, text: &str| {
         if board.notes.len() < 128 && !board.notes.iter().any(|n| n == text) {

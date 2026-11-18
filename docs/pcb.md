@@ -145,6 +145,20 @@ evaluated HJ/ABCD values for a 40 mm line. Unit tests cover narrow ground slots,
 invalid input and ordering; engine tests cover unit conversion, source-independent saving,
 reopening and undo; the UI scenario exercises actual route/net clicks and both ground examples.
 
+## Line impedances and net classes
+
+`pcb.impedance {"net":"USB_D+"}` solves every segment's cross-section (its strip between the
+nearest planes of other nets above and below, the board's dielectrics) quasi-statically by the
+finite elements: Z₀ and ε_eff of a single line, or, beside its partner (`pair`, else the net its
+name pairs with), the pair's odd and even modes, z_diff and z_common
+([`pcb-line-impedance`](../tests/oracle/pcb-line-impedance/README.md): within 1 % of
+Hammerstad–Jensen and Cohn).
+
+`pcb.class {"name":"USB","nets":["USB_D*"],"z_diff":90,"tolerance":10}` gives a class of nets
+the impedance its lines should have (`z0`, `z_diff` or both); `pcb.check` checks every segment
+of every class, each failing one a finding — off target, no reference plane, not beside its
+partner — named by its segment's id (a PCBCraft board's track UUID), net, layer and place.
+
 ## The board in 3D
 
 The PCB window shows the board in 3D beside the stage's panel, its top view a minimap in the
@@ -236,6 +250,11 @@ cut square at the port. With lumped ports alone `solve.frequency` gives their S 
 referred to each port's impedance), swept fast as waveguide ports are. [`pcb-lumped-line`](../tests/oracle/pcb-lumped-line/README.md)
 checks a 5 mm line between two such ports against the line's ABCD matrix: |S11| within 1.3e-3;
 the phase carries the feeds' own inductance (+1.8° at 1 GHz).
+
+`pcb.ports {"net":"DATA"}` does that for a whole net: a port at every free end of its route that
+lies on a pad of the net (`DATA.1`, `DATA.2`, …), the region set round the net first when none
+is; free ends at a via or on no copper are listed instead. Then `mesh.generate`,
+`solve.frequency` and `results.tdr`.
 
 Chip parts across a gap: `pcb.element {"name":"R1","layer":"F.Cu","from":[x, y],"to":[x, y],"resistance":100,"width":0.6}`
 puts a lumped element on a layer (a resistor, inductor and capacitor in series or in parallel,

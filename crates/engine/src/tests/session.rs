@@ -27,7 +27,8 @@ fn display_units_convert_at_the_boundary() {
 /// when it succeeds, not when it fails.
 #[test]
 fn every_model_change_drops_the_results_it_makes_wrong() {
-    let keeps = ["project.setup", "units.set", "model.material.create", "model.material.edit"];
+    // Net classes are targets: no result is solved from them.
+    let keeps = ["project.setup", "units.set", "model.material.create", "model.material.edit", "pcb.class", "pcb.class.delete"];
     for c in COMMANDS.iter().filter(|c| c.effect == Effect::Record) {
         assert_eq!(c.invalidates.is_none(), keeps.contains(&c.id), "{}", c.id);
     }
