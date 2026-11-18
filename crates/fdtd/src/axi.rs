@@ -1060,17 +1060,27 @@ impl AxiPic {
 }
 
 /// `row(k, values of row k, the layers' ψ of row k)` for each z row (of `nr` points) of
-/// `values`, on the threads: each value written by one of them, from values the update does not
+/// `values`, on the threads, a few rows to a thread's task (rows of a few dozen points are too
+/// small a task each): each value written by one of them, from values the update does not
 /// change (the same bits on any number of threads).
 fn by_rows(values: &mut [f64], psi: Option<&mut Vec<f64>>, nr: usize, row: impl Fn(usize, &mut [f64], Option<&mut [f64]>) + Sync + Send) {
     use rayon::prelude::*;
+    let nr = nr.max(1);
+    let rows = (TASK_POINTS / nr).max(1);
+    let block = |(b, v): (usize, &mut [f64]), p: Option<&mut [f64]>| match p {
+        Some(p) => v.chunks_mut(nr).zip(p.chunks_mut(nr)).enumerate().for_each(|(k, (v, p))| row(b * rows + k, v, Some(p))),
+        None => v.chunks_mut(nr).enumerate().for_each(|(k, v)| row(b * rows + k, v, None)),
+    };
     match psi {
         Some(psi) if psi.len() == values.len() => {
-            values.par_chunks_mut(nr).zip(psi.par_chunks_mut(nr)).enumerate().for_each(|(k, (v, p))| row(k, v, Some(p)));
+            values.par_chunks_mut(nr * rows).zip(psi.par_chunks_mut(nr * rows)).enumerate().for_each(|(b, (v, p))| block((b, v), Some(p)));
         }
-        _ => values.par_chunks_mut(nr).enumerate().for_each(|(k, v)| row(k, v, None)),
+        _ => values.par_chunks_mut(nr * rows).enumerate().for_each(|(b, v)| block((b, v), None)),
     }
 }
+
+/// About how many points of a field one task of [`by_rows`] updates.
+const TASK_POINTS: usize = 2048;
 
 #[path = "axi_device.rs"]
 pub mod device;

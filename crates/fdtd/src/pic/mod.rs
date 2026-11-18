@@ -576,43 +576,113 @@ pub(crate) enum Fate {
 /// A current's addition: its component (0–2), its point on that component's lattice, its value.
 pub(crate) type Addition = (u8, u32, f64);
 
-/// Particles pushed together on the threads (each chunk on one), and those pushed between
-/// replays of their additions (bounding the additions held).
+/// Particles pushed together on a thread (a chunk), and how many chunks may be pushed ahead of
+/// the one whose additions are being added (bounding the additions held).
 const CHUNK: usize = 256;
-const WAVE: usize = 64 * CHUNK;
+const AHEAD: usize = 64;
 
-/// `advance`s every one of `items` on the threads, each handing its current's additions (about
-/// `additions` of them) to the list it is given; the additions are then added to `j` one item
-/// after another in their order, as one thread would add them (the same bits on any number of
-/// threads). The items' fates, in order.
+/// `advance`s every one of `items` on the threads, a chunk to a task, each handing its current's
+/// additions (about `additions` of them) to the list it is given; while the threads push, each
+/// chunk's additions are added to `j` as soon as it and those before it are pushed (the three
+/// components side by side) — at each point of `j` in the items' order, as one thread would add
+/// them (the same bits on any number of threads). The items' fates, in order.
 pub(crate) fn advance_on_threads<P: Send>(
     items: &mut [P],
     additions: usize,
     advance: impl Fn(&mut P, &mut Vec<Addition>) -> Fate + Sync,
-    j: [&mut [f64]; 3],
+    mut j: [&mut [f64]; 3],
 ) -> Vec<Fate> {
-    use rayon::prelude::*;
-    let mut j = j;
+    let total = items.len().div_ceil(CHUNK);
     let mut fates = Vec::with_capacity(items.len());
-    for wave in items.chunks_mut(WAVE) {
-        let batches: Vec<(Vec<Addition>, Vec<Fate>)> = wave
-            .par_chunks_mut(CHUNK)
-            .map(|chunk| {
-                let mut adds = Vec::with_capacity(chunk.len() * additions);
-                let fates = chunk.iter_mut().map(|p| advance(p, &mut adds)).collect();
-                (adds, fates)
-            })
-            .collect();
-        for (adds, batch) in batches {
-            for (a, id, v) in adds {
-                if let Some(x) = j.get_mut(usize::from(a)).and_then(|j| j.get_mut(id as usize)) {
-                    *x += v;
-                }
+    let (done, pushed) = std::sync::mpsc::channel::<(usize, std::thread::Result<Pushed>)>();
+    let mut chunks = items.chunks_mut(CHUNK).enumerate();
+    let advance = &advance;
+    rayon::in_place_scope(|scope| {
+        let mut push_next = || {
+            if let Some((n, chunk)) = chunks.next() {
+                let done = done.clone();
+                scope.spawn(move |_| {
+                    // Caught and handed on, or the chunks after it would be waited for forever.
+                    let pushed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let mut adds = Vec::with_capacity(chunk.len() * additions);
+                        let fates = chunk.iter_mut().map(|p| advance(p, &mut adds)).collect();
+                        (by_component(adds), fates)
+                    }));
+                    // The receiver outlives the scope: the send does not fail.
+                    let _ = done.send((n, pushed));
+                });
             }
-            fates.extend(batch);
+        };
+        for _ in 0..AHEAD {
+            push_next();
+        }
+        let mut waiting = std::collections::BTreeMap::new();
+        let mut next = 0;
+        while next < total {
+            let Some((n, pushed)) = wait(&pushed) else { break };
+            match pushed {
+                Ok(p) => waiting.insert(n, p),
+                Err(escaped) => std::panic::resume_unwind(escaped),
+            };
+            let mut ready = Vec::new();
+            while let Some((adds, batch)) = waiting.remove(&next) {
+                ready.push(adds);
+                fates.extend(batch);
+                next += 1;
+                push_next();
+            }
+            let [jr, jz, jt] = &mut j;
+            rayon::join(|| add_ready(jr, &ready, 0), || rayon::join(|| add_ready(jz, &ready, 1), || add_ready(jt, &ready, 2)));
+        }
+    });
+    fates
+}
+
+/// A chunk pushed: its additions by component, its particles' fates.
+type Pushed = ([Vec<(u32, f64)>; 3], Vec<Fate>);
+
+/// Component `a`'s additions of the chunks `ready`, in their order, added to `j`.
+fn add_ready(j: &mut [f64], ready: &[[Vec<(u32, f64)>; 3]], a: usize) {
+    for adds in ready {
+        for &(id, v) in adds.get(a).into_iter().flatten() {
+            if let Some(x) = j.get_mut(id as usize) {
+                *x += v;
+            }
         }
     }
-    fates
+}
+
+/// A chunk's additions split by their component, each in its order; those of no component
+/// dropped.
+fn by_component(adds: Vec<Addition>) -> [Vec<(u32, f64)>; 3] {
+    let mut split: [Vec<(u32, f64)>; 3] = std::array::from_fn(|_| Vec::with_capacity(adds.len() / 2));
+    for (a, id, v) in adds {
+        if let Some(c) = split.get_mut(usize::from(a)) {
+            c.push((id, v));
+        }
+    }
+    split
+}
+
+/// The next chunk pushed: waited for on a thread outside the pool, and on one of its own threads
+/// (a pool of one is its caller's) its waiting tasks run meanwhile. `None` when no chunk is left
+/// to come.
+fn wait<T>(pushed: &std::sync::mpsc::Receiver<T>) -> Option<T> {
+    use std::sync::mpsc::TryRecvError;
+    if rayon::current_thread_index().is_none() {
+        return pushed.recv().ok();
+    }
+    loop {
+        match pushed.try_recv() {
+            Ok(x) => return Some(x),
+            Err(TryRecvError::Disconnected) => return None,
+            Err(TryRecvError::Empty) => {
+                if rayon::yield_now() != Some(rayon::Yield::Executed) {
+                    std::thread::yield_now();
+                }
+            }
+        }
+    }
 }
 
 impl Moved {

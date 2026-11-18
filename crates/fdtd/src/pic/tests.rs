@@ -454,3 +454,27 @@ fn a_run_gives_the_same_bits_on_any_number_of_threads() {
     let many = rayon::ThreadPoolBuilder::new().num_threads(7).build().unwrap().install(run);
     assert!(one == many, "one thread and seven differ");
 }
+
+#[test]
+fn a_push_that_panics_unwinds_to_the_caller_instead_of_hanging() {
+    // The chunks after it wait for its additions: a panic in one chunk's push must reach the
+    // caller (whose last-resort guard catches it), from inside a pool of one and from outside
+    // any pool.
+    let call = || {
+        std::panic::catch_unwind(|| {
+            let mut items: Vec<usize> = (0..5000).collect();
+            let mut j = [vec![0.0; 8], vec![0.0; 8], vec![0.0; 8]];
+            let [a, b, c] = &mut j;
+            #[allow(clippy::panic)]
+            advance_on_threads(&mut items, 1, |p, _| if *p == 3000 { panic!("pushed wrong") } else { Fate::Kept }, [a, b, c]).len()
+        })
+        .is_err()
+    };
+    let (send, receive) = std::sync::mpsc::channel();
+    let s = send.clone();
+    std::thread::spawn(move || s.send(call()));
+    std::thread::spawn(move || send.send(rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap().install(call)));
+    for _ in 0..2 {
+        assert_eq!(receive.recv_timeout(std::time::Duration::from_secs(20)), Ok(true), "the panic did not reach the caller");
+    }
+}
