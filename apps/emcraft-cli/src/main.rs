@@ -65,7 +65,7 @@ fn main() -> ExitCode {
             Some("exec") => exec(args.get(1), args.get(2)),
             Some("sample") => sample(&args[1..]),
             Some("-V" | "--version" | "version") => {
-                out!("emcraft-cli {}", env!("CARGO_PKG_VERSION"));
+                out!("{}", version());
                 Ok(())
             }
             Some("-h" | "--help" | "help") | None => {
@@ -214,4 +214,13 @@ fn sample(args: &[String]) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// `emcraft-cli <version>`, and the commit it was built from in a git checkout
+/// (`emcraft-cli 0.1.0 (v0.1.0-25-gc0d75490)`).
+fn version() -> String {
+    match env!("EMCRAFT_COMMIT") {
+        "" => format!("emcraft-cli {}", env!("CARGO_PKG_VERSION")),
+        commit => format!("emcraft-cli {} ({commit})", env!("CARGO_PKG_VERSION")),
+    }
 }
