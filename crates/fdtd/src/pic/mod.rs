@@ -41,6 +41,7 @@ mod filter;
 mod grid;
 mod media;
 mod plane;
+pub(crate) mod scheme;
 #[cfg(test)]
 mod tests;
 
@@ -552,37 +553,10 @@ impl Pic {
             .collect()
     }
 
-    /// One step: emission, the particles pushed and moved, their current, the fields.
+    /// One step: emission, the particles pushed and moved, their current, the fields
+    /// ([`scheme::step`], as a body of revolution takes it).
     pub fn step(&mut self) -> Result<Moved> {
-        let mut moved = Moved::default();
-        self.emit_step(&mut moved)?;
-        self.j.iter_mut().for_each(|j| j.fill(0.0));
-        let Pic { grid, dt, pusher, e, b, j, populations, media, surface, .. } = self;
-        for pop in populations.iter_mut() {
-            advance_all((grid, media.as_ref()), [e, b], (j, surface), (*pusher, *dt), pop, &mut moved);
-        }
-        for (a, values) in self.j.iter_mut().enumerate() {
-            filter::smooth(&self.grid, self.grid.e(a), values, self.smoothing);
-        }
-        if let Some(a) = self.hold {
-            let mean = self.j[a].iter().sum::<f64>() / self.j[a].len().max(1) as f64;
-            self.j[a].iter_mut().for_each(|v| *v -= mean);
-        }
-        fields::faraday(&self.grid, &self.e, &mut self.b, 0.5 * self.dt, self.absorber.as_mut());
-        fields::ampere(&self.grid, &mut self.e, (&self.b, &self.j), self.dt, (self.media.as_ref(), self.absorber.as_mut()));
-        fields::faraday(&self.grid, &self.e, &mut self.b, 0.5 * self.dt, self.absorber.as_mut());
-        self.steps += 1;
-        Ok(moved)
-    }
-
-    /// The walls' emission and the bunches at the step's start; none into a metal cell.
-    fn emit_step(&mut self, moved: &mut Moved) -> Result<()> {
-        for (k, new) in self.births(self.particles(), moved)? {
-            if let Some(pop) = self.populations.get_mut(k) {
-                pop.particles.extend(new);
-            }
-        }
-        Ok(())
+        scheme::step(self)
     }
 
     /// The particles born at the step's start (each with its population), the run holding
@@ -817,29 +791,6 @@ fn advance(
     Fate::Kept
 }
 
-/// Advances `pop`'s particles on the threads ([`advance_on_threads`]), the charge they leave on
-/// walls and bodies and what they do to `moved` then added in their order, the absorbed and
-/// lost taken out.
-fn advance_all(
-    (grid, media): (&Grid, Option<&media::Media>),
-    fields: [&[Vec<f64>; 3]; 2],
-    (j, surface): (&mut [Vec<f64>; 3], &mut Vec<f64>),
-    (pusher, dt): (Pusher, f64),
-    pop: &mut Population,
-    moved: &mut Moved,
-) {
-    let species = pop.species;
-    let [jx, jy, jz] = j;
-    let fates = advance_on_threads(
-        &mut pop.particles,
-        ADDITIONS,
-        |p, adds| advance((grid, media), fields, (species, pusher, dt), p, &mut |a, id, v| adds.push((a as u8, id as u32, v))),
-        [jx.as_mut_slice(), jy.as_mut_slice(), jz.as_mut_slice()],
-    );
-    moved.tally(species.charge, pop.particles.iter().map(|p| p.w), &fates, |at, q| deposit::charge(grid, surface, at, q));
-    keep_kept(&mut pop.particles, &fates);
-}
-
 /// About how many additions a particle's current makes (Esirkepov's 4 × 4 × 4 window).
 const ADDITIONS: usize = 64;
 
@@ -876,4 +827,70 @@ fn clip(grid: &Grid, x0: V3, x1: V3) -> (V3, Option<(usize, bool)>) {
         to[d] = if high { grid.axes[d].length() } else { 0.0 };
     }
     (to, hit)
+}
+
+/// The box's step: points pushed and deposited by Esirkepov's scheme, the current smoothed and a
+/// held voltage's mean current taken out, the fields through the media and the layers.
+impl scheme::Scheme for Pic {
+    type Item = Particle;
+    const ADDITIONS: usize = ADDITIONS;
+
+    /// The walls' emission and the bunches at the step's start; none into a metal cell.
+    fn births_now(&mut self, moved: &mut Moved) -> Result<()> {
+        for (k, new) in self.births(self.particles(), moved)? {
+            if let Some(pop) = self.populations.get_mut(k) {
+                pop.particles.extend(new);
+            }
+        }
+        Ok(())
+    }
+    fn take_current(&mut self) -> [Vec<f64>; 3] {
+        self.j.iter_mut().for_each(|j| j.fill(0.0));
+        std::mem::take(&mut self.j)
+    }
+    fn put_current(&mut self, j: [Vec<f64>; 3]) {
+        self.j = j;
+    }
+    fn populations(&self) -> usize {
+        self.populations.len()
+    }
+    fn take(&mut self, k: usize) -> (Species, Vec<Particle>) {
+        self.populations.get_mut(k).map_or((emcraft_particles::ELECTRON, Vec::new()), |p| (p.species, std::mem::take(&mut p.particles)))
+    }
+    fn put(&mut self, k: usize, items: Vec<Particle>) {
+        if let Some(p) = self.populations.get_mut(k) {
+            p.particles = items;
+        }
+    }
+    fn advance(&self, species: Species, p: &mut Particle, adds: &mut Vec<Addition>) -> Fate {
+        let (fields, setup) = ([&self.e, &self.b], (species, self.pusher, self.dt));
+        advance((&self.grid, self.media.as_ref()), fields, setup, p, &mut |a, id, v| adds.push((a as u8, id as u32, v)))
+    }
+    fn weight(p: &Particle) -> f64 {
+        p.w
+    }
+    fn absorbed(&mut self, at: V3, q: f64) {
+        deposit::charge(&self.grid, &mut self.surface, at, q);
+    }
+    fn ready_current(&mut self) {
+        for (a, values) in self.j.iter_mut().enumerate() {
+            filter::smooth(&self.grid, self.grid.e(a), values, self.smoothing);
+        }
+        if let Some(a) = self.hold {
+            let mean = self.j[a].iter().sum::<f64>() / self.j[a].len().max(1) as f64;
+            self.j[a].iter_mut().for_each(|v| *v -= mean);
+        }
+    }
+    fn faraday(&mut self, dt: f64) {
+        fields::faraday(&self.grid, &self.e, &mut self.b, dt, self.absorber.as_mut());
+    }
+    fn ampere(&mut self) {
+        fields::ampere(&self.grid, &mut self.e, (&self.b, &self.j), self.dt, (self.media.as_ref(), self.absorber.as_mut()));
+    }
+    fn dt(&self) -> f64 {
+        self.dt
+    }
+    fn tick(&mut self) {
+        self.steps += 1;
+    }
 }

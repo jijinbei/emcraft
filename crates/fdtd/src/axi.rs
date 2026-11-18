@@ -41,7 +41,8 @@ use emcraft_model::units::{C0, EPS0, MU0};
 use emcraft_particles::{Pusher, Species, V3, push, velocity};
 
 use crate::pic::deposit::Window;
-use crate::pic::{Axis, Bunch, Energy, Fate, Moved, Wall, advance_on_threads, keep_kept, zeros};
+use crate::pic::scheme::Scheme;
+use crate::pic::{Addition, Axis, Bunch, Energy, Fate, Moved, Wall, zeros};
 pub use crate::pic::{Plane, PlaneTaps};
 use crate::yee::Cpml;
 use crate::{FdtdError, MAX_CELLS, Result, invalid};
@@ -689,42 +690,7 @@ impl AxiPic {
 
     /// One step.
     pub fn step(&mut self) -> Result<Moved> {
-        let mut moved = Moved::default();
-        self.jr.fill(0.0);
-        self.jz.fill(0.0);
-        self.jt.fill(0.0);
-        self.emit(&mut moved)?;
-        let (mut jr, mut jz, mut jt) = (std::mem::take(&mut self.jr), std::mem::take(&mut self.jz), std::mem::take(&mut self.jt));
-        for k in 0..self.populations.len() {
-            let species = self.populations[k].species;
-            let mut rings = std::mem::take(&mut self.populations[k].rings);
-            let this = &*self;
-            let fates = advance_on_threads(
-                &mut rings,
-                ADDITIONS,
-                |p, adds| this.advance(species, p, &mut |w, id, v| adds.push((w, id as u32, v))),
-                [jr.as_mut_slice(), jz.as_mut_slice(), jt.as_mut_slice()],
-            );
-            moved.tally(species.charge, rings.iter().map(|p| p.w), &fates, |_, _| {});
-            keep_kept(&mut rings, &fates);
-            self.populations[k].rings = rings;
-        }
-        (self.jr, self.jz, self.jt) = (jr, jz, jt);
-        self.faraday(0.5 * self.dt);
-        self.ampere();
-        self.faraday(0.5 * self.dt);
-        self.steps += 1;
-        Ok(moved)
-    }
-
-    /// The injections' rings for this step, on their ends.
-    fn emit(&mut self, moved: &mut Moved) -> Result<()> {
-        for (population, new) in self.births(self.rings(), moved)? {
-            if let Some(pop) = self.populations.get_mut(population) {
-                pop.rings.extend(new);
-            }
-        }
-        Ok(())
+        crate::pic::scheme::step(self)
     }
 
     /// The injections' rings for this step, each batch with the population it joins, the run
@@ -1034,3 +1000,60 @@ mod tests;
 #[cfg(test)]
 #[path = "axi_bwo_tests.rs"]
 mod bwo_tests;
+
+/// The body of revolution's step: rings pushed in the plane θ = 0 and deposited through their
+/// faces' areas, the fields' circulations over the rings' faces (the module's docs).
+impl Scheme for AxiPic {
+    type Item = Ring;
+    const ADDITIONS: usize = ADDITIONS;
+
+    /// The injections' rings for this step, on their ends.
+    fn births_now(&mut self, moved: &mut Moved) -> Result<()> {
+        for (population, new) in self.births(self.rings(), moved)? {
+            if let Some(pop) = self.populations.get_mut(population) {
+                pop.rings.extend(new);
+            }
+        }
+        Ok(())
+    }
+    fn take_current(&mut self) -> [Vec<f64>; 3] {
+        for j in [&mut self.jr, &mut self.jz, &mut self.jt] {
+            j.fill(0.0);
+        }
+        [std::mem::take(&mut self.jr), std::mem::take(&mut self.jz), std::mem::take(&mut self.jt)]
+    }
+    fn put_current(&mut self, j: [Vec<f64>; 3]) {
+        [self.jr, self.jz, self.jt] = j;
+    }
+    fn populations(&self) -> usize {
+        self.populations.len()
+    }
+    fn take(&mut self, k: usize) -> (Species, Vec<Ring>) {
+        self.populations.get_mut(k).map_or((emcraft_particles::ELECTRON, Vec::new()), |p| (p.species, std::mem::take(&mut p.rings)))
+    }
+    fn put(&mut self, k: usize, items: Vec<Ring>) {
+        if let Some(p) = self.populations.get_mut(k) {
+            p.rings = items;
+        }
+    }
+    fn advance(&self, species: Species, p: &mut Ring, adds: &mut Vec<Addition>) -> Fate {
+        AxiPic::advance(self, species, p, &mut |w, id, v| adds.push((w, id as u32, v)))
+    }
+    fn weight(p: &Ring) -> f64 {
+        p.w
+    }
+    /// The rings' charge on the walls is not kept.
+    fn absorbed(&mut self, _: V3, _: f64) {}
+    fn faraday(&mut self, dt: f64) {
+        AxiPic::faraday(self, dt);
+    }
+    fn ampere(&mut self) {
+        AxiPic::ampere(self);
+    }
+    fn dt(&self) -> f64 {
+        self.dt
+    }
+    fn tick(&mut self) {
+        self.steps += 1;
+    }
+}
