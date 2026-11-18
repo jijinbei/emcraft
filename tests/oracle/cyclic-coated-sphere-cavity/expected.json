@@ -1,0 +1,8 @@
+{
+ "title": "A quarter of the spherical cavity with a coated sphere (radius 10 mm; a core of εr = 9 and radius 2.5 mm inside a ceramic sphere of εr = 4 and radius 5 mm): TM11, the member of the triplet unchanged by the quarter turn",
+ "kind": "theory",
+ "source": "Three-layer spherical cavity (R. F. Harrington, Time-Harmonic Electromagnetic Fields, 1961, §6.10, carried through the layers; the roots computed by emcraft-theory, bessel::coated_sphere_resonances); of TM11's three modes the one about the rotation's axis is the harmonic m = 0 of a quarter",
+ "quantities": [
+  {"id": "tm11", "quantity": "TM11 resonance on the quarter, harmonic m = 0 (GHz)", "measure": {"step": "modes", "pointer": "/harmonics/0/modes/0"}, "value": 9.980997513965061, "tolerance": {"relative": 1e-3}, "reason": "a quarter of three regions one inside the next, each cut by the sector's two planes and capped there, 3 mm tetrahedra of order 2, the spheres divided along circles of latitude so the two cut faces are each other's turn: −4.1e-4"}
+ ]
+}

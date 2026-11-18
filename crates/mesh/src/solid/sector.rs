@@ -165,10 +165,23 @@ fn clip(t: &mut crate::csg::Surface, d: &dyn Fn(Point3) -> f64, onto: &dyn Fn(Po
 /// triangles into one facet and triangulate it afresh), the first face's `base..base + T`, the
 /// second's `base + T..base + 2T`, triangle i of the one the turn of triangle i of the other.
 /// `size` is the element size, `scale` the model's (its box's diagonal).
-pub(super) fn sector(t: Tessellation, rot: &Rotation, size: f64, scale: f64, bodies: &[Tessellation]) -> Result<Closed> {
+pub(super) fn sector(t: Tessellation, rot: &Rotation, size: f64, scale: f64, (bodies, around): (&[Tessellation], &Around)) -> Result<Closed> {
     let tol = GEOMETRY_TOLERANCE * scale;
     let halves = [Half::new(rot, rot.start(), tol), Half::new(rot, rot.start() + rot.angle(), tol)];
     let mut t = with_bodies(t, bodies);
+    // A point of the inclusions' patches a hair off the axis or off a cut plane (a contact
+    // triangulated anew has its points where the triangulation put them) is on it: cut as it
+    // lies, it would leave triangles a hair across.
+    let near = 1e-6 * scale;
+    let first_body = t.surface.triangles.iter().zip(&t.surface.tags).filter(|(_, g)| **g >= BODY_TAG).flat_map(|(tri, _)| tri.iter().copied()).min();
+    for p in t.surface.positions.iter_mut().skip(first_body.map_or(usize::MAX, |v| v as usize)) {
+        let h = halves[0];
+        if (p.x - h.centre[0]).hypot(p.y - h.centre[1]) <= near {
+            *p = Point3::new(h.centre[0], h.centre[1], p.z);
+        } else if let Some(h) = halves.iter().find(|h| Half { tol: near, ..**h }.holds(*p)) {
+            *p = h.point(h.local(*p));
+        }
+    }
     // Inside the sector: past the first plane towards +φ, short of the second.
     for (f, h) in halves.iter().enumerate() {
         let n = h.normal();
@@ -181,20 +194,21 @@ pub(super) fn sector(t: Tessellation, rot: &Rotation, size: f64, scale: f64, bod
     if t.surface.triangles.iter().zip(&t.surface.tags).all(|(_, &g)| g >= BODY_TAG) {
         return Err(fail("nothing of the solid lies in the sector"));
     }
-    close(t, rot, scale, Some(size), &[], bodies.len())
+    close(t, rot, scale, Some(size), &[], (bodies.len(), around))
 }
 
 /// The tags from which a triangle is an inclusion's across the cut faces (body `tag − BODY_TAG`),
 /// not the solid's.
 const BODY_TAG: u32 = 1 << 30;
 
-/// An inclusion across the sector's cut faces, cut with it: its surface inside the sector (the
-/// interface with the solid, open on the cut planes, oriented out of it) and its two caps there
-/// (each the other's turn, oriented out of the sector), one tag per triangle each.
+/// Which of the inclusions' surfaces (the `bodies` a sector is cut with: patches, each between
+/// two spaces) lie around the solid's own region (`host`: its holes) and around each inclusion
+/// (`spaces[i]`: its own surface, the bodies inside it and those it touches). A space's part of
+/// a cut face — an inclusion's cap — is what the traces of the patches around it enclose.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Cut {
-    pub(super) open: Tessellation,
-    pub(super) caps: Tessellation,
+pub(super) struct Around {
+    pub(super) host: Vec<usize>,
+    pub(super) spaces: Vec<Vec<usize>>,
 }
 
 /// `t` with each of `bodies` appended, its triangles tagged `BODY_TAG + k`.
@@ -244,7 +258,7 @@ fn own_tessellation(positions: &[Point3], tris: &[[u32; 3]]) -> Tessellation {
 /// The sector's open surface `t` (its cut faces missing) closed by two faces each other's turn:
 /// triangulated from the union of the two outlines' points and `inner` (points inside the
 /// first face, on its plane's (s, t)), refined to `refine` when given, else taken as they are.
-fn close(t: Tessellation, rot: &Rotation, scale: f64, refine: Option<f64>, inner: &[[f64; 2]], bodies: usize) -> Result<Closed> {
+fn close(t: Tessellation, rot: &Rotation, scale: f64, refine: Option<f64>, inner: &[[f64; 2]], (bodies, around): (usize, &Around)) -> Result<Closed> {
     let tol = GEOMETRY_TOLERANCE * scale;
     let merge = 1e-7 * scale;
     let halves = [Half::new(rot, rot.start(), tol), Half::new(rot, rot.start() + rot.angle(), tol)];
@@ -255,7 +269,7 @@ fn close(t: Tessellation, rot: &Rotation, scale: f64, refine: Option<f64>, inner
     };
     let base = t.surface.tags.iter().filter(|&&g| g < BODY_TAG).map(|g| g + 1).max().unwrap_or(0).max(t.analytic.len() as u32);
     let size = refine.unwrap_or(scale);
-    let outlines = cut_outlines(&t, &halves, merge)?;
+    let outlines = cut_outlines(&t, &halves, merge, around)?;
     let lengths = Lengths { tol, merge, size };
     let pos = onto_first(&t, &halves, &outlines.edges, t.surface.positions.clone(), lengths, refine.is_some())?;
     // Points given on the axis (a mesher's, taken back) split its stretch of the outline: they
@@ -268,23 +282,32 @@ fn close(t: Tessellation, rot: &Rotation, scale: f64, refine: Option<f64>, inner
         return Err(fail("the sector's two cut faces differ: the solid is not symmetric under the turn"));
     }
     let segs: Vec<[u32; 2]> = first.into_iter().collect();
-    // Each body's own outline on the first face (the solid's, then each inclusion's), split at the
-    // union's points as the faces' are.
-    let owned = |who: Option<usize>| -> Vec<[u32; 2]> {
-        let edges = outlines.edges[0].iter().filter(|e| outlines.owner_of(e[0]) == who && outlines.owner_of(e[1]) == who);
+    // The solid's own outline on the first face and, for each inclusion, the traces of the
+    // patches around it, split at the union's points as the faces' are.
+    let owned = |who: &dyn Fn(Option<usize>) -> bool| -> Vec<[u32; 2]> {
+        let edges = outlines.edges[0].iter().filter(|e| who(outlines.owner_of(e[0])) && who(outlines.owner_of(e[1])));
         union.chain(0, edges, merge).into_iter().collect()
     };
-    let host = owned(None);
-    let rims: Vec<Vec<[u32; 2]>> = (0..bodies).map(|k| owned(Some(k))).collect();
+    let host = owned(&|o| o.is_none());
+    let rims: Vec<Vec<[u32; 2]>> = around.spaces.iter().map(|patches| owned(&|o| o.is_some_and(|k| patches.contains(&k)))).collect();
     union.add_inner(inner, &segs, near);
     // Refined to the size, or (taking a mesher's points back) only as fine as the points given.
     let fine = if refine.is_some() { size } else { 4.0 * union.points.iter().fold(0.0f64, |m, q| m.max(q[0].abs()).max(q[1].abs())) };
-    let faces = triangulate_faces(&union.points, &segs, &host, &rims, fine, bodies)?;
+    let faces = triangulate_faces(&union.points, &segs, &host, &rims, fine)?;
     let FaceVertices { mut positions, ids } = face_vertices(&faces.points, &union.vertex, &halves, &pos, merge);
+    // Where several patches' traces meet, each has a vertex at the point: all at its place.
+    for f in 0..2 {
+        for (&v, &k) in &union.point_of[f] {
+            let at = ids[f].get(k).and_then(|id| positions.get(*id as usize)).copied();
+            if let (Some(at), Some(p)) = (at, positions.get_mut(v as usize)) {
+                *p = at;
+            }
+        }
+    }
     let inserts = outline_inserts(&outlines.edges, &union.point_of, &faces.points, &ids, merge);
     let mut split = split_open(&t.surface, &inserts, &mut positions);
     push_faces((&mut split.triangles, &mut split.tags), &positions, &halves, &faces.tris, &ids, base);
-    let caps: Vec<Vec<[u32; 3]>> = (0..bodies)
+    let caps: Vec<Vec<[u32; 3]>> = (0..rims.len())
         .map(|k| {
             let mine: Vec<[u32; 3]> = faces.cap_tris.iter().zip(&faces.cap_of).filter(|(_, b)| **b == k).map(|(tri, _)| *tri).collect();
             let (mut tri_k, mut tag_k) = (Vec::new(), Vec::new());
@@ -294,31 +317,25 @@ fn close(t: Tessellation, rot: &Rotation, scale: f64, refine: Option<f64>, inner
         .collect();
     onto_surfaces(&split, &t.analytic, &halves, &mut positions, lengths);
     let Split { mut triangles, mut tags } = split;
-    // The inclusions' triangles out of the solid's: their open surfaces and caps their own.
-    let mut cuts = Vec::with_capacity(bodies);
-    if bodies > 0 {
-        let mut opens: Vec<Vec<[u32; 3]>> = vec![Vec::new(); bodies];
-        let (mut solid_tris, mut solid_tags) = (Vec::new(), Vec::new());
-        for (tri, &g) in triangles.iter().zip(&tags) {
-            if g >= BODY_TAG {
-                if let Some(o) = opens.get_mut((g - BODY_TAG) as usize) {
-                    o.push(*tri);
-                }
-            } else {
+    // The inclusions' triangles out of the solid's: each patch's open surface its own.
+    let mut opens: Vec<Vec<[u32; 3]>> = vec![Vec::new(); bodies];
+    let (mut solid_tris, mut solid_tags) = (Vec::new(), Vec::new());
+    for (tri, &g) in triangles.iter().zip(&tags) {
+        match opens.get_mut(g.wrapping_sub(BODY_TAG) as usize) {
+            Some(o) if g >= BODY_TAG => o.push(*tri),
+            _ => {
                 solid_tris.push(*tri);
                 solid_tags.push(g);
             }
         }
-        for (o, c) in opens.iter().zip(&caps) {
-            cuts.push(Cut { open: own_tessellation(&positions, o), caps: own_tessellation(&positions, c) });
-        }
-        triangles = solid_tris;
-        tags = solid_tags;
     }
+    (triangles, tags) = (solid_tris, solid_tags);
+    let opens = opens.iter().map(|o| own_tessellation(&positions, o)).collect();
+    let caps = caps.iter().map(|c| own_tessellation(&positions, c)).collect();
     let mut out = t;
     out.surface = compacted(triangles, tags, &positions);
     out.analytic.resize(base as usize + 2 * faces.tris.len(), None);
-    Ok(Closed { tessellation: out, base, cuts })
+    Ok(Closed { tessellation: out, base, opens, caps })
 }
 
 /// The lengths a sector is closed with (m): the geometric tolerance, the distance within which
@@ -331,15 +348,18 @@ struct Lengths {
 }
 
 /// A sector closed: its tessellation, the first of the cut faces' tags (the mesher freezes them),
-/// and the inclusions across the cut faces.
+/// each of the inclusions' patches as it lies in the sector (open on the cut planes where it
+/// crosses them, oriented as it was) and each inclusion's caps on the two cut faces (each the
+/// other's turn, oriented out of the sector; none for one the planes miss), one tag per triangle.
 pub(super) struct Closed {
     pub(super) tessellation: Tessellation,
     pub(super) base: u32,
-    pub(super) cuts: Vec<Cut>,
+    pub(super) opens: Vec<Tessellation>,
+    pub(super) caps: Vec<Tessellation>,
 }
 
-/// The open outline the cut left on each plane, with the axis' stretches inside each body
-/// closing it, and each vertex's body (the solid's, none, or an inclusion's across the cut).
+/// The open outline the cut left on each plane, with the axis' stretches inside each space
+/// closing it, and each vertex's patch (none for the solid's own surface).
 struct Outlines {
     edges: [Vec<[u32; 2]>; 2],
     owner: BTreeMap<u32, Option<usize>>,
@@ -351,12 +371,14 @@ impl Outlines {
     }
 }
 
-fn cut_outlines(t: &Tessellation, halves: &[Half; 2], merge: f64) -> Result<Outlines> {
+fn cut_outlines(t: &Tessellation, halves: &[Half; 2], merge: f64, around: &Around) -> Result<Outlines> {
     let pos = &t.surface.positions;
     let open = outline(&t.surface.triangles);
     let on = |h: &Half, v: u32| pos.get(v as usize).is_some_and(|p| h.holds(*p));
     let mut edges: [Vec<[u32; 2]>; 2] = [0, 1].map(|f| open.iter().copied().filter(|e| on(&halves[f], e[0]) && on(&halves[f], e[1])).collect());
-    let axis = |v: u32| pos.get(v as usize).is_some_and(|p| halves[0].local(*p)[0].abs() <= merge);
+    // On the axis: at no distance along the face's own ray (a patch's trace may end off it,
+    // where it meets another's, and the other plane's points are at none along this one's).
+    let axis = |f: usize, v: u32| pos.get(v as usize).is_some_and(|p| halves[f].local(*p)[0].abs() <= merge);
     let mut owner: BTreeMap<u32, Option<usize>> = BTreeMap::new();
     for (tri, &g) in t.surface.triangles.iter().zip(&t.surface.tags) {
         for &v in tri {
@@ -364,19 +386,21 @@ fn cut_outlines(t: &Tessellation, halves: &[Half; 2], merge: f64) -> Result<Outl
         }
     }
     let owner_of = |v: u32| owner.get(&v).copied().flatten();
-    for outline in &mut edges {
+    for (f, outline) in edges.iter_mut().enumerate() {
         let mut degree: BTreeMap<u32, usize> = BTreeMap::new();
         for e in outline.iter() {
             for v in e {
                 *degree.entry(*v).or_insert(0) += 1;
             }
         }
-        // Each body's outline closed on the axis by its own stretches of it.
-        let mut ends: BTreeMap<Option<usize>, Vec<u32>> = BTreeMap::new();
-        for v in degree.into_iter().filter(|(v, d)| *d % 2 == 1 && axis(*v)).map(|(v, _)| v) {
-            ends.entry(owner_of(v)).or_default().push(v);
-        }
-        for list in ends.values_mut() {
+        // Each space's outline closed on the axis by its own stretches of it: the solid's region
+        // between its own surface and its holes', an inclusion between the patches around it (a
+        // patch's end on the axis is an end of the stretch on either side of it).
+        let loose: Vec<u32> = degree.into_iter().filter(|(v, d)| *d % 2 == 1 && axis(f, *v)).map(|(v, _)| v).collect();
+        let of = |holds: &dyn Fn(Option<usize>) -> bool| -> Vec<u32> { loose.iter().copied().filter(|v| holds(owner_of(*v))).collect() };
+        let mut ends: Vec<Vec<u32>> = vec![of(&|o| o.is_none_or(|k| around.host.contains(&k)))];
+        ends.extend(around.spaces.iter().map(|patches| of(&|o| o.is_some_and(|k| patches.contains(&k)))));
+        for list in &mut ends {
             list.sort_by(|a, b| pos[*a as usize].z.total_cmp(&pos[*b as usize].z).then(a.cmp(b)));
             if list.len() % 2 == 1 {
                 return Err(fail("the cut's outline does not close on the axis"));
@@ -595,8 +619,8 @@ struct Faces {
 /// Triangulates the union `points` within the outline `segs` to `fine`. With inclusions across
 /// the cut, the solid's whole cut face is triangulated (their outlines constraints in it) and
 /// each triangle inside one's outline `rims` is its cap.
-fn triangulate_faces(points: &[[f64; 2]], segs: &[[u32; 2]], host: &[[u32; 2]], rims: &[Vec<[u32; 2]>], fine: f64, bodies: usize) -> Result<Faces> {
-    let (out, tris) = if bodies == 0 {
+fn triangulate_faces(points: &[[f64; 2]], segs: &[[u32; 2]], host: &[[u32; 2]], rims: &[Vec<[u32; 2]>], fine: f64) -> Result<Faces> {
+    let (out, tris) = if rims.is_empty() {
         crate::planar::pslg(points, segs, fine)?
     } else {
         let snapshot = points.to_vec();
@@ -896,8 +920,8 @@ pub(super) fn refreeze(
     rot: &Rotation,
     base: u32,
     scale: f64,
-    bodies: &[Tessellation],
-) -> Result<Option<(Tessellation, Vec<Cut>)>> {
+    (bodies, around): (&[Tessellation], &Around),
+) -> Result<Option<Closed>> {
     let tol = 1e-6 * scale;
     let halves = [Half::new(rot, rot.start(), tol), Half::new(rot, rot.start() + rot.angle(), tol)];
     let p = |v: u32| mesh.points.get(v as usize).copied().unwrap_or(Point3::ORIGIN);
@@ -963,7 +987,7 @@ pub(super) fn refreeze(
     let mut analytic = t.analytic.clone();
     analytic.truncate(base as usize);
     let walled = with_bodies(Tessellation { surface: open, analytic, ..t.clone() }, bodies);
-    close(walled, rot, scale, None, &inner, bodies.len()).map(|c| Some((c.tessellation, c.cuts)))
+    close(walled, rot, scale, None, &inner, (bodies.len(), around)).map(Some)
 }
 
 /// The two cut faces' triangles: `tris` on the first face's vertices `ids[0]` and the second's

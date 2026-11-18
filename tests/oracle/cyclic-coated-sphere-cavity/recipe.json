@@ -1,0 +1,10 @@
+[
+ {"command": "model.material.create", "params": {"name": "ceramic", "eps_r": 4.0}},
+ {"command": "model.material.create", "params": {"name": "core", "eps_r": 9.0}},
+ {"command": "geometry.solid", "params": {"shape": "sphere", "radius": 10}},
+ {"command": "geometry.inclusion", "params": {"shape": "sphere", "radius": 5, "at": [0, 0, 0], "material": "ceramic"}},
+ {"command": "geometry.inclusion", "params": {"shape": "sphere", "radius": 2.5, "at": [0, 0, 0], "material": "core"}},
+ {"command": "model.rotation", "params": {"n": 4}},
+ {"command": "mesh.generate", "params": {"size": 3}},
+ {"command": "solve.cyclic", "params": {"frequency": 10.5, "m": 0, "count": 1, "order": 2}, "id": "modes"}
+]

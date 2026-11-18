@@ -34,6 +34,9 @@ overlap tests).
   complex whose facet two regions share, in the sense of H. Si, *TetGen, a Delaunay-based quality
   tetrahedral mesh generator*, ACM Trans. Math. Softw. 41(2), 2015 (the paper only; each region
   is still meshed on its own against the frozen facets).
+  Faces of two bodies on one cylinder (a rod in its sleeve) the same way on the cylinder unrolled
+  (`contact::round`): arc length against height, cut along a straight line of the cylinder whose
+  two sides are constraints cut at the same heights, the triangles put back by their corners.
 - A. Van Oosterom, J. Strackee, *The solid angle of a plane triangle*, IEEE Trans. Biomed. Eng.
   30(2):125–126, 1983 — the winding number that classifies a Boolean's pieces inside or outside
   the other surface (`emcraft-mesh::csg`), and which pieces of a part's enclosed air are which

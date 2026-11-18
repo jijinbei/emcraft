@@ -1,0 +1,11 @@
+[
+ {"command": "model.material.create", "params": {"name": "ceramic", "eps_r": 4.0}},
+ {"command": "model.material.create", "params": {"name": "air", "eps_r": 1.0}},
+ {"command": "model.material.create", "params": {"name": "gas", "eps_r": 1.0}},
+ {"command": "geometry.solid", "params": {"shape": "sphere", "radius": 10}},
+ {"command": "geometry.inclusion", "params": {"shape": "sphere", "radius": 4, "at": [0, 0, 0], "material": "ceramic"}},
+ {"command": "geometry.inclusion", "params": {"shape": "cylinder", "radius": 1.5, "length": 3, "at": [6.5, 0, -1.5], "material": "air"}},
+ {"command": "geometry.inclusion", "params": {"shape": "cylinder", "radius": 1.5, "length": 1.2, "at": [6.5, 0, -1.5], "material": "gas"}},
+ {"command": "mesh.generate", "params": {"size": 3}},
+ {"command": "solve.eigenmodes", "params": {"near": 11.8, "count": 3, "order": 2}, "id": "modes"}
+]

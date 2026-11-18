@@ -208,6 +208,56 @@ fn tessellate_sphere(r: f64, h: f64) -> Tessellation {
     t
 }
 
+/// A sphere about the origin the same after each of `turns` equal turns about z: circles of
+/// latitude about `size` apart, each divided alike in a multiple of `turns` (at least 12), a fan
+/// at each pole; one face (0). A sector's two cut planes then cross the same triangles the same
+/// way, which those of the subdivided icosahedron do not.
+fn tessellate_sphere_turned(r: f64, h: f64, turns: u32) -> Tessellation {
+    let mut t = Tessellation::default();
+    t.analytic.push(Some(AnalyticSurface::Sphere { center: MPoint::ORIGIN, radius: r }));
+    let turns = turns.max(1) as usize;
+    let around = divisions(2.0 * PI * r, h).max(12).div_ceil(turns) * turns;
+    let down = divisions(PI * r, h).max(4);
+    let top = t.point(Point3::new(0.0, 0.0, r));
+    let rings: Vec<Vec<u32>> = (1..down)
+        .map(|j| {
+            let (sin, cos) = (PI * j as f64 / down as f64).sin_cos();
+            (0..around)
+                .map(|k| {
+                    let a = 2.0 * PI * k as f64 / around as f64;
+                    t.point(Point3::new(r * sin * a.cos(), r * sin * a.sin(), r * cos))
+                })
+                .collect()
+        })
+        .collect();
+    let bottom = t.point(Point3::new(0.0, 0.0, -r));
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
+    for k in 0..around {
+        let next = (k + 1) % around;
+        if let (Some(first), Some(last)) = (rings.first(), rings.last()) {
+            triangles.push([top, first[k], first[next]]);
+            triangles.push([bottom, last[next], last[k]]);
+        }
+        for pair in rings.windows(2) {
+            let (a, b, c, d) = (pair[0][k], pair[0][next], pair[1][next], pair[1][k]);
+            triangles.extend([[a, d, c], [a, c, b]]);
+        }
+    }
+    t.surface.tags = vec![0; triangles.len()];
+    t.surface.triangles = triangles;
+    t
+}
+
+/// [`tessellate`] for a body on the axis of a model the same after each of `turns` equal turns
+/// about it: a sphere is divided alike in each (the other shapes' cuts are straight lines, which
+/// the sector takes as they come).
+pub(super) fn tessellate_turned(shape: &Shape, size: f64, turns: u32) -> Tessellation {
+    match *shape {
+        Shape::Sphere { radius } => tessellate_sphere_turned(radius.get(), size, turns),
+        _ => tessellate(shape, size),
+    }
+}
+
 pub(super) fn tessellate(shape: &Shape, size: f64) -> Tessellation {
     match *shape {
         Shape::Box { size: xyz } => tessellate_box(xyz.get(), size),
@@ -705,6 +755,18 @@ pub(super) fn placed(t: Tessellation, at: Point3) -> Tessellation {
     let n = t.surface.triangles.len() as u32;
     let surface = Surface { positions: t.surface.positions.into_iter().map(shift).collect(), triangles: t.surface.triangles, tags: (0..n).collect() };
     Tessellation { surface, ..Tessellation::default() }
+}
+
+/// The cylinder each triangle of `t` lies on, if its face's exact surface is one, with the body
+/// placed at `at` (for contacts along it: `super::contact`).
+pub(super) fn cylinders(t: &Tessellation, at: Point3) -> Vec<Option<super::contact::Round>> {
+    let on = |tag: &u32| match t.analytic.get(*tag as usize).copied().flatten() {
+        Some(AnalyticSurface::Cylinder { origin, axis, radius }) => {
+            Some(super::contact::Round { origin: model_point(origin) + at.to_vec(), axis: model_vec(axis).normalized()?, radius })
+        }
+        _ => None,
+    };
+    t.surface.tags.iter().map(on).collect()
 }
 
 /// Appends interface `b` to `a` with its tags offset by `base`, turned inside out when `outward`

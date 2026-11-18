@@ -19,12 +19,25 @@
 //!    another's edge) splits the triangles beyond that edge too, in every body that has it, so
 //!    each body's surface stays closed and the bodies agree along the contact's rim.
 //!
-//! Only flat faces: bodies that touch along a curved surface (a rod in a sleeve), along an edge
-//! or at a point are left as they are, and the mesher refuses surfaces that meet.
+//! A body inside another may lie against that one's wall from inside (the air over a liquid
+//! reaching its vessel's rim): there the two faces look the same way, the inner body's triangles
+//! part it from what lies outside the vessel, and the vessel's own face has a hole.
+//!
+//! So a surface is kept as patches, each between two spaces — an inclusion on its inner side and,
+//! beyond it, another inclusion or the region around ([`Patch`]); a space's boundary is the
+//! patches on either side of which it lies.
+//!
+//! Flat faces here; faces on one cylinder — a rod in its sleeve, a disc filling a tube — in
+//! [`round`], on the cylinder unrolled. Bodies that touch along another curved surface, along an
+//! edge or at a point are left as they are, and the mesher refuses surfaces that meet.
+
+mod round;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use emcraft_model::{Aabb, Point3, Vec3};
+
+pub(super) use round::{Meridians, Round};
 
 use super::narrow::{overlap, polygon_area};
 use super::sector::{between, inside};
@@ -34,13 +47,24 @@ use crate::planar::lattice::STEP;
 use crate::shared::{DisjointSets, closed};
 use crate::{MeshError, Result};
 
-/// The patch two touching inclusions share: its triangles, oriented out of `a` (into `b`), one
-/// tag per triangle.
+/// A patch of the inclusions' surfaces: its triangles, oriented out of inclusion `inner` into
+/// what lies beyond them there — inclusion `outer`, or the solid's own region (`None`) — one tag
+/// per triangle.
 #[derive(Clone, Debug)]
-pub(super) struct Contact {
-    pub(super) a: usize,
-    pub(super) b: usize,
-    pub(super) patch: Tessellation,
+pub(super) struct Patch {
+    pub(super) inner: usize,
+    pub(super) outer: Option<usize>,
+    pub(super) faces: Tessellation,
+}
+
+/// What lies beyond a triangle of a body's surface.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Beyond {
+    /// Another body, against this one from outside: it holds the triangle too, turned over.
+    Shared(usize),
+    /// A space around: the body this one lies in, or (against that one's wall from inside) what
+    /// lies outside it; `None` is the solid's own region.
+    Outside(Option<usize>),
 }
 
 /// Points nearer than this are one (m): a few steps of the planar mesher's lattice.
@@ -54,12 +78,13 @@ fn fail(why: impl Into<String>) -> MeshError {
     MeshError::invalid("inclusions in contact", why)
 }
 
-/// A body's surface while its contacts are made: each triangle with the body beyond it there
-/// (`None`: the region around).
+/// A body's surface while its contacts are made: each triangle with what lies beyond it and
+/// the cylinder it lies on, if any (its number among the bodies' cylinders).
 struct Body {
     positions: Vec<Point3>,
     triangles: Vec<[u32; 3]>,
-    beyond: Vec<Option<usize>>,
+    beyond: Vec<Beyond>,
+    on: Vec<Option<usize>>,
 }
 
 impl Body {
@@ -71,8 +96,18 @@ impl Body {
         Aabb::around(self.positions.iter().copied())
     }
 
+    /// Keeps the triangles `keep` holds (by their number).
+    fn retain(&mut self, keep: impl Fn(usize) -> bool) {
+        let mut t = 0..self.triangles.len();
+        self.triangles.retain(|_| t.next().is_some_and(&keep));
+        let mut t = 0..self.beyond.len();
+        self.beyond.retain(|_| t.next().is_some_and(&keep));
+        let mut t = 0..self.on.len();
+        self.on.retain(|_| t.next().is_some_and(&keep));
+    }
+
     /// Drops the points no triangle uses and makes those at the same place one (two contacts
-    /// each put theirs on the edge they share).
+    /// each put theirs on the edge they share); a triangle left with a corner twice goes.
     fn compact(&mut self) {
         let mut at: HashMap<[u64; 3], u32> = HashMap::new();
         let mut new = vec![u32::MAX; self.positions.len()];
@@ -88,6 +123,8 @@ impl Body {
             *v = *slot;
         }
         self.positions = kept;
+        let whole: Vec<bool> = self.triangles.iter().map(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0]).collect();
+        self.retain(|t| whole.get(t).copied().unwrap_or(false));
     }
 }
 
@@ -108,7 +145,8 @@ fn plane(q: [Point3; 3]) -> Option<(Vec3, f64)> {
 }
 
 /// The flat faces of body `k`: triangles joined across the edges where both lie in one plane
-/// (normals alike to 1e-9, offsets to `tol`).
+/// (normals alike to 1e-9, offsets to `tol`). The triangles on a cylinder are not faces of
+/// their own (`round` mates those).
 fn faces(body: &Body, k: usize, tol: f64) -> Vec<Face> {
     let planes: Vec<Option<(Vec3, f64)>> = (0..body.triangles.len()).map(|t| body.corners(t).and_then(plane)).collect();
     let mut sets = DisjointSets::new(body.triangles.len());
@@ -121,6 +159,7 @@ fn faces(body: &Body, k: usize, tol: f64) -> Vec<Face> {
                 continue;
             };
             if let (Some(Some((n, d))), Some(Some((m, e)))) = (planes.get(t), planes.get(other))
+                && body.on.get(t) == body.on.get(other)
                 && n.dot(*m) > 1.0 - 1e-9
                 && (d - e).abs() <= tol
             {
@@ -134,6 +173,7 @@ fn faces(body: &Body, k: usize, tol: f64) -> Vec<Face> {
     }
     by_root
         .into_iter()
+        .filter(|(root, _)| body.on.get(*root).copied().flatten().is_none())
         .filter_map(|(root, triangles)| {
             let (normal, offset) = (*planes.get(root)?)?;
             let bounds = Aabb::around(triangles.iter().filter_map(|t| body.corners(*t)).flatten())?;
@@ -176,9 +216,15 @@ impl Frame {
 }
 
 /// Whether faces `f` and `g` (of different bodies) are in contact: one plane, facing each
-/// other, a triangle of each overlapping the other's by more than `least` (m²).
-fn touching(bodies: &[Body], f: &Face, g: &Face, tol: f64, least: f64) -> bool {
-    if f.normal.dot(g.normal) > -1.0 + 1e-9 || (f.offset + g.offset).abs() > tol || !f.bounds.grown(tol).overlaps(g.bounds) {
+/// other — or, with one body `within` the other, the same way — a triangle of each overlapping
+/// the other's by more than `least` (m²).
+fn touching(bodies: &[Body], f: &Face, g: &Face, within: bool, tol: f64, least: f64) -> bool {
+    let one_plane = if within {
+        f.normal.dot(g.normal) > 1.0 - 1e-9 && (f.offset - g.offset).abs() <= tol
+    } else {
+        f.normal.dot(g.normal) < -1.0 + 1e-9 && (f.offset + g.offset).abs() <= tol
+    };
+    if !one_plane || !f.bounds.grown(tol).overlaps(g.bounds) {
         return false;
     }
     let (Some(a), Some(b)) = (bodies.get(f.body), bodies.get(g.body)) else { return false };
@@ -319,10 +365,85 @@ fn draw(bodies: &[Body], faces: &[&Face]) -> Result<Drawing> {
     Ok(Drawing { frame, points: points.xy, outlines, vertices })
 }
 
+/// Which body lies in which: each one's parent and how many bodies lie around it.
+struct Nesting<'a> {
+    parent: &'a [Option<usize>],
+    depth: Vec<usize>,
+}
+
+impl Nesting<'_> {
+    fn new(parent: &[Option<usize>]) -> Nesting<'_> {
+        let up = |i: usize| parent.get(i).copied().flatten();
+        // Bounded by the number of bodies: a list of parents that went round would not end.
+        let depth = (0..parent.len()).map(|i| std::iter::successors(up(i), |j| up(*j)).take(parent.len()).count()).collect();
+        Nesting { parent, depth }
+    }
+
+    fn parent(&self, i: usize) -> Option<usize> {
+        self.parent.get(i).copied().flatten()
+    }
+
+    /// Whether one of the two lies directly in the other.
+    fn within(&self, i: usize, j: usize) -> bool {
+        self.parent(i) == Some(j) || self.parent(j) == Some(i)
+    }
+
+    /// Whether the two lie in the same body (or both in the solid's own region).
+    fn beside(&self, i: usize, j: usize) -> bool {
+        self.parent.get(i) == self.parent.get(j)
+    }
+
+    /// Of bodies one inside the next, the innermost and the outermost.
+    fn ends(&self, bodies: &[usize]) -> Option<(usize, usize)> {
+        let depth = |i: &&usize| self.depth.get(**i).copied().unwrap_or(0);
+        Some((*bodies.iter().max_by_key(depth)?, *bodies.iter().min_by_key(depth)?))
+    }
+}
+
+/// A triangle of a sheet triangulated for several bodies: its corners (the sheet's points), where
+/// they are, counter-clockwise seen from the sheet's upper side, and the cylinder it lies on.
+struct Piece {
+    corners: [u32; 3],
+    at: [Point3; 3],
+    on: Option<usize>,
+}
+
+/// Puts a piece into the bodies that keep it. `holders`: the bodies whose faces hold it, each
+/// with whether its face looks to the sheet's upper side. Of those on one side (one inside the
+/// next), the innermost keeps it: beyond it lies the innermost of the other side's (which holds
+/// it too, turned over), or what is outside this side's outermost. `vertex_of`: per body, the
+/// sheet's points that are its vertices already; the others are added, and all put exactly at
+/// the piece's corners.
+fn put(bodies: &mut [Body], nesting: &Nesting, vertex_of: &mut BTreeMap<usize, BTreeMap<u32, u32>>, piece: Piece, holders: &[(usize, bool)]) {
+    let side = |up: bool| -> Vec<usize> { holders.iter().filter(|h| h.1 == up).map(|h| h.0).collect() };
+    let ends = [true, false].map(|up| nesting.ends(&side(up)));
+    for (k, up) in [true, false].into_iter().enumerate() {
+        let Some((inner, outer)) = ends[k] else { continue };
+        let other = match ends[1 - k] {
+            Some((theirs, _)) => Beyond::Shared(theirs),
+            None => Beyond::Outside(nesting.parent(outer)),
+        };
+        let Some(body) = bodies.get_mut(inner) else { continue };
+        let of = vertex_of.entry(inner).or_default();
+        let mut ids = [0u32; 3];
+        for ((id, v), at) in ids.iter_mut().zip(piece.corners).zip(piece.at) {
+            *id = *of.entry(v).or_insert_with(|| {
+                body.positions.push(at);
+                (body.positions.len() - 1) as u32
+            });
+            if let Some(p) = body.positions.get_mut(*id as usize) {
+                *p = at;
+            }
+        }
+        body.triangles.push(if up { ids } else { [ids[0], ids[2], ids[1]] });
+        body.beyond.push(other);
+        body.on.push(piece.on);
+    }
+}
+
 /// Triangulates the faces in contact through one plane together and puts the triangles in
-/// their bodies in place of the faces': one inside a face of each side is the contact's (in
-/// both bodies, each marked with the other), one inside a single face its body's alone.
-fn retriangulate(bodies: &mut [Body], faces: &[&Face], size: f64) -> Result<()> {
+/// their bodies in place of the faces' ([`put`]).
+fn retriangulate(bodies: &mut [Body], faces: &[&Face], nesting: &Nesting, size: f64) -> Result<()> {
     let Drawing { frame, points, outlines, vertices } = draw(bodies, faces)?;
     let segments: Vec<[u32; 2]> = outlines.iter().flatten().map(|s| [s[0].min(s[1]), s[0].max(s[1])]).collect::<BTreeSet<_>>().into_iter().collect();
     let within = |c: [f64; 2]| -> Vec<usize> { (0..faces.len()).filter(|f| outlines.get(*f).is_some_and(|o| inside(&points, o, c))).collect() };
@@ -338,36 +459,16 @@ fn retriangulate(bodies: &mut [Body], faces: &[&Face], size: f64) -> Result<()> 
         vertex_of.entry(face.body).or_default().extend(of);
     }
     for (k, dead) in &gone {
-        let Some(body) = bodies.get_mut(*k) else { continue };
-        let (tris, beyond): (Vec<[u32; 3]>, Vec<Option<usize>>) =
-            body.triangles.iter().zip(&body.beyond).enumerate().filter(|(t, _)| !dead.contains(t)).map(|(_, (q, b))| (*q, *b)).unzip();
-        body.triangles = tris;
-        body.beyond = beyond;
+        if let Some(body) = bodies.get_mut(*k) {
+            body.retain(|t| !dead.contains(&t));
+        }
     }
     for tri in &triangles {
         let q = tri.map(|v| out.get(v as usize).copied().unwrap_or_default());
         let c = [(q[0][0] + q[1][0] + q[2][0]) / 3.0, (q[0][1] + q[1][1] + q[2][1]) / 3.0];
-        let holders = within(c);
-        for &f in &holders {
-            let Some(face) = faces.get(f) else { continue };
-            let up = face.normal.dot(frame.normal) > 0.0;
-            // The body beyond: the one whose face here looks the other way.
-            let other = holders.iter().filter_map(|g| faces.get(*g)).find(|g| (g.normal.dot(frame.normal) > 0.0) != up).map(|g| g.body);
-            let (Some(body), Some(of)) = (bodies.get_mut(face.body), vertex_of.get_mut(&face.body)) else { continue };
-            let ids = tri.map(|v| {
-                let at = frame.lift(out.get(v as usize).copied().unwrap_or_default());
-                let id = *of.entry(v).or_insert_with(|| {
-                    body.positions.push(at);
-                    (body.positions.len() - 1) as u32
-                });
-                if let Some(p) = body.positions.get_mut(id as usize) {
-                    *p = at;
-                }
-                id
-            });
-            body.triangles.push(if up { ids } else { [ids[0], ids[2], ids[1]] });
-            body.beyond.push(other);
-        }
+        let holders: Vec<(usize, bool)> =
+            within(c).into_iter().filter_map(|f| faces.get(f)).map(|f| (f.body, f.normal.dot(frame.normal) > 0.0)).collect();
+        put(bodies, nesting, &mut vertex_of, Piece { corners: *tri, at: q.map(|p| frame.lift(p)), on: None }, &holders);
     }
     Ok(())
 }
@@ -448,7 +549,8 @@ fn conform(body: &mut Body, cloud: &Cloud) -> Result<()> {
         let mut split = false;
         let mut triangles = Vec::with_capacity(body.triangles.len());
         let mut beyond = Vec::with_capacity(body.beyond.len());
-        for (tri, label) in body.triangles.iter().zip(&body.beyond) {
+        let mut round = Vec::with_capacity(body.on.len());
+        for ((tri, label), lies_on) in body.triangles.iter().zip(&body.beyond).zip(&body.on) {
             let at = |v: u32| body.positions.get(v as usize).copied();
             let cut = (0..3).find_map(|i| {
                 let (a, b, c) = (tri[i], tri[(i + 1) % 3], tri[(i + 2) % 3]);
@@ -458,6 +560,7 @@ fn conform(body: &mut Body, cloud: &Cloud) -> Result<()> {
             let Some((a, b, c, on)) = cut else {
                 triangles.push(*tri);
                 beyond.push(*label);
+                round.push(*lies_on);
                 continue;
             };
             split = true;
@@ -486,10 +589,12 @@ fn conform(body: &mut Body, cloud: &Cloud) -> Result<()> {
             for w in chain.windows(2) {
                 triangles.push([w[0], w[1], c]);
                 beyond.push(*label);
+                round.push(*lies_on);
             }
         }
         body.triangles = triangles;
         body.beyond = beyond;
+        body.on = round;
         if !split {
             return Ok(());
         }
@@ -498,7 +603,7 @@ fn conform(body: &mut Body, cloud: &Cloud) -> Result<()> {
 }
 
 /// The triangles of `body` marked `beyond`, as a tessellation of their own (one tag each).
-fn part(body: &Body, beyond: Option<usize>) -> Tessellation {
+fn part(body: &Body, beyond: Beyond) -> Tessellation {
     let mut new: BTreeMap<u32, u32> = BTreeMap::new();
     let mut surface = Surface::default();
     for (tri, _) in body.triangles.iter().zip(&body.beyond).filter(|(_, b)| **b == beyond) {
@@ -514,64 +619,109 @@ fn part(body: &Body, beyond: Option<usize>) -> Tessellation {
     Tessellation { surface, ..Tessellation::default() }
 }
 
-/// Makes the contacts between the inclusions' `surfaces` (closed, each oriented outwards):
-/// where flat faces of two inclusions of one `group` (inside the same body) touch, both are
-/// triangulated again to the smaller of the two `sizes` (m) with the contact's triangles
-/// shared. Each surface comes back as what it keeps towards the region around it, with the
-/// contacts beside them. `tol` (m): how far apart two faces' planes may be and still be one.
-/// Surfaces without a contact are left as they are.
-pub(super) fn imprint(surfaces: &mut [Tessellation], group: &[Option<usize>], sizes: &[f64], tol: f64) -> Result<Vec<Contact>> {
-    let mut bodies: Vec<Body> = surfaces
-        .iter()
-        .map(|t| Body {
-            positions: t.surface.positions.clone(),
-            triangles: t.surface.triangles.clone(),
-            beyond: vec![None; t.surface.triangles.len()],
-        })
-        .collect();
+/// Whether the patches around inclusion `space` close: every edge held once each way, by the
+/// patches it is the inner side of as they are and those it lies beyond turned over.
+fn closes(patches: &[Patch], space: usize) -> bool {
+    let mut ids: HashMap<[u64; 3], u32> = HashMap::new();
+    let mut triangles: Vec<[u32; 3]> = Vec::new();
+    for patch in patches.iter().filter(|p| p.inner == space || p.outer == Some(space)) {
+        for tri in &patch.faces.surface.triangles {
+            let q = tri.map(|v| {
+                let p = patch.faces.surface.positions.get(v as usize).copied().unwrap_or(Point3::ORIGIN);
+                let next = ids.len() as u32;
+                *ids.entry([p.x, p.y, p.z].map(f64::to_bits)).or_insert(next)
+            });
+            triangles.push(if patch.inner == space { q } else { [q[0], q[2], q[1]] });
+        }
+    }
+    closed(&triangles)
+}
+
+/// The bodies' faces that may be in contact, and which are (joined into the sets that touch
+/// through one plane).
+fn contacts(bodies: &[Body], nesting: &Nesting, sizes: &[f64], tol: f64) -> (Vec<Face>, DisjointSets) {
     let boxes: Vec<Option<Aabb>> = bodies.iter().map(Body::bounds).collect();
     let near = |i: usize, j: usize| match (boxes.get(i).copied().flatten(), boxes.get(j).copied().flatten()) {
-        (Some(a), Some(b)) => group.get(i) == group.get(j) && a.grown(tol).overlaps(b),
+        (Some(a), Some(b)) => i != j && (nesting.beside(i, j) || nesting.within(i, j)) && a.grown(tol).overlaps(b),
         _ => false,
     };
-    let candidates: Vec<usize> = (0..bodies.len()).filter(|&i| (0..bodies.len()).any(|j| j != i && near(i, j))).collect();
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-    // Only the faces that reach another body's box can touch it.
+    // Only the faces that reach another body's box can touch it; one a body lies in is reached
+    // by all of that body's faces, so there only those near the box's own faces count.
     let reaches = |f: &Face| {
-        (0..bodies.len()).any(|j| j != f.body && near(f.body, j) && boxes.get(j).copied().flatten().is_some_and(|b| f.bounds.grown(tol).overlaps(b)))
+        (0..bodies.len()).any(|j| {
+            let Some(b) = boxes.get(j).copied().flatten() else { return false };
+            let at_wall =
+                !nesting.within(f.body, j) || (0..3).any(|d| (f.bounds.min[d] - b.min[d]).abs() <= tol || (f.bounds.max[d] - b.max[d]).abs() <= tol);
+            near(f.body, j) && at_wall && f.bounds.grown(tol).overlaps(b)
+        })
     };
-    let all: Vec<Face> = candidates.iter().flat_map(|&k| bodies.get(k).map_or_default(|b| faces(b, k, tol))).filter(|f| reaches(f)).collect();
+    let all: Vec<Face> = (0..bodies.len())
+        .filter(|&i| (0..bodies.len()).any(|j| near(i, j)))
+        .flat_map(|k| bodies.get(k).map_or_default(|b| faces(b, k, tol)))
+        .filter(|f| reaches(f))
+        .collect();
     let size_of = |k: usize| sizes.get(k).copied().unwrap_or(f64::INFINITY);
     let mut sets = DisjointSets::new(all.len());
-    let mut any = false;
     for (f, a) in all.iter().enumerate() {
         for (g, b) in all.iter().enumerate().skip(f + 1) {
             let least = (1e-4 * size_of(a.body).min(size_of(b.body))).powi(2);
-            if a.body != b.body && near(a.body, b.body) && touching(&bodies, a, b, tol, least) {
+            if near(a.body, b.body) && touching(bodies, a, b, nesting.within(a.body, b.body), tol, least) {
                 sets.union(f, g);
-                any = true;
             }
         }
     }
-    if !any {
-        return Ok(Vec::new());
-    }
+    (all, sets)
+}
+
+/// Makes the contacts between the inclusions' `surfaces` (closed, each oriented outwards):
+/// where flat faces of two inclusions touch — two inside the same body from outside each other,
+/// or one against the wall of the body it lies in (`parent`) from inside — they are
+/// triangulated again together to the smaller of the bodies' `sizes` (m). The surfaces come
+/// back as patches: first each inclusion's towards the body it lies in (what it keeps of its
+/// surface; all of it without a contact), in the inclusions' order, then the contacts'. `tol`
+/// (m): how far apart two faces' planes may be and still be one. `round`: per surface, the
+/// cylinder each triangle lies on, and the half planes a sector will cut the bodies by.
+pub(super) fn imprint(
+    surfaces: Vec<Tessellation>,
+    (round, meridians): (&[Vec<Option<Round>>], &Meridians),
+    parent: &[Option<usize>],
+    sizes: &[f64],
+    tol: f64,
+) -> Result<Vec<Patch>> {
+    let nesting = Nesting::new(parent);
+    let mut cylinders: Vec<Round> = Vec::new();
+    let mut bodies: Vec<Body> = surfaces
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            let n = t.surface.triangles.len();
+            let mut on: Vec<Option<usize>> =
+                round.get(i).map_or_default(|r| r.iter().map(|c| c.map(|c| round::number(&mut cylinders, c, tol))).collect());
+            on.resize(n, None);
+            Body {
+                positions: t.surface.positions.clone(),
+                triangles: t.surface.triangles.clone(),
+                beyond: vec![Beyond::Outside(nesting.parent(i)); n],
+                on,
+            }
+        })
+        .collect();
+    // The curved contacts first: they put points on the rims of the flat faces beside them.
+    let mut touched = round::mate(&mut bodies, (&cylinders, meridians), &nesting, sizes, tol)?;
+    let (all, mut sets) = contacts(&bodies, &nesting, sizes, tol);
+    let size_of = |k: usize| sizes.get(k).copied().unwrap_or(f64::INFINITY);
     let mut clusters: BTreeMap<usize, Vec<&Face>> = BTreeMap::new();
     for (f, face) in all.iter().enumerate() {
         clusters.entry(sets.find(f)).or_default().push(face);
     }
-    // A body's triangles are numbered anew as each contact is made: the faces of one body are
-    // taken last to first, so those still to come keep their numbers.
-    let mut touched: BTreeSet<usize> = BTreeSet::new();
+    // A body's triangles are numbered anew as each contact is made: a face still to come is
+    // found again by what was taken out before it.
     let mut done: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
     for cluster in clusters.values().filter(|c| c.len() > 1) {
         let size = cluster.iter().map(|f| size_of(f.body)).fold(f64::INFINITY, f64::min);
         if !(size.is_finite() && size > 0.0) {
             return Err(fail("an element size that is not finite and > 0"));
         }
-        // Faces whose triangles earlier contacts moved: found again by what was taken out.
         let shifted: Vec<Face> = cluster
             .iter()
             .map(|f| {
@@ -586,11 +736,15 @@ pub(super) fn imprint(surfaces: &mut [Tessellation], group: &[Option<usize>], si
                 }
             })
             .collect();
-        retriangulate(&mut bodies, &shifted.iter().collect::<Vec<_>>(), size)?;
+        retriangulate(&mut bodies, &shifted.iter().collect::<Vec<_>>(), &nesting, size)?;
         for f in cluster {
             done.entry(f.body).or_default().extend(&f.triangles);
             touched.insert(f.body);
         }
+    }
+    let whole = |i: usize, t: Tessellation| Patch { inner: i, outer: nesting.parent(i), faces: t };
+    if touched.is_empty() {
+        return Ok(surfaces.into_iter().enumerate().map(|(i, t)| whole(i, t)).collect());
     }
     let least = touched.iter().map(|k| size_of(*k)).fold(f64::INFINITY, f64::min);
     // A point two bodies hold is one point: each contact put its own on its plane's lattice.
@@ -605,27 +759,81 @@ pub(super) fn imprint(surfaces: &mut [Tessellation], group: &[Option<usize>], si
         body.compact();
     }
     for &k in &touched {
-        let Some(body) = bodies.get_mut(k) else { continue };
-        conform(body, &cloud)?;
-        if !closed(&body.triangles) {
-            return Err(fail(format!("inclusion {}'s surface did not close again around its contacts; try another element size", k + 1)));
+        if let Some(body) = bodies.get_mut(k) {
+            conform(body, &cloud)?;
         }
     }
-    let mut contacts = Vec::new();
+    let mut patches: Vec<Patch> = surfaces
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| match bodies.get(i).filter(|_| touched.contains(&i)) {
+            Some(body) => whole(i, part(body, Beyond::Outside(nesting.parent(i)))),
+            None => whole(i, t),
+        })
+        .collect();
     for &a in &touched {
         let Some(body) = bodies.get(a) else { continue };
-        let others: BTreeSet<usize> = body.beyond.iter().flatten().copied().filter(|b| *b > a).collect();
-        for b in others {
-            let patch = part(body, Some(b));
-            let theirs = bodies.get(b).map_or(0, |o| o.beyond.iter().filter(|x| **x == Some(a)).count());
-            if theirs != patch.surface.triangles.len() {
-                return Err(fail(format!("inclusions {} and {} do not agree on their contact; try another element size", a + 1, b + 1)));
+        let kinds: BTreeSet<Beyond> = body.beyond.iter().copied().filter(|b| *b != Beyond::Outside(nesting.parent(a))).collect();
+        for kind in kinds {
+            let faces = part(body, kind);
+            match kind {
+                Beyond::Outside(outer) => patches.push(Patch { inner: a, outer, faces }),
+                // The two hold the contact: taken from the first.
+                Beyond::Shared(b) if a < b => {
+                    let theirs = bodies.get(b).map_or(0, |o| o.beyond.iter().filter(|x| **x == Beyond::Shared(a)).count());
+                    if theirs != faces.surface.triangles.len() {
+                        return Err(fail(format!("inclusions {} and {} do not agree on their contact; try another element size", a + 1, b + 1)));
+                    }
+                    patches.push(Patch { inner: a, outer: Some(b), faces });
+                }
+                Beyond::Shared(_) => {}
             }
-            contacts.push(Contact { a, b, patch });
-        }
-        if let Some(t) = surfaces.get_mut(a) {
-            *t = part(body, None);
         }
     }
-    Ok(contacts)
+    if let Some(k) = touched.iter().find(|k| !closes(&patches, **k)) {
+        return Err(fail(format!("inclusion {}'s surface did not close again around its contacts; try another element size", k + 1)));
+    }
+    Ok(patches)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f64::consts::PI;
+
+    use emcraft_model::{Metres, Shape};
+
+    use super::*;
+    use crate::solid::tessellation::{cylinders, placed, tessellate};
+
+    fn area(t: &Tessellation) -> f64 {
+        let corners = |tri: &[u32; 3]| crate::shared::corners(&t.surface.positions, tri);
+        t.surface.triangles.iter().filter_map(corners).map(|q| 0.5 * (q[1] - q[0]).cross(q[2] - q[0]).norm()).sum()
+    }
+
+    /// A disc that fills the tube it lies in (a cylinder of the outer one's radius inside it,
+    /// divided more finely): the disc's side is a patch between it and what is outside the tube,
+    /// its caps stay between it and the tube, and the tube keeps the rest of its own surface.
+    /// Evidence: the patches' areas against 2πrh and πr² (flat facets in the circle, so a little
+    /// under), and both bodies' patches closing (the imprint checks it).
+    #[test]
+    fn a_disc_in_a_tube_parts_the_tube_s_side_with_it() {
+        let (r, tube, disc) = (0.005, 0.010, 0.004);
+        let body = |length: f64, z: f64, size: f64| {
+            let t = tessellate(&Shape::Cylinder { radius: Metres::new(r).unwrap(), length: Metres::new(length).unwrap() }, size);
+            let at = Point3::new(0.0, 0.0, z);
+            let round = cylinders(&t, at);
+            (placed(t, at), round)
+        };
+        let ((outer, on_outer), (inner, on_inner)) = (body(tube, 0.0, 0.002), body(disc, 0.003, 0.001));
+        let patches = imprint(vec![outer, inner], (&[on_outer, on_inner], &Meridians::default()), &[None, Some(0)], &[0.002, 0.001], 1e-11).unwrap();
+        let of = |inner: usize, outer: Option<usize>| -> f64 {
+            patches.iter().filter(|p| p.inner == inner && p.outer == outer).map(|p| area(&p.faces)).sum()
+        };
+        let (circle, band) = (PI * r * r, 2.0 * PI * r);
+        let near = |got: f64, exact: f64| got < exact && got > 0.99 * exact;
+        assert!(near(of(1, None), band * disc), "{}", of(1, None));
+        assert!(near(of(1, Some(0)), 2.0 * circle), "{}", of(1, Some(0)));
+        assert!(near(of(0, None), 2.0 * circle + band * (tube - disc)), "{}", of(0, None));
+        assert_eq!(patches.len(), 3);
+    }
 }

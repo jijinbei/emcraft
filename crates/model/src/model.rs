@@ -253,8 +253,8 @@ impl Model {
 
     /// Adds a body inside the solid; it must lie within the solid's bounding box, and apart from
     /// each other inclusion, against it face to face, or inside it (a body inside a dielectric: a
-    /// coating, a liquid in its vessel). Two whose bounding boxes cross are refused when points
-    /// of the boxes' overlap lie in both ([`OVERLAP_SAMPLES`] a side); the mesher checks the
+    /// coating, a liquid in its vessel). Two whose bounding boxes cross are refused when they
+    /// share a part of the boxes' overlap (`share_points`); the mesher checks the
     /// surfaces themselves, and which body lies inside which.
     pub fn add_inclusion(&mut self, inc: Inclusion) -> Result<()> {
         let solid = self.domain.solid.as_ref().ok_or_else(|| invalid("inclusion", "needs a solid (geometry.solid) to lie in"))?;
@@ -509,14 +509,19 @@ pub(crate) fn is_pinned(r: &crate::region::Region) -> bool {
 /// The points tried along each side of two bounding boxes' overlap for one in both bodies.
 pub const OVERLAP_SAMPLES: usize = 9;
 
-/// Whether a point of the overlap of the two bodies' bounding boxes (on a grid of
-/// [`OVERLAP_SAMPLES`] a side, off its faces) lies in both bodies.
+/// Whether the two bodies share a part of the overlap of their bounding boxes: a point of it
+/// (on a grid of [`OVERLAP_SAMPLES`] a side, off its faces) that lies in both, as do the points a
+/// fiftieth of the overlap's least side from it along each axis. The depth leaves out the
+/// slivers bodies mating along a curved surface share, each with its own flat facets on it.
 fn share_points(a: &Inclusion, b: &Inclusion) -> bool {
     let (ba, bb) = (a.bounds(), b.bounds());
     let (lo, hi) = (ba.min.max(bb.min), ba.max.min(bb.max));
     let at = |i: usize, k: usize| lo[k] + (i as f64 + 0.5) / OVERLAP_SAMPLES as f64 * (hi[k] - lo[k]);
     let n = OVERLAP_SAMPLES;
-    (0..n * n * n).map(|i| Point3::new(at(i % n, 0), at(i / n % n, 1), at(i / (n * n), 2))).any(|p| a.contains(p) && b.contains(p))
+    let depth = 0.02 * (hi - lo).iter().fold(f64::INFINITY, f64::min);
+    let both = |p: Point3| a.contains(p) && b.contains(p);
+    let around = |p: Point3| (0..3).flat_map(move |k| [p + crate::Vec3::unit(k) * depth, p - crate::Vec3::unit(k) * depth]);
+    (0..n * n * n).map(|i| Point3::new(at(i % n, 0), at(i / n % n, 1), at(i / (n * n), 2))).any(|p| both(p) && around(p).all(both))
 }
 
 #[cfg(test)]

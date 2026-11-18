@@ -1311,7 +1311,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "geometry.inclusion",
         label: "Inclusion",
-        doc: "A body inside the solid: a dielectric region (`material`) or, without one, a conductor. The same shapes as geometry.solid, placed with their origin at `at`; it must lie inside the solid, and apart from each other inclusion, against it face to face (flat faces in one plane: the contact is shared by the two regions, or a wall where one is a conductor) or wholly inside a dielectric one (a coated sphere, a liquid in its vessel: a region inside that one's). Bodies that cross, touch along a curved surface or lie inside a conductor are refused. The regions are meshed apart and joined node for node across their interfaces.",
+        doc: "A body inside the solid: a dielectric region (`material`) or, without one, a conductor. The same shapes as geometry.solid, placed with their origin at `at`; it must lie inside the solid, and apart from each other inclusion, against it (flat faces in one plane, or faces on one cylinder as a rod has in its sleeve: the contact is shared by the two regions, or a wall where one is a conductor) or inside a dielectric one (a coated sphere, a liquid in its vessel: a region inside that one's, which it may lie against from inside — the air over the liquid up to the vessel's rim). Bodies that cross, that touch along another curved surface, an edge or a point, or that lie inside a conductor are refused. With rotational symmetry (model.rotation) the bodies are cut by the sector with the solid. The regions are meshed apart and joined node for node across their interfaces.",
         params: &[
             SHAPE,
             SIZE,
