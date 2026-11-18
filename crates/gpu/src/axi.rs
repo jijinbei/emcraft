@@ -483,15 +483,7 @@ impl<F: Real> Ops for Run<F> {
     }
 
     fn tap(&mut self, taps: &[Option<(usize, usize)>]) -> Result<()> {
-        let lens: Vec<usize> = self.fields.iter().map(Buf::len).collect();
-        let steady = taps
-            .iter()
-            .map(|t| match (t, &self.b0) {
-                (Some((w, a)), Some(b0)) if *w >= 3 => b0.get(w - 3).and_then(|b| b.get(*a)).copied().unwrap_or(0.0),
-                _ => 0.0,
-            })
-            .collect();
-        self.held.set_taps(taps, &lens, steady)
+        self.held.set_taps(taps, &self.fields, self.b0.as_ref())
     }
 
     fn fields(&self) -> Result<[Vec<f64>; 6]> {

@@ -744,3 +744,28 @@ pub(crate) fn squares<F: Real>(
         out[CUBE_POS] = total;
     }
 }
+
+/// The values at `count` taps of the fields into `out` at slot `slot`: each tap its component
+/// (`which`, 0–5 in the order of [`Fields`]) and its point there (`at`).
+#[cube(launch)]
+pub(crate) fn tap<F: Real>(f: &Fields<F>, which: &[u32], at: &[u32], out: &mut [F], slot: u32, count: u32) {
+    let p = ABSOLUTE_POS as u32;
+    if p < count {
+        let w = which[p as usize];
+        let i = at[p as usize] as usize;
+        let o = (slot * count + p) as usize;
+        if w == 0 {
+            out[o] = f.ex[i];
+        } else if w == 1 {
+            out[o] = f.ey[i];
+        } else if w == 2 {
+            out[o] = f.ez[i];
+        } else if w == 3 {
+            out[o] = f.bx[i];
+        } else if w == 4 {
+            out[o] = f.by[i];
+        } else {
+            out[o] = f.bz[i];
+        }
+    }
+}

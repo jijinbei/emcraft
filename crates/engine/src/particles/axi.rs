@@ -20,7 +20,7 @@
 
 use std::cell::Cell;
 
-use emcraft_fdtd::axi::{AxiGrid, AxiPic, Injection, PlaneTaps, Ring, Rings};
+use emcraft_fdtd::axi::{AxiGrid, AxiPic, PlaneTaps, Ring, Rings};
 use emcraft_fdtd::pic;
 use emcraft_gpu::{AxiDevice, Gpu};
 use emcraft_model::ParticleRun;
@@ -74,8 +74,8 @@ impl Run for Axi {
         let [er, et, ez] = self.pic.field_at(r, z).0;
         [er * cos - et * sin, er * sin + et * cos, ez]
     }
-    fn plane(&self, z: f64) -> Option<emcraft_fdtd::axi::Plane> {
-        Some(self.pic.plane(z))
+    fn plane(&self, z: f64) -> emcraft_fdtd::axi::Plane {
+        self.pic.plane(z)
     }
     /// E_z on the r–z plane, every few points so it holds at most [`MAP_POINTS`]: at most 60
     /// across, the rest along z.
@@ -163,6 +163,10 @@ impl Run for OnDevice {
     fn e_at_point(&self, at: [f64; 3]) -> [f64; 3] {
         self.axi.e_at_point(at)
     }
+    /// The plane as the host last read the fields back (the device's own is tapped each step).
+    fn plane(&self, z: f64) -> emcraft_fdtd::axi::Plane {
+        self.axi.plane(z)
+    }
     fn now(&self) -> f64 {
         self.axi.now()
     }
@@ -193,17 +197,7 @@ impl Run for OnDevice {
                 let probes = sampled(b).then(|| {
                     step.probes.iter().zip(&self.probes).map(|([er, et, ez], q)| [er * q.cos - et * q.sin, er * q.sin + et * q.cos, *ez]).collect()
                 });
-                let mut taps = step.taps.as_slice();
-                let planes = self
-                    .planes
-                    .iter()
-                    .map(|p| {
-                        let (mine, rest) = taps.split_at(p.taps.len().min(taps.len()));
-                        taps = rest;
-                        p.plane(mine)
-                    })
-                    .collect();
-                (step.moved, probes, planes)
+                (step.moved, probes, super::planes_of(&self.planes, &step.taps))
             })
             .collect())
     }
@@ -300,9 +294,18 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize,
     }
     let population = run.add(Rings { species: ELECTRON, rings: Vec::new() }).map_err(fdtd)?;
     for i in injections(&m) {
-        let injection =
-            Injection { high: i.face.high, population, pulse: i.pulse, inner: i.inner, radius: i.radius, energy: i.energy, per_step: i.per_step };
-        run.inject(injection).map_err(|e| EngineError::failed(format!("the {} through {}: {e}", i.kind, i.face.name())))?;
+        let bunch = pic::Bunch {
+            axis: 2,
+            high: i.face.high,
+            population,
+            pulse: i.pulse,
+            centre: [0.0; 2],
+            radius: i.radius,
+            inner: i.inner,
+            energy: i.energy,
+            per_step: i.per_step,
+        };
+        run.inject(bunch).map_err(|e| EngineError::failed(format!("the {} through {}: {e}", i.kind, i.face.name())))?;
     }
     let origin = [-radius, -radius, z_origin];
     let probes: Vec<[f64; 3]> = m.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();

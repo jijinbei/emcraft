@@ -5,8 +5,8 @@
 //! tube each step (the plane's fields tapped on the device) and the fields and rings read back
 //! half way without ending the run.
 
-use emcraft_fdtd::axi::{AxiGrid, AxiPic, Component, Injection, Ring, Rings};
-use emcraft_fdtd::pic::{Axis, Moved, Pulse, Wall};
+use emcraft_fdtd::axi::{AxiGrid, AxiPic, Component, Ring, Rings};
+use emcraft_fdtd::pic::{Axis, Bunch, Moved, Pulse, Wall};
 use emcraft_gpu::{Backend, DeviceStep, Gpu, Precision};
 use emcraft_model::particles::{ELECTRON, Pusher};
 use emcraft_model::units::C0;
@@ -31,7 +31,9 @@ fn tube() -> AxiPic {
         .collect();
     let k = pic.add(Rings { species: ELECTRON, rings: moving }).unwrap();
     let energy = 100e3 * -ELECTRON.charge;
-    pic.inject(Injection {
+    pic.inject(Bunch {
+        axis: 2,
+        centre: [0.0; 2],
         high: false,
         population: k,
         pulse: Pulse::Steady { current: 20.0, rise: 0.0 },

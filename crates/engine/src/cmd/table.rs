@@ -821,10 +821,10 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "particles.magnetic",
         label: "Static magnetic field",
-        doc: "A static magnetic field through the particle run's box (a beam's focusing field, a magnetron's): uniform, or in a body of revolution falling away past `end` along z — B_z times ½(1 − tanh((z − end)/fall)), with the B_r that keeps it free of divergence near the axis — so a beam spreads to the wall there (a collector). Undo goes back.",
+        doc: "A static magnetic field through the particle run's box (a beam's focusing field, a magnetron's): uniform, or falling away past `end` along z — B_z times ½(1 − tanh((z − end)/fall)), with the B_r that keeps it free of divergence near the axis (in a box, about the geometry's centre across z) — so a beam spreads to the wall there (a collector). Undo goes back.",
         params: &[
             req("b", K::Array, "[Bx, By, Bz] in T").labelled(text!("Static field (T)")),
-            opt("end", K::Number, "where the field along z is halfway down (a body of revolution's run only; default none: uniform)").of(L).labelled(text!("Field ends at")),
+            opt("end", K::Number, "where the field along z is halfway down (default none: uniform)").of(L).labelled(text!("Field ends at")),
             opt("fall", K::Number, "the length it falls over (default 10 mm)").of(L).labelled(text!("Fall length")),
         ],
         effect: Effect::Record,
@@ -843,7 +843,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "particles.output",
         label: "Output plane",
-        doc: "A plane across z whose power through it towards +z the run records (Poynting's flux over its disc, a body of revolution's run only): its reply gives the mean power over the run's second half, split into the steady fields' (a beam's own field carries power too) and the oscillations', ⟨E × H⟩ − ⟨E⟩ × ⟨H⟩, and, with beams, the oscillations' power against theirs (the efficiency). Undo goes back.",
+        doc: "A plane across z whose power through it towards +z the run records (Poynting's flux over the box's cross-section, or a body of revolution's disc): its reply gives the mean power over the run's second half, split into the steady fields' (a beam's own field carries power too) and the oscillations', ⟨E × H⟩ − ⟨E⟩ × ⟨H⟩, and, with beams, the oscillations' power against theirs (the efficiency). Undo goes back.",
         params: &[req("at", K::Number, "the plane's z").of(L).labelled(text!("Position"))],
         effect: Effect::Record,
         invalidates: Some(Change::Particles),

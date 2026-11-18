@@ -41,7 +41,8 @@ use emcraft_model::units::{C0, EPS0, MU0};
 use emcraft_particles::{Pusher, Species, V3, push, velocity};
 
 use crate::pic::deposit::Window;
-use crate::pic::{Axis, Energy, Fate, Moved, Pulse, Wall, advance_on_threads, keep_kept, zeros};
+use crate::pic::{Axis, Bunch, Energy, Fate, Moved, Wall, advance_on_threads, keep_kept, zeros};
+pub use crate::pic::{Plane, PlaneTaps};
 use crate::yee::Cpml;
 use crate::{FdtdError, MAX_CELLS, Result, invalid};
 
@@ -148,20 +149,6 @@ pub struct Rings {
     pub rings: Vec<Ring>,
 }
 
-/// A beam or bunch sent in through a conducting end, as the Cartesian grid's [`crate::pic::Bunch`]:
-/// `pulse` in time, spread evenly over the area between `inner` and `radius` (m), at `energy` (J)
-/// along z, `per_step` rings a step.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Injection {
-    pub high: bool,
-    pub population: usize,
-    pub pulse: Pulse,
-    pub inner: f64,
-    pub radius: f64,
-    pub energy: f64,
-    pub per_step: usize,
-}
-
 /// The six components.
 struct Fields {
     er: Vec<f64>,
@@ -194,74 +181,6 @@ struct Layers {
     psi: [Vec<f64>; 4],
 }
 
-/// The fields on a plane across z that carry power along it ([`AxiPic::plane`]): E_r and B_θ
-/// at the half radii (V/m, T) with their rings' areas (m²), E_θ and B_r at the node radii with
-/// theirs.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Plane {
-    pub er: Vec<f64>,
-    pub bt: Vec<f64>,
-    pub half: Vec<f64>,
-    pub et: Vec<f64>,
-    pub br: Vec<f64>,
-    pub node: Vec<f64>,
-}
-
-impl Plane {
-    /// The power through it towards +z (W): Poynting's (E × H)·ẑ = (E_r B_θ − E_θ B_r)/μ₀ over
-    /// its rings, as the Yee lattice holds the fields — the energy balance's own flux.
-    pub fn flux(&self) -> f64 {
-        let along = |e: &[f64], b: &[f64], area: &[f64]| e.iter().zip(b).zip(area).map(|((e, b), a)| e * b * a).sum::<f64>();
-        (along(&self.er, &self.bt, &self.half) - along(&self.et, &self.br, &self.node)) / MU0
-    }
-
-    /// `other`'s fields added to its own (a sum towards a mean); an empty plane takes them.
-    pub fn add(&mut self, other: &Plane) {
-        if self.half.is_empty() {
-            *self = other.clone();
-            return;
-        }
-        for (mine, theirs) in [(&mut self.er, &other.er), (&mut self.bt, &other.bt), (&mut self.et, &other.et), (&mut self.br, &other.br)] {
-            mine.iter_mut().zip(theirs).for_each(|(m, t)| *m += t);
-        }
-    }
-
-    /// Its fields times `k` (a sum of `n` planes times 1/n is their mean).
-    pub fn scaled(mut self, k: f64) -> Plane {
-        for f in [&mut self.er, &mut self.bt, &mut self.et, &mut self.br] {
-            f.iter_mut().for_each(|x| *x *= k);
-        }
-        self
-    }
-}
-
-/// Where a plane's fields lie on the lattices ([`AxiPic::plane_taps`]): six taps a ring, E_r,
-/// B_θ below and above, E_θ, B_r below and above, each its lattice (in the order of
-/// [`device::Plan`]: E_r, E_z, E_θ, B_r, B_z, B_θ) and its point there, or none where the
-/// lattice has no such point (read as zero); with the rings' areas.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct PlaneTaps {
-    pub taps: Vec<Option<(usize, usize)>>,
-    half: Vec<f64>,
-    node: Vec<f64>,
-}
-
-impl PlaneTaps {
-    /// The plane of the taps' `values` (in their order): B's two sides averaged.
-    pub fn plane(&self, values: &[f64]) -> Plane {
-        let v = |n: usize| values.get(n).copied().unwrap_or(0.0);
-        let rings = self.half.len();
-        Plane {
-            er: (0..rings).map(|i| v(6 * i)).collect(),
-            bt: (0..rings).map(|i| 0.5 * (v(6 * i + 1) + v(6 * i + 2))).collect(),
-            half: self.half.clone(),
-            et: (0..rings).map(|i| v(6 * i + 3)).collect(),
-            br: (0..rings).map(|i| 0.5 * (v(6 * i + 4) + v(6 * i + 5))).collect(),
-            node: self.node.clone(),
-        }
-    }
-}
-
 /// A component of the field sampled on its lattice ([`AxiPic::sampled`]): the radii and z (m)
 /// of its points and its values, row by row along z (V/m or T).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -282,7 +201,7 @@ pub struct AxiPic {
     jt: Vec<f64>,
     lats: [Lat; 6],
     populations: Vec<Rings>,
-    injections: Vec<Injection>,
+    injections: Vec<Bunch>,
     metal: Option<Vec<bool>>,
     /// Whether each E_r, E_z, E_θ point touches metal (empty without metal).
     held: [Vec<bool>; 3],
@@ -451,29 +370,14 @@ impl AxiPic {
         Ok(self.populations.len() - 1)
     }
 
-    /// Adds `injection`, through a conducting end.
-    pub fn inject(&mut self, injection: Injection) -> Result<()> {
-        let ok = |x: f64| x.is_finite() && x >= 0.0;
-        if self.grid.z.wall != Wall::Conductor
-            || injection.population >= self.populations.len()
-            || !(ok(injection.inner)
-                && ok(injection.radius)
-                && injection.inner <= injection.radius
-                && injection.radius <= self.grid.radius()
-                && ok(injection.energy))
-            || !injection.pulse.valid()
-            || injection.per_step == 0
-            || injection.per_step > crate::pic::MAX_PER_NODE
-        {
-            let most = crate::pic::MAX_PER_NODE;
-            return Err(invalid(
-                "injection",
-                format!(
-                    "{injection:?}: through a conducting end, finite charges and times (a Gaussian's length > 0), a ring inside the wall, 1 to {most} a step"
-                ),
-            ));
+    /// Adds `bunch`, sent in through a conducting end (its axis z, its centre on the axis, its
+    /// ring inside the wall), checked as the Cartesian grid checks it.
+    pub fn inject(&mut self, bunch: Bunch) -> Result<()> {
+        if self.grid.z.wall != Wall::Conductor || bunch.axis != 2 || bunch.centre != [0.0; 2] || !(bunch.radius <= self.grid.radius()) {
+            return Err(invalid("bunch", format!("{bunch:?}: through a conducting end (axis z), about the axis, a ring inside the wall")));
         }
-        self.injections.push(injection);
+        bunch.check_source(self.populations.len())?;
+        self.injections.push(bunch);
         Ok(())
     }
 
@@ -595,10 +499,7 @@ impl AxiPic {
     /// z: E_r and E_θ on the plane, B_θ and B_r averaged from the half cells on either side (E
     /// and B at the same time, at the end of a step), each with its ring's area.
     pub fn plane(&self, z: f64) -> Plane {
-        let taps = self.plane_taps(z);
-        let values: Vec<f64> =
-            taps.taps.iter().map(|t| t.and_then(|(which, at)| self.lattice_values(which).get(at).copied()).unwrap_or(0.0)).collect();
-        taps.plane(&values)
+        self.plane_taps(z).read(|which, at| self.lattice_values(which).get(at).copied())
     }
 
     /// Where the fields of [`AxiPic::plane`] at `z` lie on their lattices, for a run that holds
@@ -615,14 +516,11 @@ impl AxiPic {
             (at < lat.len()).then_some((which, at))
         };
         // E_r and B_θ at r = (i + ½) dr, rings of 2π r dr; E_θ and B_r on the nodes r = i dr
-        // (E_θ held at zero on the wall).
-        PlaneTaps {
-            taps: (0..g.nr)
-                .flat_map(|i| [tap(ER, i, node), tap(BT, i, below), tap(BT, i, above), tap(ET, i, node), tap(BR, i, below), tap(BR, i, above)])
-                .collect(),
-            half: (0..g.nr).map(|i| 2.0 * PI * (i as f64 + 0.5) * g.dr * g.dr).collect(),
-            node: (0..g.nr).map(|i| g.area(i)).collect(),
-        }
+        // (E_θ held at zero on the wall): directions 1 and 2 are r and θ.
+        PlaneTaps::new(
+            (0..g.nr).map(|i| ([tap(ER, i, node), tap(BT, i, below), tap(BT, i, above)], 2.0 * PI * (i as f64 + 0.5) * g.dr * g.dr)),
+            (0..g.nr).map(|i| ([tap(ET, i, node), tap(BR, i, below), tap(BR, i, above)], g.area(i))),
+        )
     }
 
     /// The values of the component whose lattice is `lats[which]`.
@@ -837,13 +735,7 @@ impl AxiPic {
         for inj in self.injections.clone() {
             let Some(pop) = self.populations.get(inj.population) else { continue };
             let species = pop.species;
-            let q = inj.pulse.charge(t, self.dt);
-            if q <= 0.0 {
-                continue;
-            }
-            let w = q / (species.charge.abs() * inj.per_step as f64);
-            let sign = if inj.high { -1.0 } else { 1.0 };
-            let u = species.momentum(inj.energy, [0.0, 0.0, sign]);
+            let Some((w, u)) = inj.release(species, t, self.dt) else { continue };
             let z = if inj.high { self.grid.length() } else { 0.0 };
             let mut new = Vec::with_capacity(inj.per_step);
             for _ in 0..inj.per_step {

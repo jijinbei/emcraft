@@ -6,7 +6,8 @@
 //! along each axis; its walls periodic or conducting as set; the time step 0.95 of the grid's
 //! stability limit. Plasmas are loaded on a quiet lattice over a neutralising background,
 //! their velocities the drift plus the wave; walls emit electrons; a voltage across an axis
-//! sets a uniform field held by the outer circuit; a static magnetic field is uniform. Every
+//! sets a uniform field held by the outer circuit; a static magnetic field is uniform or falls
+//! away past an end along z; output planes across z record the power through them. Every
 //! step is recorded at most [`HISTORY`] times (the field's and the particles' energy, the
 //! particles held, the current emitted and collected on each wall, averaged between records)
 //! and each probe's field at most [`PROBE_SAMPLES`] times; at the end, the particles (at most
@@ -16,8 +17,7 @@
 
 use std::sync::Arc;
 
-use emcraft_fdtd::axi::Plane;
-use emcraft_fdtd::pic::{self, Axis, Grid, Pic, Population};
+use emcraft_fdtd::pic::{self, Axis, Grid, Pic, Plane, Population};
 use emcraft_model::particles::{Emission, Emitter, Face, MAX_FINE, Particles, Plasma, Pusher, RunGrid, Voltage, Wall, Wave};
 use emcraft_model::units::C0;
 use emcraft_model::{ParticleRun, Positive};
@@ -416,10 +416,8 @@ trait Run {
     /// E (V/m, along x, y, z) at a point (m from the grid's corner).
     fn e_at_point(&self, at: [f64; 3]) -> [f64; 3];
     /// The fields on the plane across z at `z` (m from the grid's corner) that carry power
-    /// along it, where the run can tell them (a body of revolution's).
-    fn plane(&self, _z: f64) -> Option<Plane> {
-        None
-    }
+    /// along it.
+    fn plane(&self, z: f64) -> Plane;
     fn now(&self) -> f64;
     /// At most [`SNAPSHOT`] of its particles, evenly chosen, in the model's coordinates.
     fn snapshot(&self) -> Vec<Snap>;
@@ -440,7 +438,7 @@ trait Run {
             .map(|b| {
                 let moved = self.advance()?;
                 let e = sampled(b).then(|| probes.iter().map(|at| self.e_at_point(*at)).collect());
-                Ok((moved, e, outputs.iter().filter_map(|z| self.plane(*z)).collect()))
+                Ok((moved, e, outputs.iter().map(|z| self.plane(*z)).collect()))
             })
             .collect()
     }
@@ -449,6 +447,18 @@ trait Run {
     fn end(&mut self) -> Result<()> {
         Ok(())
     }
+}
+
+/// The planes of `taps`' values on a device (each plane's taps in turn, `values` laid end to end).
+fn planes_of(taps: &[pic::PlaneTaps], values: &[f64]) -> Vec<Plane> {
+    let mut rest = values;
+    taps.iter()
+        .map(|p| {
+            let (mine, after) = rest.split_at(p.taps.len().min(rest.len()));
+            rest = after;
+            p.plane(mine)
+        })
+        .collect()
 }
 
 /// What a step did, E at the probes after it when they were sampled, and the fields on the
@@ -473,6 +483,9 @@ impl Run for Cartesian {
     }
     fn e_at_point(&self, at: [f64; 3]) -> [f64; 3] {
         self.pic.e_at(at)
+    }
+    fn plane(&self, z: f64) -> Plane {
+        self.pic.plane(z)
     }
     fn now(&self) -> f64 {
         self.pic.time()
@@ -839,9 +852,23 @@ fn build(s: &Session, grid: Grid, region: &Region, dt: f64, pusher: Pusher) -> R
         run.set_e(v.axis, |_| -v.volts / l);
         run.hold(v.axis).map_err(|e| EngineError::failed(format!("{e}: set the other axes periodic (particles.walls)")))?;
     }
-    for (a, b) in m.magnetic.iter().enumerate() {
-        if *b != 0.0 {
-            run.set_b(a, |_| *b);
+    match m.magnetic_end {
+        // Along z, falling away past `end` about the geometry's centre across z, with the B_x
+        // and B_y that keep it free of divergence (B_r = −½ r B₀ ∂_z share), as a body of
+        // revolution takes it; the field across z uniform.
+        Some(end) if m.magnetic[2] != 0.0 => {
+            let ([bx, by, b0], [xc, yc]) = (m.magnetic, region.centre(2, None));
+            let z = |x: V3| x[2] + region.origin[2];
+            run.set_b(2, |x| b0 * end.share(z(x)).0);
+            run.set_b(0, |x| bx - 0.5 * (x[0] - xc) * b0 * end.share(z(x)).1);
+            run.set_b(1, |x| by - 0.5 * (x[1] - yc) * b0 * end.share(z(x)).1);
+        }
+        _ => {
+            for (a, b) in m.magnetic.iter().enumerate() {
+                if *b != 0.0 {
+                    run.set_b(a, |_| *b);
+                }
+            }
         }
     }
     for e in &m.emitters {
@@ -1020,16 +1047,6 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
         let reply = axi::solve(s, p, &set, fine.get(), gpu)?;
         return Ok(ran_on(reply, device, gpu));
     }
-    if !s.model.particles.outputs.is_empty() {
-        return Err(EngineError::failed(
-            "not supported yet: output planes (particles.output) on the Cartesian grid; run the geometry as a body of revolution (`axisymmetric`)",
-        ));
-    }
-    if s.model.particles.magnetic_end.is_some() {
-        return Err(EngineError::failed(
-            "not supported yet: a magnetic field that falls away (particles.magnetic `end`) on the Cartesian grid; run the geometry as a body of revolution (`axisymmetric`)",
-        ));
-    }
     let (grid, region) = grid(s, set.cell.get())?;
     let origin = region.origin;
     let dt = grid.time_step(COURANT);
@@ -1038,13 +1055,14 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
     let probes: Vec<[f64; 3]> = s.model.particles.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
     let frame = Frame { origin, cells: grid.axes.map(|a| a.cells), h: grid.axes.map(|a| a.h), dt, steps, axisymmetric: false };
     let frames = frames_of(p, steps, dt)?;
+    let outputs: Vec<f64> = s.model.particles.outputs.iter().map(|z| z - origin[2]).collect();
     let run = Cartesian { pic, origin };
     // Emitting walls (their emission reads E at the wall each step) and a held voltage run on
     // the CPU's threads.
     let m = &s.model.particles;
     let gpu = gpu.filter(|_| m.emitters.is_empty() && m.voltage.is_none());
     let reply = match gpu {
-        Some(gpu) => run_to_end(s, &mut cartesian::OnDevice::new(run, gpu, &probes)?, frame, &probes, frames)?,
+        Some(gpu) => run_to_end(s, &mut cartesian::OnDevice::new(run, gpu, &probes, &outputs)?, frame, &probes, frames)?,
         None => run_to_end(s, &mut { run }, frame, &probes, frames)?,
     };
     Ok(ran_on(reply, device, gpu))

@@ -7,7 +7,7 @@ use emcraft_model::units::C0;
 use emcraft_particles::{ELECTRON, Pusher, Species};
 
 use super::*;
-use crate::pic::{Pulse, Wall};
+use crate::pic::{Bunch, Pulse, Wall};
 use crate::testkit::Lcg;
 
 fn pillbox(h: f64) -> (AxiPic, f64, f64) {
@@ -79,7 +79,18 @@ fn a_bunch_on_the_axis_leaves_the_pillboxs_loss_factor() {
     let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
     let sigma = 2e-3 / C0;
     let pulse = Pulse::Gaussian { charge: 1e-9, t0: 5.0 * sigma, sigma };
-    pic.inject(Injection { high: false, population: k, pulse, inner: 0.0, radius: 0.0, energy: 1e10 * -ELECTRON.charge, per_step: 4 }).unwrap();
+    pic.inject(Bunch {
+        axis: 2,
+        centre: [0.0; 2],
+        high: false,
+        population: k,
+        pulse,
+        inner: 0.0,
+        radius: 0.0,
+        energy: 1e10 * -ELECTRON.charge,
+        per_step: 4,
+    })
+    .unwrap();
     let mut q = 0.0;
     for _ in 0..((10.0 * sigma + l / C0) / dt) as usize + 10 {
         q += pic.step().unwrap().emitted;
@@ -103,7 +114,18 @@ fn ring_beam(gamma0: f64, current: f64, l: f64, h: f64, fine: usize, time: f64) 
     let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
     let pulse = Pulse::Steady { current, rise: 0.2e-9 };
     let energy = (gamma0 - 1.0) * ELECTRON.rest_energy();
-    pic.inject(Injection { high: false, population: k, pulse, inner: rb - 0.25e-3, radius: rb + 0.25e-3, energy, per_step: 16 }).unwrap();
+    pic.inject(Bunch {
+        axis: 2,
+        centre: [0.0; 2],
+        high: false,
+        population: k,
+        pulse,
+        inner: rb - 0.25e-3,
+        radius: rb + 0.25e-3,
+        energy,
+        per_step: 16,
+    })
+    .unwrap();
     let steps = (time / dt) as usize;
     let (mut out, mut sum, mut n) = (0.0, 0.0, 0usize);
     for s in 0..steps {
@@ -203,7 +225,9 @@ fn one_thread_and_seven_give_the_same_bits() {
         pic.set(Component::Bz, |_, _| 2.0);
         let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
         let pulse = Pulse::Steady { current: 200.0, rise: 0.1e-9 };
-        pic.inject(Injection {
+        pic.inject(Bunch {
+            axis: 2,
+            centre: [0.0; 2],
             high: false,
             population: k,
             pulse,
@@ -238,7 +262,9 @@ fn hostile_axisymmetric_settings_are_refused() {
     let one = |r: f64, z: f64, w: f64| Rings { species: ELECTRON, rings: vec![Ring { r, z, u: [0.0; 3], w }] };
     assert!(pic.add(one(0.02, 0.01, 1.0)).is_err() && pic.add(one(0.005, -1.0, 1.0)).is_err() && pic.add(one(0.005, 0.01, -1.0)).is_err());
     let k = pic.add(one(0.005, 0.01, 1.0)).unwrap();
-    let base = Injection {
+    let base = Bunch {
+        axis: 2,
+        centre: [0.0; 2],
         high: false,
         population: k,
         pulse: Pulse::Steady { current: 1.0, rise: 0.0 },
@@ -248,13 +274,16 @@ fn hostile_axisymmetric_settings_are_refused() {
         per_step: 4,
     };
     for bad in [
-        Injection { population: 7, ..base },
-        Injection { inner: 0.006, ..base },
-        Injection { radius: 0.5, ..base },
-        Injection { per_step: 0, ..base },
+        Bunch { population: 7, ..base },
+        Bunch { inner: 0.006, ..base },
+        Bunch { radius: 0.5, ..base },
+        Bunch { per_step: 0, ..base },
+        // Through an end about the axis only.
+        Bunch { axis: 0, ..base },
+        Bunch { centre: [1e-3, 0.0], ..base },
         // A pulse that is not a number would push rings of NaN weight (once accepted unchecked).
-        Injection { pulse: Pulse::Steady { current: f64::NAN, rise: 0.0 }, ..base },
-        Injection { pulse: Pulse::Gaussian { charge: 1e-9, t0: 1e-9, sigma: 0.0 }, ..base },
+        Bunch { pulse: Pulse::Steady { current: f64::NAN, rise: 0.0 }, ..base },
+        Bunch { pulse: Pulse::Gaussian { charge: 1e-9, t0: 1e-9, sigma: 0.0 }, ..base },
     ] {
         assert!(pic.inject(bad).is_err(), "{bad:?}");
     }

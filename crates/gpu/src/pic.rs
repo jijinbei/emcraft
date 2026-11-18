@@ -1,8 +1,9 @@
 //! The Cartesian particle-in-cell run (`emcraft_fdtd::pic`) on a device: the fields, the
 //! layers' ψ and the particles held there across the run, the kernels of a step (the particles
 //! pushed, the current turned back from fixed point and smoothed, B's half step, E's step, B's
-//! half step, the probes), the host reading back what left the run and the probes a batch at a
-//! time. [`PicDevice::fields`] and [`PicDevice::particles`] read the state back at a moment of
+//! half step, the probes and the taps), the host reading back what left the run, the probes and
+//! the taps a batch at a time. The taps are the field's values at points the run names
+//! ([`PicDevice::tap`]: an output plane's, `emcraft_fdtd::pic::PlaneTaps`); [`PicDevice::fields`] and [`PicDevice::particles`] read the state back at a moment of
 //! the run without ending it.
 //!
 //! **What runs where.** The host makes the bunches' and beams' particles
@@ -45,6 +46,7 @@ trait Ops {
     fn energy(&mut self, pic: &mut Pic) -> Result<Energy>;
     fn finish(&mut self, pic: &mut Pic) -> Result<()>;
     fn held(&self) -> usize;
+    fn tap(&mut self, taps: &[Option<(usize, usize)>]) -> Result<()>;
     fn fields(&self) -> Result<[Vec<f64>; 6]>;
     fn particles(&self) -> Result<Vec<(u32, Particle)>>;
 }
@@ -69,7 +71,7 @@ impl Gpu {
 
 impl PicDevice {
     /// `steps` steps of `pic` (its clock and bunches kept on the host), what each did: E at the
-    /// probes (V/m) after it; no taps.
+    /// probes (V/m) after it, the taps' fields (V/m or T; B with the steady field).
     pub fn advance(&mut self, pic: &mut Pic, steps: usize) -> Result<Vec<DeviceStep>> {
         guarded(|| self.run.advance(pic, steps))
     }
@@ -82,6 +84,13 @@ impl PicDevice {
     /// The particles the device holds.
     pub fn held(&self) -> usize {
         self.run.held()
+    }
+
+    /// The field watched from the next step on at `taps`: each its component (0–5: E_x, E_y,
+    /// E_z, B_x, B_y, B_z) and its point there, or none (read as zero). Refused for a point
+    /// outside its lattice.
+    pub fn tap(&mut self, taps: &[Option<(usize, usize)>]) -> Result<()> {
+        guarded(|| self.run.tap(taps))
     }
 
     /// The fields as they stand, into `pic` (the run goes on on the device).
@@ -454,6 +463,15 @@ impl<F: Real> Run<F> {
         }
     }
 
+    /// The fields at the taps after step `slot` of the batch, into their record.
+    fn record_taps(&self, slot: usize) {
+        let (which, at, record, taps) = self.held.taps_arg();
+        if taps > 0 {
+            let (cubes, dim) = line(taps, self.held.units);
+            kernels::tap::launch::<F>(&self.client, cubes, dim, self.fields_arg(), which, at, record, slot as u32, taps);
+        }
+    }
+
     /// One batch of `steps` (at most `crate::BATCH`).
     fn batch(&mut self, pic: &mut Pic, steps: usize) -> Result<Vec<DeviceStep>> {
         // The bunches' particles, made on the host a step at a time.
@@ -499,6 +517,7 @@ impl<F: Real> Run<F> {
             self.ampere(j);
             self.faraday(half);
             self.probe(b);
+            self.record_taps(b);
         }
         let readings = self.held.read_batch(steps)?;
         // How a particle left (`kernels::pic::push_particles`): 1 + 2 × axis + (1 at the high
@@ -601,6 +620,10 @@ impl<F: Real> Ops for Run<F> {
 
     fn held(&self) -> usize {
         self.held.held
+    }
+
+    fn tap(&mut self, taps: &[Option<(usize, usize)>]) -> Result<()> {
+        self.held.set_taps(taps, &self.fields, self.b0.as_ref())
     }
 
     fn fields(&self) -> Result<[Vec<f64>; 6]> {

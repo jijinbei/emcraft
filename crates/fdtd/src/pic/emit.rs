@@ -16,6 +16,7 @@
 //! two-dimensional analogue), so that the same run gives the same particles.
 
 use emcraft_model::units::EPS0;
+use emcraft_particles::{Species, V3};
 
 use super::grid::{Grid, Wall};
 use super::{Particle, Population};
@@ -212,8 +213,9 @@ impl Pulse {
 /// A bunch or a beam sent in through a conducting wall as `pulse` says, spread evenly over the
 /// ring between `inner` and `radius` (m; a disc when `inner` is 0) about `centre` (m, the two
 /// coordinates across the wall in the axes' order after `axis`), each particle at `energy` (J)
-/// along the wall's normal; `per_step` macro-particles carry each step's charge, placed by the
-/// R₂ sequence.
+/// along the wall's normal; `per_step` macro-particles carry each step's charge. Both grids take
+/// it: the box places its particles by the R₂ sequence, a body of revolution (through an end, z,
+/// its centre on the axis) its rings by the golden ratio's.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Bunch {
     pub axis: usize,
@@ -236,6 +238,12 @@ impl Bunch {
         if self.axis > 2 || grid.axes[self.axis].wall != Wall::Conductor {
             return Err(invalid("bunch", "enters through a conducting wall: its axis must be one closed by walls"));
         }
+        self.check_source(populations)
+    }
+
+    /// What either grid checks: the population, the pulse, radii, energy, particles a step and
+    /// centre.
+    pub(crate) fn check_source(&self, populations: usize) -> Result<()> {
         if self.population >= populations {
             return Err(invalid("bunch", format!("population {} of {populations}", self.population)));
         }
@@ -255,17 +263,23 @@ impl Bunch {
         Ok(())
     }
 
-    /// The particles of `population` the bunch sends in over the step from `t` (s) of `dt`.
-    pub(crate) fn emit(&self, grid: &Grid, population: &Population, t: f64, dt: f64, count: &mut u64) -> Vec<Particle> {
+    /// The weight (particles each) and momentum u = γv (m/s) of the macro-particles of `species`
+    /// it sends in over the step from `t` (s) of `dt`: the step's charge over `per_step` of them,
+    /// along the wall's normal inward; none when it sends nothing then.
+    pub(crate) fn release(&self, species: Species, t: f64, dt: f64) -> Option<(f64, V3)> {
         let q = self.pulse.charge(t, dt);
         if q <= 0.0 {
-            return Vec::new();
+            return None;
         }
-        let species = population.species;
         let w = q / (species.charge.abs() * self.per_step as f64);
         let sigma = if self.high { -1.0 } else { 1.0 };
         let inward = std::array::from_fn(|d| if d == self.axis { sigma } else { 0.0 });
-        let u = species.momentum(self.energy, inward);
+        Some((w, species.momentum(self.energy, inward)))
+    }
+
+    /// The particles of `population` the bunch sends in over the step from `t` (s) of `dt`.
+    pub(crate) fn emit(&self, grid: &Grid, population: &Population, t: f64, dt: f64, count: &mut u64) -> Vec<Particle> {
+        let Some((w, u)) = self.release(population.species, t, dt) else { return Vec::new() };
         let [b, c] = [(self.axis + 1) % 3, (self.axis + 2) % 3];
         let wall = if self.high { grid.axes[self.axis].length() } else { 0.0 };
         (0..self.per_step)

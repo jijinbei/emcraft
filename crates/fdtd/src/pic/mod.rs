@@ -40,6 +40,7 @@ mod fields;
 mod filter;
 mod grid;
 mod media;
+mod plane;
 #[cfg(test)]
 mod tests;
 
@@ -47,6 +48,7 @@ pub use absorb::MAX_LAYER;
 pub use emit::{Bunch, Emission, Emitter, MAX_PER_NODE, Pulse};
 pub use grid::{Axis, Grid, Wall};
 pub use media::Medium;
+pub use plane::{Plane, PlaneTaps, Tap};
 
 /// The most macro-particles a run holds.
 pub const MAX_PARTICLES: usize = 20_000_000;
@@ -435,6 +437,60 @@ impl Pic {
     /// B (T) at `x` (m).
     pub fn b_at(&self, x: V3) -> V3 {
         [0, 1, 2].map(|a| self.grid.interpolate(self.grid.b(a), &self.b[a], x))
+    }
+
+    /// The fields on the plane of nodes nearest `z` (m from the low wall) that carry power along
+    /// z: E_x and E_y on the plane, B_y and B_x averaged from the half cells on either side (E
+    /// and B at the same time, at the end of a step), each point with its share of the plane's
+    /// area.
+    ///
+    /// ```
+    /// use emcraft_fdtd::pic::{Axis, Grid, Pic, Wall};
+    /// use emcraft_particles::Pusher;
+    /// let a = Axis { cells: 4, h: 1e-3, wall: Wall::Periodic };
+    /// let g = Grid::new([a, a, Axis { cells: 8, h: 1e-3, wall: Wall::Conductor }])?;
+    /// let mut pic = Pic::new(g, g.time_step(0.9), Pusher::Boris)?;
+    /// pic.set_e(0, |_| 1.0);
+    /// pic.set_b(1, |_| 1e-3);
+    /// // E_x × H_y along +z through 16 mm²: 1e-3/μ₀ W/m² of it.
+    /// let want = 1e-3 / emcraft_model::units::MU0 * 16e-6;
+    /// assert!((pic.plane(4e-3).flux() / want - 1.0).abs() < 1e-12);
+    /// # Ok::<(), emcraft_fdtd::FdtdError>(())
+    /// ```
+    pub fn plane(&self, z: f64) -> Plane {
+        self.plane_taps(z).read(|which, at| self.lattice_values(which).and_then(|v| v.get(at)).copied())
+    }
+
+    /// Where the fields of [`Pic::plane`] at `z` lie on their lattices (each its component in
+    /// the order E_x, E_y, E_z, B_x, B_y, B_z), for a run that holds its fields elsewhere (a
+    /// device) to read them each step and make the plane of them.
+    pub fn plane_taps(&self, z: f64) -> PlaneTaps {
+        let g = self.grid;
+        let [ax, ay, az] = g.axes;
+        let k = (z / az.h).round().clamp(0.0, az.cells as f64) as isize;
+        let (below, above, node) = (az.clamp(k - 1, false), az.clamp(k, false), az.clamp(k, true));
+        let tap = |which: usize, p: [usize; 3]| {
+            let lattice = if which < 3 { g.e(which) } else { g.b(which - 3) };
+            (p.iter().zip(lattice.dims).all(|(i, n)| *i < n)).then(|| (which, lattice.at(p)))
+        };
+        // A node's share across an axis: half a cell on a wall.
+        let share = |a: Axis, i: usize| if a.on_wall(i) { 0.5 * a.h } else { a.h };
+        let first = (0..ay.points(true)).flat_map(move |j| (0..ax.cells).map(move |i| (i, j)));
+        let second = (0..ay.cells).flat_map(move |j| (0..ax.points(true)).map(move |i| (i, j)));
+        // E_x and B_y at x's centres and y's nodes; E_y and B_x at x's nodes and y's centres.
+        PlaneTaps::new(
+            first.map(|(i, j)| ([tap(0, [i, j, node]), tap(4, [i, j, below]), tap(4, [i, j, above])], ax.h * share(ay, j))),
+            second.map(|(i, j)| ([tap(1, [i, j, node]), tap(3, [i, j, below]), tap(3, [i, j, above])], share(ax, i) * ay.h)),
+        )
+    }
+
+    /// The values of component `which` (E_x, E_y, E_z, B_x, B_y, B_z).
+    fn lattice_values(&self, which: usize) -> Option<&[f64]> {
+        match which {
+            0..3 => self.e.get(which),
+            _ => self.b.get(which - 3),
+        }
+        .map(Vec::as_slice)
     }
 
     /// The mean over the box's cross-section of ∫E_a da across `axis` (V): the voltage of the

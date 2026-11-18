@@ -563,12 +563,12 @@ Leaves a face of the particle run's box open: a convolutional perfectly matched 
 
 ## `particles.magnetic` — Static magnetic field
 
-A static magnetic field through the particle run's box (a beam's focusing field, a magnetron's): uniform, or in a body of revolution falling away past `end` along z — B_z times ½(1 − tanh((z − end)/fall)), with the B_r that keeps it free of divergence near the axis — so a beam spreads to the wall there (a collector). Undo goes back.
+A static magnetic field through the particle run's box (a beam's focusing field, a magnetron's): uniform, or falling away past `end` along z — B_z times ½(1 − tanh((z − end)/fall)), with the B_r that keeps it free of divergence near the axis (in a box, about the geometry's centre across z) — so a beam spreads to the wall there (a collector). Undo goes back.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
 | `b` | array |  | yes | [Bx, By, Bz] in T |
-| `end` | number | length | no | where the field along z is halfway down (a body of revolution's run only; default none: uniform) |
+| `end` | number | length | no | where the field along z is halfway down (default none: uniform) |
 | `fall` | number | length | no | the length it falls over (default 10 mm) |
 
 ## `particles.probe` — Field probe
@@ -581,7 +581,7 @@ A point whose electric field the particle run records; its reply gives the frequ
 
 ## `particles.output` — Output plane
 
-A plane across z whose power through it towards +z the run records (Poynting's flux over its disc, a body of revolution's run only): its reply gives the mean power over the run's second half, split into the steady fields' (a beam's own field carries power too) and the oscillations', ⟨E × H⟩ − ⟨E⟩ × ⟨H⟩, and, with beams, the oscillations' power against theirs (the efficiency). Undo goes back.
+A plane across z whose power through it towards +z the run records (Poynting's flux over the box's cross-section, or a body of revolution's disc): its reply gives the mean power over the run's second half, split into the steady fields' (a beam's own field carries power too) and the oscillations', ⟨E × H⟩ − ⟨E⟩ × ⟨H⟩, and, with beams, the oscillations' power against theirs (the efficiency). Undo goes back.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|

@@ -13,7 +13,7 @@ use emcraft_theory::bwo::{Reflecting, Ring, Sample};
 use num_complex::Complex64 as Z;
 
 use super::*;
-use crate::pic::{Pulse, Wall};
+use crate::pic::{Bunch, Pulse, Wall};
 
 /// The first zero of J₀.
 const X01: f64 = 2.404_825_557_695_773;
@@ -242,7 +242,8 @@ fn bwo(s: Structure, cells: Cells, periods: f64, beam: Beam, time: f64, band: (f
     let k = pic.add(Rings { species: ELECTRON, rings: Vec::new() }).unwrap();
     let pulse = Pulse::Steady { current: beam.current, rise: 1e-9 };
     let energy = beam.energy * -ELECTRON.charge;
-    pic.inject(Injection { high: false, population: k, pulse, inner: beam.inner, radius: beam.outer, energy, per_step: 8 }).unwrap();
+    pic.inject(Bunch { axis: 2, centre: [0.0; 2], high: false, population: k, pulse, inner: beam.inner, radius: beam.outer, energy, per_step: 8 })
+        .unwrap();
     let (pr, pz) = (0.9 * s.narrowest, z0 + 0.25 * s.period);
     let window = (1e-9 / dt) as usize;
     let freqs: Vec<f64> = (0..=20).map(|i| band.0 + (band.1 - band.0) * i as f64 / 20.0).collect();

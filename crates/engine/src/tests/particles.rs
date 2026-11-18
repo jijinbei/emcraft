@@ -293,9 +293,11 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
     assert!((efficiency - oscillating / (20.0 * 1e5)).abs() < 1e-12, "{out}");
     let kept = s.results.particles.clone().unwrap();
     assert!(kept.history.iter().all(|h| h.power.len() == 1) && kept.outputs.len() == 1);
-    // On the Cartesian grid output planes are refused, not left out.
-    let cartesian = s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1})).unwrap_err().to_string();
-    assert!(cartesian.contains("output planes"), "{cartesian}");
+    // The Cartesian grid's plane, the tube a staircase of 1 mm cells, to the same closed form
+    // (7 % low there).
+    let cartesian = s.clone().execute("solve.particles", &json!({"time": 1, "cell": 1})).unwrap();
+    let boxed = cartesian["outputs"][0]["power_w"].as_f64().unwrap();
+    assert!((boxed / want - 1.0).abs() < 0.1, "{boxed} W against {want} W");
     assert!(s.clone().execute("particles.output", &json!({"at": "x"})).is_err());
     // Its records as CSV: the history with the plane's power, the particles' phase space.
     let history = scratch("history.csv");
@@ -350,7 +352,7 @@ fn a_field_that_falls_away_spreads_its_beam_to_the_wall() {
     // they hold is kept, Jackson §12.5's adiabatic invariant), so a 5 mm beam reaches the 10 mm
     // wall once the field is down to a quarter, short of the far end; in a uniform field it
     // reaches the end.
-    let reaching_the_end = |end: Option<f64>| {
+    let reaching_the_end = |end: Option<f64>, grid: Value| {
         let mut s = Session::new();
         let mut field = json!({"b": [0, 0, 1]});
         if let Some(z) = end {
@@ -367,26 +369,19 @@ fn a_field_that_falls_away_spreads_its_beam_to_the_wall() {
                 ("particles.open", json!({"face": "z+"})),
             ],
         );
-        let r = s.execute("solve.particles", &json!({"time": 2, "cell": 0.5, "axisymmetric": true})).unwrap();
+        let r = s.execute("solve.particles", &grid).unwrap();
         -r["walls"]["z+"]["current"].as_f64().unwrap_or(0.0)
     };
-    let (uniform, falling) = (reaching_the_end(None), reaching_the_end(Some(40.0)));
+    let revolution = json!({"time": 2, "cell": 0.5, "axisymmetric": true});
+    let (uniform, falling) = (reaching_the_end(None, revolution.clone()), reaching_the_end(Some(40.0), revolution));
     assert!(uniform > 19.0 && falling < 0.5, "into the open end: {uniform} A in a uniform field, {falling} A past its end");
+    // The Cartesian grid takes it as well: its B_x and B_y about the geometry's axis.
+    let cartesian = json!({"time": 2, "cell": 1});
+    let (uniform, falling) = (reaching_the_end(None, cartesian.clone()), reaching_the_end(Some(40.0), cartesian));
+    assert!(uniform > 19.0 && falling < 0.5, "in a box: {uniform} A in a uniform field, {falling} A past its end");
     let mut s = Session::new();
     assert!(s.execute("particles.magnetic", &json!({"b": [0, 0, 1], "fall": 5})).is_err());
     assert!(s.execute("particles.magnetic", &json!({"b": [0, 0, 1], "end": 40, "fall": -1})).is_err());
-    // The Cartesian grid refuses it rather than leave it out.
-    run(
-        &mut s,
-        &[
-            ("geometry.solid", json!({"shape": "cylinder", "radius": 10, "length": 80})),
-            ("project.analysis", json!({"kind": "particles"})),
-            ("particles.beam", json!({"face": "z-", "current": 20, "energy": 1e5, "radius": 5})),
-            ("particles.magnetic", json!({"b": [0, 0, 1], "end": 40})),
-        ],
-    );
-    let err = s.execute("solve.particles", &json!({"time": 0.1, "cell": 2})).unwrap_err().to_string();
-    assert!(err.contains("falls away"), "{err}");
 }
 
 #[test]
@@ -516,10 +511,10 @@ fn a_body_of_revolution_runs_on_the_gpu_kernels_as_on_the_threads() {
 
 #[test]
 fn a_box_runs_on_the_gpu_kernels_as_on_the_threads() {
-    // A bunch through a closed pillbox (its outside metal cells) past a probe, on the CPU's
-    // threads and on the GPU's kernels (CubeCL's CPU runtime, double precision): the same
-    // particles, history, probe, wake and moments to rounding (the device sums the current in
-    // fixed point, emcraft_gpu).
+    // A bunch through a closed pillbox (its outside metal cells) past a probe and a plane, on
+    // the CPU's threads and on the GPU's kernels (CubeCL's CPU runtime, double precision): the
+    // same particles, history, probe, power, wake and moments to rounding (the device sums the
+    // current in fixed point, emcraft_gpu).
     let solved = |device: &str| {
         let mut s = Session::new();
         run(
@@ -529,6 +524,7 @@ fn a_box_runs_on_the_gpu_kernels_as_on_the_threads() {
                 ("project.analysis", json!({"kind": "particles"})),
                 ("particles.bunch", json!({"face": "z-", "charge": 0.1, "length": 1, "energy": 1e6, "radius": 2})),
                 ("particles.probe", json!({"at": [1, 1, 4]})),
+                ("particles.output", json!({"at": 5})),
             ],
         );
         let r = s.execute("solve.particles", &json!({"time": 0.025, "cell": 0.5, "device": device, "precision": "double", "frames": 3}));
@@ -545,6 +541,8 @@ fn a_box_runs_on_the_gpu_kernels_as_on_the_threads() {
     let top = a.probes[0].e.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
     let worst = a.probes[0].e.iter().flatten().zip(b.probes[0].e.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
     assert!(top > 0.0 && worst <= 1e-9 * top, "{worst:e} of {top:e}");
+    let (p, q) = (&a.outputs[0], &b.outputs[0]);
+    assert!(p.power != 0.0 && close(p.power, q.power) && close(p.steady, q.steady), "{p:?} against {q:?}");
     let k = |r: &Value| r["loss_factor_v_per_pc"].as_f64().unwrap();
     assert!(k(&cpu) > 0.0 && close(k(&cpu), k(&gpu)), "{} against {}", k(&cpu), k(&gpu));
     assert_eq!((a.moments.len(), b.moments.len()), (3, 3));

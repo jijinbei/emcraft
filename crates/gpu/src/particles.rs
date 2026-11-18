@@ -327,13 +327,20 @@ impl<F: Real, const N: usize> Held<F, N> {
             .collect()
     }
 
-    /// The taps from the next step on: each its array and point there (`lens` the arrays'
-    /// lengths) or none, and what a steady field adds at each. Refused for a point outside its
-    /// array.
-    pub(crate) fn set_taps(&mut self, taps: &[Option<(usize, usize)>], lens: &[usize], steady: Vec<f64>) -> Result<()> {
-        if taps.iter().flatten().any(|&(which, at)| lens.get(which).is_none_or(|&n| at >= n)) {
+    /// The taps from the next step on: each its array of `fields` (E's three components, then
+    /// B's) and point there, or none; a B tap's value with the steady field `b0` (held apart)
+    /// added. Refused for a point outside its array.
+    pub(crate) fn set_taps(&mut self, taps: &[Option<(usize, usize)>], fields: &[Buf<F>], b0: Option<&[Vec<f64>; 3]>) -> Result<()> {
+        if taps.iter().flatten().any(|&(which, at)| fields.get(which).is_none_or(|b| at >= b.len())) {
             return Err(invalid("taps", "points on the fields' lattices"));
         }
+        let steady = taps
+            .iter()
+            .map(|t| match (t, b0) {
+                (Some((w, a)), Some(b0)) if *w >= 3 => b0.get(w - 3).and_then(|b| b.get(*a)).copied().unwrap_or(0.0),
+                _ => 0.0,
+            })
+            .collect();
         let (which, at): (Vec<u32>, Vec<u32>) = taps.iter().map(|t| t.map_or((0, 0), |(w, a)| (w as u32, a as u32))).unzip();
         let n = taps.len().max(1);
         self.taps = Taps {

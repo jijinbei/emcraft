@@ -3,8 +3,9 @@
 //! slab, in an axial magnetic field, its current smoothed, an absorbing layer at the far wall,
 //! with a second population of heavier positive particles already moving; and two drifting
 //! populations in a box periodic every way, pushed by Vay's pusher. Double precision to
-//! rounding, single to its precision, the same bits twice; the state read back half way without
-//! ending the run.
+//! rounding, single to its precision, the same bits twice; with them the power through a plane
+//! across the box each step (the plane's fields tapped on the device), and the state read back
+//! half way without ending the run.
 
 use emcraft_fdtd::pic::{Axis, Bunch, Emission, Emitter, Grid, Medium, Moved, Particle, Pic, Population, Pulse, Wall};
 use emcraft_gpu::{Backend, DeviceStep, Gpu, Precision};
@@ -86,8 +87,9 @@ const STEPS: usize = 240;
 /// Probes (m).
 const PROBES: [[f64; 3]; 2] = [[1.0e-3, 1.4e-3, 3e-3], [2.2e-3, 0.6e-3, 6.4e-3]];
 
-/// The step the state is read back at.
+/// The step the state is read back at, and the plane across z whose power is taken each step (m).
 const HALF: usize = 120;
+const PLANE: f64 = 10e-3;
 
 /// What a run left: its fields, its particles (each with its population) and the sums of what
 /// each step did, E at the probes each step, and its fields and particles after [`HALF`] steps.
@@ -96,6 +98,7 @@ struct Ran {
     particles: Vec<(u32, Particle)>,
     moved: Moved,
     probes: Vec<[f64; 3]>,
+    power: Vec<f64>,
     half: ([Vec<f64>; 6], Vec<(u32, Particle)>),
 }
 
@@ -106,22 +109,25 @@ fn state(pic: &Pic) -> ([Vec<f64>; 6], Vec<(u32, Particle)>) {
 
 fn on_cpu(mut pic: Pic) -> Ran {
     let mut moved = Moved::default();
-    let (mut probes, mut half) = (Vec::new(), Default::default());
+    let (mut probes, mut power, mut half) = (Vec::new(), Vec::new(), Default::default());
     for n in 0..STEPS {
         moved += &pic.step().unwrap();
         probes.extend(PROBES.map(|x| pic.e_at(x)));
+        power.push(pic.plane(PLANE).flux());
         if n + 1 == HALF {
             half = state(&pic);
         }
     }
     let (fields, particles) = state(&pic);
-    Ran { fields, particles, moved, probes, half }
+    Ran { fields, particles, moved, probes, power, half }
 }
 
 /// The run on `backend`, advanced in spans of `span` steps.
 fn on_device(mut pic: Pic, backend: Backend, precision: Precision, span: usize) -> Ran {
     let _one = DEVICE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let taps = pic.plane_taps(PLANE);
     let mut dev = Gpu { backend, precision }.pic(&mut pic, &PROBES).unwrap();
+    dev.tap(&taps.taps).unwrap();
     let mut steps: Vec<DeviceStep> = Vec::new();
     let mut half = Default::default();
     while steps.len() < STEPS {
@@ -144,7 +150,8 @@ fn on_device(mut pic: Pic, backend: Backend, precision: Precision, span: usize) 
     for s in &steps {
         moved += &s.moved;
     }
-    Ran { fields, particles, moved, probes: steps.into_iter().flat_map(|s| s.probes).collect(), half }
+    let power = steps.iter().map(|s| taps.plane(&s.taps).flux()).collect();
+    Ran { fields, particles, moved, probes: steps.into_iter().flat_map(|s| s.probes).collect(), power, half }
 }
 
 /// The largest difference of `a` from `b` over the largest |b| of each component, the
@@ -171,6 +178,7 @@ fn worst(a: &Ran, b: &Ran) -> f64 {
         fields(&a.fields, &b.fields),
         particles(&a.particles, &b.particles),
         rel(&flat(&a.probes), &flat(&b.probes)),
+        rel(&a.power, &b.power),
         fields(&a.half.0, &b.half.0),
         particles(&a.half.1, &b.half.1),
     ]
@@ -188,6 +196,8 @@ fn a_beam_through_a_box_on_the_cpu_backend_matches_the_threads() {
         assert!((a - b).abs() <= 1e-9 * cpu.moved.emitted.abs(), "{a} against {b}");
     }
     assert!(cpu.moved.metal != 0.0 && cpu.particles.len() > 100, "the beam reaches the iris: {:?}", cpu.moved);
+    // The beam's own field crosses the plane past the iris.
+    assert!(cpu.power.iter().any(|p| p.abs() > 0.0));
     assert!(worst(&double, &cpu) < 1e-9, "{:e}", worst(&double, &cpu));
 }
 
@@ -208,7 +218,7 @@ fn single_precision_matches_the_threads_to_its_precision() {
 #[test]
 fn a_run_on_the_device_repeats_bit_for_bit() {
     let [a, b] = [0, 1].map(|_| on_device(tube(), Backend::Cpu, Precision::Single, 64));
-    assert!(a.fields == b.fields && a.particles == b.particles && a.moved == b.moved && a.probes == b.probes);
+    assert!(a.fields == b.fields && a.particles == b.particles && a.moved == b.moved && a.probes == b.probes && a.power == b.power);
 }
 
 #[test]
