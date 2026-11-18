@@ -1,0 +1,39 @@
+{
+  "title": "PCB line impedances from their cross-sections: an outer microstrip, a centred stripline and a coupled stripline pair",
+  "kind": "theory",
+  "source": "Hammerstad and Jensen, IEEE MTT-S 1980 pp. 407–409 (microstrip, a fit within about 1 %); S. B. Cohn, IRE Trans. MTT 2(2):52–57, 1954 (stripline, exact for a strip of no thickness) and IRE Trans. MTT 3(5):29–38, 1955 (coupled striplines' even and odd impedances, exact). Reference values evaluated independently of EMCraft from the published formulas (arithmetic–geometric means for the elliptic integrals' ratios): W 0.35 mm on h 0.2 mm, εr 4.3; W 0.2 mm centred between planes 0.8 mm apart, εr 4.3; two such strips 0.2 mm apart.",
+  "quantities": [
+    {
+      "id": "microstrip",
+      "quantity": "outer microstrip Z0, ohms",
+      "measure": {"step": "microstrip", "pointer": "/sections/0/z0"},
+      "value": 53.267128775027174,
+      "tolerance": {"relative": 0.015},
+      "reason": "The finite elements' quasi-static Z0 (its lid 20 h up) against Hammerstad and Jensen's fit, itself within about 1 % of exact."
+    },
+    {
+      "id": "stripline",
+      "quantity": "centred stripline Z0, ohms",
+      "measure": {"step": "stripline", "pointer": "/sections/0/z0"},
+      "value": 67.47401689392679,
+      "tolerance": {"relative": 0.01},
+      "reason": "Cohn's exact zero-thickness stripline; the box's side walls and the grid within 1 %."
+    },
+    {
+      "id": "pair_even",
+      "quantity": "coupled stripline even-mode impedance, ohms",
+      "measure": {"step": "pair", "pointer": "/sections/0/z_even"},
+      "value": 80.30010397872621,
+      "tolerance": {"relative": 0.01},
+      "reason": "Cohn's exact even-mode impedance."
+    },
+    {
+      "id": "pair_differential",
+      "quantity": "coupled stripline differential impedance (2 Z_odd), ohms",
+      "measure": {"step": "pair", "pointer": "/sections/0/z_diff"},
+      "value": 107.22607882993358,
+      "tolerance": {"relative": 0.01},
+      "reason": "Twice Cohn's exact odd-mode impedance."
+    }
+  ]
+}

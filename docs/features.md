@@ -132,6 +132,15 @@ A lumped element on a layer of the board's region (pcb.region), from the board p
 | `arrangement` | string |  | no | `series` (default) or `parallel` |
 | `width` | number | length | no | a sheet this wide across the gap's line (a chip's width); default the line itself |
 
+## `pcb.impedance` — Line impedance
+
+The impedance of every routed segment of a net, its cross-section solved quasi-statically by the finite elements (its capacitances with and without the dielectrics): the strip at its layer, the board's dielectrics, its reference planes the nearest layers above and below with another net's copper under its middle (an outer microstrip, an embedded one, a stripline); with a differential partner (`pair`, else the net its name pairs with: +/-, _P/_N, P/N) the partner's parallel segment beside it, its odd and even modes, z_diff = 2 z_odd and z_common = z_even/2. Each distinct cross-section is solved once. Lossless quasi-TEM lines of copper of no thickness; a segment without a reference plane has no impedance. The reply lists each segment's (with the closed form for a plain microstrip or centred stripline) and the length-weighted range.
+
+| Parameter | Type | Unit | Required | Description |
+|---|---|---|---|---|
+| `net` | string |  | yes | the signal net |
+| `pair` | string |  | no | its differential partner (default: the net its name pairs with, if the board has it) |
+
 ## `pcb.inspect` — Inspect PCB route
 
 Screens the selected net's routed segments and filled reference copper and reports exact line/polygon coverage gaps, nearby parallel signals, topology and via-transition limitations. Only valid simple outer microstrip routes get a lossless quasi-static line approximation: impedance, delay, S11/S21 and TDR. Screening is not a solved return-current map, full-wave model, calculated crosstalk or compliance verdict.

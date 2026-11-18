@@ -2073,6 +2073,7 @@ dependencies = [
  "emcraft-templates",
  "emcraft-theory",
  "proptest",
+ "rayon",
  "rstest",
  "serde",
  "serde_json",

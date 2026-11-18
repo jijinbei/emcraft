@@ -52,6 +52,60 @@ fn a_pcbcraft_project_imports_with_its_nets_and_its_stackup() {
     approx::assert_abs_diff_eq!(t.model().pcb().unwrap().layers[1].z, 1.53e-3, epsilon = 1e-15);
 }
 
+/// A board in mm: a 0.2 mm FR-4 core (εr 4.3) between TOP and a GND plane on L2, 0.4 mm on to
+/// L3, 0.4 mm more to a GND plane on BOT; a 0.35 mm microstrip, a differential pair named to pair,
+/// a stripline centred between L2 and BOT, and a trace with no plane under it.
+fn lines_board() -> serde_json::Value {
+    let plane = |layer: &str| json!({"net": "GND", "layer": layer, "polygon": [[-5, -10], [45, -10], [45, 10], [-5, 10]]});
+    let seg =
+        |id: &str, net: &str, layer: &str, y: f64, w: f64| json!({"id": id, "net": net, "layer": layer, "start": [0, y], "end": [40, y], "width": w});
+    json!({
+        "name": "lines",
+        "layers": [
+            {"name": "TOP", "z": 0, "eps_below": 4.3},
+            {"name": "L2", "z": 0.2, "eps_below": 4.3},
+            {"name": "L3", "z": 0.6, "eps_below": 4.3},
+            {"name": "BOT", "z": 1.0, "eps_below": 1}
+        ],
+        "segments": [
+            seg("ms", "MS", "TOP", 0.0, 0.35),
+            seg("p", "USB_D+", "TOP", 5.0, 0.2),
+            seg("n", "USB_D-", "TOP", 5.35, 0.2),
+            seg("sl", "SL", "L3", 0.0, 0.2),
+            json!({"id": "far", "net": "FAR", "layer": "TOP", "start": [50, 0], "end": [60, 0], "width": 0.3})
+        ],
+        "copper": [plane("L2"), plane("BOT")]
+    })
+}
+
+#[test]
+fn line_impedances_come_from_their_cross_sections() {
+    let mut s = Session::new();
+    s.execute("pcb.load", &json!({"data": lines_board()})).unwrap();
+    let row = |r: &serde_json::Value| r["sections"][0].clone();
+    // The outer microstrip over L2's plane: Hammerstad and Jensen's fit to 1.5 %.
+    let ms = row(&s.execute("pcb.impedance", &json!({"net": "MS"})).unwrap());
+    let (z, closed) = (ms["z0"].as_f64().unwrap(), ms["closed_form"].as_f64().unwrap());
+    assert!(ms["kind"] == "microstrip" && ms["below"] == "L2" && (z / closed - 1.0).abs() < 0.015, "{ms}");
+    // The stripline centred between L2's and BOT's planes: Cohn's exact Z₀ to 1 %.
+    let sl = row(&s.execute("pcb.impedance", &json!({"net": "SL"})).unwrap());
+    let (z, closed) = (sl["z0"].as_f64().unwrap(), sl["closed_form"].as_f64().unwrap());
+    assert!(sl["kind"] == "stripline" && sl["above"] == "L2" && sl["below"] == "BOT" && (z / closed - 1.0).abs() < 0.01, "{sl}");
+    // The pair found by its names: its odd mode below its even, z_diff twice z_odd.
+    let r = s.execute("pcb.impedance", &json!({"net": "USB_D+"})).unwrap();
+    let d = row(&r);
+    assert_eq!(r["pair"], "USB_D-");
+    let (odd, even, diff) = (d["z_odd"].as_f64().unwrap(), d["z_even"].as_f64().unwrap(), d["z_diff"].as_f64().unwrap());
+    assert!(odd < even && (diff - 2.0 * odd).abs() < 1e-2 && (d["gap"].as_f64().unwrap() - 0.15).abs() < 1e-9, "{d}");
+    assert_eq!(r["impedance"]["mean"], d["z_diff"]);
+    // No plane under the far trace: no impedance, said so.
+    let far = row(&s.execute("pcb.impedance", &json!({"net": "FAR"})).unwrap());
+    assert!(far["z0"].is_null() && far["note"].as_str().is_some_and(|n| n.contains("no reference")), "{far}");
+    for bad in [json!({"net": "NOPE"}), json!({"net": "MS", "pair": "MS"}), json!({"net": "MS", "pair": "NOPE"})] {
+        assert!(s.execute("pcb.impedance", &bad).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn board_commands_refuse_hostile_inputs_and_keep_the_model() {
     let mut s = Session::new();

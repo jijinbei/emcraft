@@ -186,3 +186,4 @@ pub mod power;
 pub mod pcb;
 pub mod pcb_edit;
 pub mod pcb_fem;
+pub mod pcb_lines;

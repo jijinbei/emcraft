@@ -1,0 +1,29 @@
+[
+  {
+    "command": "pcb.load",
+    "params": {
+      "data": {
+        "name": "four-layer lines",
+        "layers": [
+          {"name": "TOP", "z": 0, "eps_below": 4.3},
+          {"name": "L2", "z": 0.2, "eps_below": 4.3},
+          {"name": "L3", "z": 0.6, "eps_below": 4.3},
+          {"name": "BOT", "z": 1.0, "eps_below": 1}
+        ],
+        "segments": [
+          {"id": "ms", "net": "MS", "layer": "TOP", "start": [0, 0], "end": [40, 0], "width": 0.35},
+          {"id": "sl", "net": "SL", "layer": "L3", "start": [0, 0], "end": [40, 0], "width": 0.2},
+          {"id": "cp", "net": "CS_P", "layer": "L3", "start": [0, 10], "end": [40, 10], "width": 0.2},
+          {"id": "cn", "net": "CS_N", "layer": "L3", "start": [0, 10.4], "end": [40, 10.4], "width": 0.2}
+        ],
+        "copper": [
+          {"net": "GND", "layer": "L2", "polygon": [[-5, -10], [45, -10], [45, 20], [-5, 20]]},
+          {"net": "GND", "layer": "BOT", "polygon": [[-5, -10], [45, -10], [45, 20], [-5, 20]]}
+        ]
+      }
+    }
+  },
+  {"command": "pcb.impedance", "params": {"net": "MS"}, "id": "microstrip"},
+  {"command": "pcb.impedance", "params": {"net": "SL"}, "id": "stripline"},
+  {"command": "pcb.impedance", "params": {"net": "CS_P"}, "id": "pair"}
+]

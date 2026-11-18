@@ -32,6 +32,7 @@ use crate::sparse::Csr;
 
 mod coupled;
 mod lossy;
+pub mod strips;
 
 pub use lossy::LossyPortMode;
 
