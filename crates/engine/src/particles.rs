@@ -415,16 +415,21 @@ trait Run {
     /// E (V/m, along x, y, z) at a point (m from the grid's corner).
     fn e_at_point(&self, at: [f64; 3]) -> [f64; 3];
     /// The fields on the plane across z at `z` (m from the grid's corner) that carry power
-    /// along it, where the run can tell them (a body of revolution's on the CPU).
+    /// along it, where the run can tell them (a body of revolution's).
     fn plane(&self, _z: f64) -> Option<Plane> {
         None
     }
     fn now(&self) -> f64;
     /// At most [`SNAPSHOT`] of its particles, evenly chosen, in the model's coordinates.
     fn snapshot(&self) -> Vec<Snap>;
-    /// E_z on the r–z plane, where the run has one (a body of revolution's on the CPU).
+    /// E_z on the r–z plane, where the run has one (a body of revolution's).
     fn field_map(&self) -> Option<FieldMap> {
         None
+    }
+    /// Its particles and its E_z map as they stand ([`Run::snapshot`], [`Run::field_map`]); a
+    /// device reads them back.
+    fn moment(&mut self) -> Result<(Vec<Snap>, Option<FieldMap>)> {
+        Ok((self.snapshot(), self.field_map()))
     }
 
     /// `steps` steps, what each did, where `sampled(its index)` E at `probes` after it, and the
@@ -588,9 +593,9 @@ fn record(run: &mut impl Run, steps: usize, dt: f64, probes: &[[f64; 3]], output
         }
         while due.last().is_some_and(|d| n >= *d) {
             due.pop();
-            let all = run.snapshot();
+            let (all, map) = run.moment()?;
             let stride = all.len().div_ceil(FRAME_PARTICLES).max(1);
-            moments.push(Moment { t: run.now(), particles: all.into_iter().step_by(stride).collect(), map: run.field_map() });
+            moments.push(Moment { t: run.now(), particles: all.into_iter().step_by(stride).collect(), map });
         }
     }
     let mean = 1.0 / steps_late.max(1) as f64;

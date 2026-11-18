@@ -20,7 +20,7 @@
 
 use std::cell::Cell;
 
-use emcraft_fdtd::axi::{AxiGrid, AxiPic, Injection, Rings};
+use emcraft_fdtd::axi::{AxiGrid, AxiPic, Injection, PlaneTaps, Ring, Rings};
 use emcraft_fdtd::pic;
 use emcraft_gpu::{AxiDevice, Gpu};
 use emcraft_model::ParticleRun;
@@ -28,8 +28,8 @@ use emcraft_particles::ELECTRON;
 use serde_json::Value;
 
 use super::{
-    COURANT, EV, FieldMap, Frame, INSET, LAYER, MAP_POINTS, MAX_FRAMES, Run, SNAPSHOT, Snap, cells_along, fdtd, injections, open_on_periodic,
-    run_to_end, steps_of,
+    COURANT, EV, FieldMap, Frame, INSET, LAYER, MAP_POINTS, Run, SNAPSHOT, Snap, cells_along, fdtd, injections, open_on_periodic, run_to_end,
+    steps_of,
 };
 use crate::{EngineError, Params, Result, Session};
 
@@ -94,13 +94,18 @@ impl Run for Axi {
     /// The rings, each a particle where its ring passes the golden angle times its index round
     /// the axis.
     fn snapshot(&self) -> Vec<Snap> {
+        let rings = self.pic.populations().iter().enumerate().flat_map(|(k, pop)| pop.rings.iter().map(move |q| (k, pop.species, q)));
+        self.snaps(self.pic.rings(), rings)
+    }
+}
+
+impl Axi {
+    /// At most [`SNAPSHOT`] of `count` rings (each its population and species), evenly chosen,
+    /// each a particle where its ring passes the golden angle times its index round the axis.
+    fn snaps<'a>(&self, count: usize, rings: impl Iterator<Item = (usize, emcraft_particles::Species, &'a Ring)>) -> Vec<Snap> {
         let golden = std::f64::consts::PI * (3.0 - 5f64.sqrt());
-        let stride = self.pic.rings().div_ceil(SNAPSHOT).max(1);
-        self.pic
-            .populations()
-            .iter()
-            .enumerate()
-            .flat_map(|(k, pop)| pop.rings.iter().map(move |q| (k, pop.species, q)))
+        let stride = count.div_ceil(SNAPSHOT).max(1);
+        rings
             .step_by(stride)
             .enumerate()
             .map(|(n, (population, species, q))| {
@@ -118,21 +123,26 @@ impl Run for Axi {
 
 /// A run in a body of revolution on a device (`emcraft_gpu::AxiDevice`): its clock and
 /// injections on the host, its fields and rings on the device until [`Run::end`] brings them
-/// back; E at the probes (in the half plane θ = 0 at each one's r and z) recorded there each
-/// step.
+/// back; E at the probes (in the half plane θ = 0 at each one's r and z) and the fields on the
+/// output planes recorded there each step, the fields and the rings read back at each moment.
 struct OnDevice {
     axi: Axi,
     device: Option<AxiDevice>,
     probes: Vec<Polar>,
+    planes: Vec<PlaneTaps>,
 }
 
 impl OnDevice {
-    /// `axi` moved onto `gpu`, E watched at `probes` (m from the grid's corner).
-    fn new(mut axi: Axi, gpu: Gpu, probes: &[[f64; 3]]) -> Result<OnDevice> {
+    /// `axi` moved onto `gpu`, E watched at `probes` and the planes across z at `outputs` (m
+    /// from the grid's corner).
+    fn new(mut axi: Axi, gpu: Gpu, probes: &[[f64; 3]], outputs: &[f64]) -> Result<OnDevice> {
         let probes: Vec<Polar> = probes.iter().map(|at| axi.polar(*at)).collect();
         let points: Vec<[f64; 2]> = probes.iter().map(|q| [q.r, q.z]).collect();
-        let device = gpu.axi(&mut axi.pic, &points).map_err(fdtd)?;
-        Ok(OnDevice { axi, device: Some(device), probes })
+        let planes: Vec<PlaneTaps> = outputs.iter().map(|z| axi.pic.plane_taps(*z)).collect();
+        let mut device = gpu.axi(&mut axi.pic, &points).map_err(fdtd)?;
+        let taps: Vec<Option<(usize, usize)>> = planes.iter().flat_map(|p| p.taps.iter().copied()).collect();
+        device.tap(&taps).map_err(fdtd)?;
+        Ok(OnDevice { axi, device: Some(device), probes, planes })
     }
 }
 
@@ -159,8 +169,18 @@ impl Run for OnDevice {
     fn snapshot(&self) -> Vec<Snap> {
         self.axi.snapshot()
     }
+    /// The rings and E_z as they stand on the device, read back (the run goes on there).
+    fn moment(&mut self) -> Result<(Vec<Snap>, Option<FieldMap>)> {
+        let Some(device) = self.device.as_ref() else {
+            return Ok((self.axi.snapshot(), self.axi.field_map()));
+        };
+        device.fields(&mut self.axi.pic).map_err(fdtd)?;
+        let rings = device.rings().map_err(fdtd)?;
+        let species = self.axi.pic.populations().first().map_or(ELECTRON, |p| p.species);
+        Ok((self.axi.snaps(rings.len(), rings.iter().map(|q| (0, species, q))), self.axi.field_map()))
+    }
     /// The steps on the device, E at the probes (the ones it was made with) turned from the
-    /// half plane θ = 0 to x and y; no output planes (refused before a run on a device).
+    /// half plane θ = 0 to x and y, and the fields on the output planes it was made with.
     fn span(&mut self, steps: usize, _: &[[f64; 3]], _: &[f64], sampled: &dyn Fn(usize) -> bool) -> Result<Vec<super::Stepped>> {
         let Some(device) = self.device.as_mut() else {
             return (0..steps).map(|_| Ok((self.axi.advance()?, None, Vec::new()))).collect();
@@ -173,7 +193,17 @@ impl Run for OnDevice {
                 let probes = sampled(b).then(|| {
                     step.probes.iter().zip(&self.probes).map(|([er, et, ez], q)| [er * q.cos - et * q.sin, er * q.sin + et * q.cos, *ez]).collect()
                 });
-                (step.moved, probes, Vec::new())
+                let mut taps = step.taps.as_slice();
+                let planes = self
+                    .planes
+                    .iter()
+                    .map(|p| {
+                        let (mine, rest) = taps.split_at(p.taps.len().min(taps.len()));
+                        taps = rest;
+                        p.plane(mine)
+                    })
+                    .collect();
+                (step.moved, probes, planes)
             })
             .collect())
     }
@@ -210,11 +240,6 @@ fn unsupported(s: &Session) -> Option<String> {
 pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize, gpu: Option<Gpu>) -> Result<Value> {
     if let Some(why) = unsupported(s) {
         return Err(EngineError::failed(why));
-    }
-    if gpu.is_some() && (!s.model.particles.outputs.is_empty() || p.integer("frames", 0..=MAX_FRAMES).or(0)? > 0) {
-        return Err(EngineError::failed(
-            "not supported yet: output planes (particles.output) or moments (`frames`) on a device; run on the CPU's threads (`device`: cpu)",
-        ));
     }
     let b =
         s.model.bounds().ok_or_else(|| EngineError::failed("no geometry: the body of revolution particles run in is its bounds (geometry.solid)"))?;
@@ -285,7 +310,10 @@ pub(super) fn solve(s: &mut Session, p: &Params, set: &ParticleRun, fine: usize,
     let frames = super::frames_of(p, steps, dt)?;
     let mut axi = Axi { pic: run, radius, z_origin };
     match gpu {
-        Some(gpu) => run_to_end(s, &mut OnDevice::new(axi, gpu, &probes)?, frame, &probes, frames),
+        Some(gpu) => {
+            let outputs: Vec<f64> = m.outputs.iter().map(|z| z - origin[2]).collect();
+            run_to_end(s, &mut OnDevice::new(axi, gpu, &probes, &outputs)?, frame, &probes, frames)
+        }
         None => run_to_end(s, &mut axi, frame, &probes, frames),
     }
 }

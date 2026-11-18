@@ -665,6 +665,31 @@ pub(crate) fn ampere<F: Real>(
     }
 }
 
+/// The values at `count` taps of the fields into `out` at slot `slot`: each tap its component
+/// (`which`, 0–5 in the order of [`Fields`]) and its point there (`at`).
+#[cube(launch)]
+pub(crate) fn tap<F: Real>(f: &Fields<F>, which: &[u32], at: &[u32], out: &mut [F], slot: u32, count: u32) {
+    let p = ABSOLUTE_POS as u32;
+    if p < count {
+        let w = which[p as usize];
+        let i = at[p as usize] as usize;
+        let o = (slot * count + p) as usize;
+        if w == 0 {
+            out[o] = f.er[i];
+        } else if w == 1 {
+            out[o] = f.ez[i];
+        } else if w == 2 {
+            out[o] = f.et[i];
+        } else if w == 3 {
+            out[o] = f.br[i];
+        } else if w == 4 {
+            out[o] = f.bz[i];
+        } else {
+            out[o] = f.bt[i];
+        }
+    }
+}
+
 /// E (E_r, E_θ, E_z; V/m) at each of `count` probes (r, z pairs, m) into `out` at slot `slot`.
 #[cube(launch)]
 pub(crate) fn probe<F: Real>(f: &Fields<F>, g: &Grid<F>, points: &[F], out: &mut [F], slot: u32, count: u32) {

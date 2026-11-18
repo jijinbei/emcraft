@@ -1,7 +1,9 @@
 //! The axisymmetric particle-in-cell run on a device against the CPU's threads: a ring beam
 //! injected through a conducting end into a tube with a metal iris, an axial magnetic field and
 //! an absorbing layer, and moving rings between periodic ends; double precision to rounding,
-//! single to its precision, the same bits twice.
+//! single to its precision, the same bits twice. With them the power through a plane across the
+//! tube each step (the plane's fields tapped on the device) and the fields and rings read back
+//! half way without ending the run.
 
 use emcraft_fdtd::axi::{AxiGrid, AxiPic, Component, Injection, Ring, Rings};
 use emcraft_fdtd::pic::{Axis, Moved, Pulse, Wall};
@@ -62,12 +64,19 @@ const STEPS: usize = 300;
 /// Probes (r, z; m).
 const PROBES: [[f64; 2]; 2] = [[0.5e-3, 4e-3], [2.0e-3, 9e-3]];
 
-/// What a run left: its fields, its rings and the sums of what each step did.
+/// The plane across z whose power is taken each step (m), and the step the state is read at.
+const PLANE: f64 = 9e-3;
+const HALF: usize = 150;
+
+/// What a run left: its fields, its rings and the sums of what each step did, the power through
+/// [`PLANE`] each step (W), and its fields and rings after [`HALF`] steps.
 struct Ran {
     fields: [Vec<f64>; 6],
     rings: Vec<Ring>,
     moved: Moved,
     probes: Vec<[f64; 3]>,
+    power: Vec<f64>,
+    half: ([Vec<f64>; 6], Vec<Ring>),
 }
 
 fn fields(pic: &AxiPic) -> [Vec<f64>; 6] {
@@ -76,21 +85,39 @@ fn fields(pic: &AxiPic) -> [Vec<f64>; 6] {
 
 fn on_cpu(mut pic: AxiPic) -> Ran {
     let mut moved = Moved::default();
-    let mut probes = Vec::new();
-    for _ in 0..STEPS {
+    let (mut probes, mut power, mut half) = (Vec::new(), Vec::new(), Default::default());
+    for n in 0..STEPS {
         moved += &pic.step().unwrap();
         probes.extend(PROBES.map(|[r, z]| pic.field_at(r, z).0));
+        power.push(pic.plane(PLANE).flux());
+        if n + 1 == HALF {
+            half = (fields(&pic), pic.plan().unwrap().rings.to_vec());
+        }
     }
-    Ran { fields: fields(&pic), rings: pic.plan().unwrap().rings.to_vec(), moved, probes }
+    Ran { fields: fields(&pic), rings: pic.plan().unwrap().rings.to_vec(), moved, probes, power, half }
 }
 
 /// The run on a device, advanced in spans of `span` steps.
-fn on_device(mut pic: AxiPic, precision: Precision, span: usize) -> Ran {
+fn on_device(pic: AxiPic, precision: Precision, span: usize) -> Ran {
+    on_device_of(pic, Backend::Cpu, precision, span)
+}
+
+/// The run on `backend`, advanced in spans of `span` steps.
+fn on_device_of(mut pic: AxiPic, backend: Backend, precision: Precision, span: usize) -> Ran {
     let _one = DEVICE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut dev = Gpu { backend: Backend::Cpu, precision }.axi(&mut pic, &PROBES).unwrap();
+    let taps = pic.plane_taps(PLANE);
+    let mut dev = Gpu { backend, precision }.axi(&mut pic, &PROBES).unwrap();
+    dev.tap(&taps.taps).unwrap();
     let mut steps: Vec<AxiStep> = Vec::new();
+    let mut half = Default::default();
     while steps.len() < STEPS {
-        steps.extend(dev.advance(&mut pic, span.min(STEPS - steps.len())).unwrap());
+        // Spans that stop at HALF, where the state is read back and the run goes on.
+        let to = if steps.len() < HALF { HALF } else { STEPS };
+        steps.extend(dev.advance(&mut pic, span.min(to - steps.len())).unwrap());
+        if steps.len() == HALF {
+            dev.fields(&mut pic).unwrap();
+            half = (fields(&pic), dev.rings().unwrap());
+        }
     }
     let held = dev.held();
     dev.finish(&mut pic).unwrap();
@@ -100,7 +127,8 @@ fn on_device(mut pic: AxiPic, precision: Precision, span: usize) -> Ran {
     for s in &steps {
         moved += &s.moved;
     }
-    Ran { fields: fields(&pic), rings, moved, probes: steps.into_iter().flat_map(|s| s.probes).collect() }
+    let power = steps.iter().map(|s| taps.plane(&s.taps).flux()).collect();
+    Ran { fields: fields(&pic), rings, moved, probes: steps.into_iter().flat_map(|s| s.probes).collect(), power, half }
 }
 
 /// The largest difference of `a` from `b` over the largest |b| of each component, the rings'
@@ -122,7 +150,20 @@ fn worst(a: &Ran, b: &Ran) -> f64 {
         .fold(0.0, f64::max);
     let flat = |p: &[[f64; 3]]| p.iter().flatten().copied().collect::<Vec<_>>();
     let probes = rel(&flat(&a.probes), &flat(&b.probes));
-    fields.max(rings).max(probes)
+    let power = rel(&a.power, &b.power);
+    let (fa, fb) = (&a.half.0, &b.half.0);
+    assert_eq!(a.half.1.len(), b.half.1.len(), "rings half way");
+    let half = fa.iter().zip(fb).map(|(x, y)| rel(x, y)).fold(0.0, f64::max);
+    let half_rings = a
+        .half
+        .1
+        .iter()
+        .zip(&b.half.1)
+        .map(|(p, q)| {
+            ((p.r - q.r).abs().max((p.z - q.z).abs()) / 4e-3).max(p.u.iter().zip(&q.u).map(|(x, y)| (x - y).abs() / C0).fold(0.0, f64::max))
+        })
+        .fold(0.0, f64::max);
+    fields.max(rings).max(probes).max(power).max(half).max(half_rings)
 }
 
 #[test]
@@ -137,6 +178,8 @@ fn a_beam_through_a_tube_on_the_cpu_backend_matches_the_threads() {
         assert!((a - b).abs() <= 1e-9 * cpu.moved.emitted.abs(), "{a} against {b}");
     }
     assert!(cpu.moved.metal != 0.0 && cpu.rings.len() > 100, "the beam reaches the iris: {:?}", cpu.moved);
+    // The beam's own field crosses the plane (with the steady B_r of none here, B_θ's).
+    assert!(cpu.power.iter().any(|p| p.abs() > 0.0) && !cpu.half.1.is_empty());
     assert!(worst(&double, &cpu) < 1e-9, "{:e}", worst(&double, &cpu));
 }
 
@@ -161,24 +204,14 @@ fn a_run_on_the_device_repeats_bit_for_bit() {
     // The current's sums are integers and the rings that left are sorted before they are
     // tallied: the same bits however the device's units interleave.
     let [a, b] = [0, 1].map(|_| on_device(tube(), Precision::Single, 64));
-    assert!(a.fields == b.fields && a.rings == b.rings && a.moved == b.moved && a.probes == b.probes);
+    assert!(a.fields == b.fields && a.rings == b.rings && a.moved == b.moved && a.probes == b.probes && a.power == b.power);
 }
 
 #[test]
 #[ignore = "needs an NVIDIA GPU: cargo test -p emcraft-gpu --features cuda -- --ignored"]
 fn cuda_matches_the_threads_in_a_body_of_revolution() {
     let cpu = on_cpu(tube());
-    let run = |precision| {
-        let mut pic = tube();
-        let mut dev = Gpu { backend: Backend::Cuda, precision }.axi(&mut pic, &PROBES).unwrap();
-        let steps = dev.advance(&mut pic, STEPS).unwrap();
-        dev.finish(&mut pic).unwrap();
-        let mut moved = Moved::default();
-        for s in &steps {
-            moved += &s.moved;
-        }
-        Ran { fields: fields(&pic), rings: pic.plan().unwrap().rings.to_vec(), moved, probes: steps.into_iter().flat_map(|s| s.probes).collect() }
-    };
+    let run = |precision| on_device_of(tube(), Backend::Cuda, precision, STEPS);
     let double = run(Precision::Double);
     assert!(worst(&double, &cpu) < 1e-9, "{:e}", worst(&double, &cpu));
     let [a, b] = [0, 1].map(|_| run(Precision::Single));

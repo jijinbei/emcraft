@@ -293,11 +293,9 @@ fn an_output_plane_measures_the_power_a_ring_beams_own_field_carries() {
     assert!((efficiency - oscillating / (20.0 * 1e5)).abs() < 1e-12, "{out}");
     let kept = s.results.particles.clone().unwrap();
     assert!(kept.history.iter().all(|h| h.power.len() == 1) && kept.outputs.len() == 1);
-    // On the Cartesian grid and on a device, output planes are refused, not left out.
+    // On the Cartesian grid output planes are refused, not left out.
     let cartesian = s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1})).unwrap_err().to_string();
     assert!(cartesian.contains("output planes"), "{cartesian}");
-    let device = s.clone().execute("solve.particles", &json!({"time": 0.1, "cell": 1, "axisymmetric": true, "device": "cubecl-cpu"}));
-    assert!(device.unwrap_err().to_string().contains("output planes"));
     assert!(s.clone().execute("particles.output", &json!({"at": "x"})).is_err());
     // Its records as CSV: the history with the plane's power, the particles' phase space.
     let history = scratch("history.csv");
@@ -471,7 +469,9 @@ fn a_body_of_revolution_refuses_what_it_cannot_run_yet() {
 fn a_body_of_revolution_runs_on_the_gpu_kernels_as_on_the_threads() {
     // A ring beam into a cylinder along a steady field, on the CPU's threads and on the GPU's
     // kernels (CubeCL's CPU runtime, double precision): the same rings at the end, the same
-    // history and probe to rounding (the device sums the current in fixed point, emcraft_gpu).
+    // history and probe to rounding (the device sums the current in fixed point, emcraft_gpu);
+    // the power through an output plane and the moments kept along the run (read back from the
+    // device) as well.
     let solved = |device: &str| {
         let mut s = Session::new();
         run(
@@ -482,9 +482,13 @@ fn a_body_of_revolution_runs_on_the_gpu_kernels_as_on_the_threads() {
                 ("particles.magnetic", json!({"b": [0, 0, 0.5]})),
                 ("particles.beam", json!({"face": "z-", "current": 10, "energy": 1e5, "radius": 3, "inner": 1, "rise": 0})),
                 ("particles.probe", json!({"at": [2, 1, 5]})),
+                ("particles.output", json!({"at": 7})),
             ],
         );
-        let r = s.execute("solve.particles", &json!({"time": 0.2, "cell": 0.5, "axisymmetric": true, "device": device, "precision": "double"}));
+        let r = s.execute(
+            "solve.particles",
+            &json!({"time": 0.2, "cell": 0.5, "axisymmetric": true, "device": device, "precision": "double", "frames": 3}),
+        );
         (r.unwrap(), s.results.particles.clone().unwrap())
     };
     let (cpu, a) = solved("cpu");
@@ -498,6 +502,16 @@ fn a_body_of_revolution_runs_on_the_gpu_kernels_as_on_the_threads() {
     let top = a.probes[0].e.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
     let worst = a.probes[0].e.iter().flatten().zip(b.probes[0].e.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
     assert!(top > 0.0 && worst <= 1e-9 * top, "{worst:e} of {top:e}");
+    let (p, q) = (&a.outputs[0], &b.outputs[0]);
+    assert!(p.power != 0.0 && close(p.power, q.power) && close(p.steady, q.steady), "{p:?} against {q:?}");
+    assert_eq!((a.moments.len(), b.moments.len()), (3, 3));
+    for (m, n) in a.moments.iter().zip(&b.moments) {
+        assert!(m.t == n.t && m.particles.len() == n.particles.len() && !m.particles.is_empty());
+        assert!(m.particles.iter().zip(&n.particles).all(|(x, y)| x.x.iter().zip(&y.x).all(|(u, v)| (u - v).abs() < 1e-10)));
+        let (e, f) = (&m.map.as_ref().unwrap().ez, &n.map.as_ref().unwrap().ez);
+        let top = e.iter().fold(0.0f64, |t, v| t.max(v.abs()));
+        assert!(top > 0.0 && e.iter().zip(f).all(|(u, v)| (u - v).abs() <= 1e-9 * top));
+    }
     // A Cartesian run says it ran on the CPU's threads.
     let mut s = plasma();
     let r = s.execute("solve.particles", &json!({"time": 0.05, "device": "cubecl-cpu"})).unwrap();

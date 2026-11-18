@@ -46,6 +46,11 @@ pub(crate) struct Buf<F> {
 }
 
 impl<F: Real> Buf<F> {
+    /// How many values it holds.
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
     pub(crate) fn new(client: &Client, xs: &[f64]) -> Buf<F> {
         let v: Vec<F> = xs.iter().map(|&x| F::of(x)).collect();
         Buf { handle: client.create_from_slice(F::as_bytes(&v)), len: v.len(), _f: PhantomData }

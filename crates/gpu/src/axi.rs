@@ -1,7 +1,10 @@
 //! The axisymmetric particle-in-cell run (`emcraft_fdtd::axi`) on a device: the fields, the
 //! layers' ψ and the rings held there across the run, five kernels a step (the rings pushed,
-//! B's half step, E's step, B's half step, the probes), the host reading back what left the run
-//! and the probes a batch at a time.
+//! B's half step, E's step, B's half step, the probes and the taps), the host reading back what
+//! left the run, the probes and the taps a batch at a time. The taps are the field's values at
+//! points the run names ([`AxiDevice::tap`]: an output plane's, `emcraft_fdtd::axi::PlaneTaps`);
+//! [`AxiDevice::fields`] and [`AxiDevice::rings`] read the whole state back at a moment of the
+//! run without ending it.
 //!
 //! **What runs where.** The host makes the injections' rings ([`AxiPic::births_and_tick`], the
 //! same quasi-random places as on the CPU) and places them in the device's arrays a batch ahead,
@@ -33,12 +36,13 @@ use crate::kernels::axi::{
 use crate::lattice::line;
 use crate::{BATCH, Gpu, Precision};
 
-/// What a step on the device did: what entered and left the run, and E (E_r, E_θ, E_z; V/m) at
-/// each probe after it.
+/// What a step on the device did: what entered and left the run, E (E_r, E_θ, E_z; V/m) at
+/// each probe after it and the field at each tap (V/m or T; B with the steady field).
 #[derive(Clone, Debug, PartialEq)]
 pub struct AxiStep {
     pub moved: Moved,
     pub probes: Vec<[f64; 3]>,
+    pub taps: Vec<f64>,
 }
 
 /// An axisymmetric run held on a device: made by [`Gpu::axi`], stepped by
@@ -53,6 +57,9 @@ trait Ops {
     fn energy(&mut self, pic: &mut AxiPic) -> Result<Energy>;
     fn finish(&mut self, pic: &mut AxiPic) -> Result<()>;
     fn held(&self) -> usize;
+    fn tap(&mut self, taps: &[Option<(usize, usize)>]) -> Result<()>;
+    fn fields(&self) -> Result<[Vec<f64>; 6]>;
+    fn rings(&self) -> Result<Vec<Ring>>;
 }
 
 impl Gpu {
@@ -87,6 +94,24 @@ impl AxiDevice {
     /// The rings the device holds.
     pub fn held(&self) -> usize {
         self.run.held()
+    }
+
+    /// The field watched from the next step on at `taps`: each its component (0–5 in the order
+    /// of `emcraft_fdtd::axi::device::Plan`) and its point there, or none (read as zero).
+    /// Refused for a point outside its lattice.
+    pub fn tap(&mut self, taps: &[Option<(usize, usize)>]) -> Result<()> {
+        guarded(|| self.run.tap(taps))
+    }
+
+    /// The fields as they stand, into `pic` (the run goes on on the device).
+    pub fn fields(&self, pic: &mut AxiPic) -> Result<()> {
+        let fields = guarded(|| self.run.fields())?;
+        pic.put_fields(fields)
+    }
+
+    /// The rings the device holds, in order (the run goes on on the device).
+    pub fn rings(&self) -> Result<Vec<Ring>> {
+        guarded(|| self.run.rings())
     }
 
     /// The fields, the layers' ψ and the rings written back into `pic`.
@@ -251,6 +276,13 @@ struct Run<F> {
     points: Buf<F>,
     probes: usize,
     record: Buf<F>,
+    /// The taps' components and points, a mask of those that exist, what the steady field adds
+    /// at each, and their values a batch at a time.
+    tap_which: Ints,
+    tap_at: Ints,
+    tap_mask: Vec<bool>,
+    tap_steady: Vec<f64>,
+    tap_record: Buf<F>,
     out: Buf<F>,
     species: [f64; 3],
     vay: bool,
@@ -331,6 +363,11 @@ impl<F: Real> Run<F> {
             points: if n == 0 { Buf::zeros(&client, 2) } else { Buf::new(&client, &points) },
             probes: n,
             record: Buf::zeros(&client, (BATCH * n * 3).max(1)),
+            tap_which: Ints::zeros(&client, 1),
+            tap_at: Ints::zeros(&client, 1),
+            tap_mask: Vec::new(),
+            tap_steady: Vec::new(),
+            tap_record: Buf::zeros(&client, 1),
             out: Buf::zeros(&client, 1),
             species: [p.species.charge * p.dt / p.species.mass, p.species.charge, p.species.rest_energy()],
             vay: p.pusher == Pusher::Vay,
@@ -460,6 +497,8 @@ impl<F: Real> Run<F> {
         let (over_points, dim) = line(points, self.units);
         let (over_rings, ring_dim) = line(len.max(1), self.units);
         let (over_probes, probe_dim) = line(to_u32(self.probes.max(1), "probes")?, self.units);
+        let taps = to_u32(self.tap_mask.len(), "taps")?;
+        let (over_taps, tap_dim) = line(taps.max(1), self.units);
         let half = F::of(0.5 * self.grid[2]);
         for b in 0..steps {
             let step = self.done + b as u32;
@@ -513,13 +552,27 @@ impl<F: Real> Run<F> {
                     self.probes as u32,
                 );
             }
+            if taps > 0 {
+                kernels::tap::launch::<F>(
+                    &self.client,
+                    over_taps.clone(),
+                    tap_dim,
+                    self.fields_arg(),
+                    self.tap_which.arg(),
+                    self.tap_at.arg(),
+                    self.tap_record.arg(),
+                    b as u32,
+                    taps,
+                );
+            }
         }
         self.done = self.done.checked_add(to_u32(steps, "steps")?).ok_or_else(|| invalid("steps", "more than 32 bits count"))?;
         let deaths = self.deaths()?;
         let record = if self.probes > 0 { read_first(&self.record, &self.client, steps * self.probes * 3)? } else { Vec::new() };
+        let tapped = if taps > 0 { read_first(&self.tap_record, &self.client, steps * self.tap_mask.len())? } else { Vec::new() };
         self.held += born.len();
         self.held = self.held.saturating_sub(deaths.len());
-        Ok(self.tally(entered, &deaths, &record))
+        Ok(self.tally(entered, &deaths, &record, &tapped))
     }
 
     /// The rings that left this batch, by step and slot, the list cleared.
@@ -546,8 +599,10 @@ impl<F: Real> Run<F> {
     }
 
     /// Each step's [`AxiStep`]: what entered, the rings that left tallied in their order (as
-    /// `emcraft_fdtd::pic::Moved::tally`), the probes.
-    fn tally(&self, entered: Vec<Moved>, deaths: &[Death], record: &[f64]) -> Vec<AxiStep> {
+    /// `emcraft_fdtd::pic::Moved::tally`), the probes, the taps (zero where there is no point,
+    /// B with the steady field).
+    fn tally(&self, entered: Vec<Moved>, deaths: &[Death], record: &[f64], tapped: &[f64]) -> Vec<AxiStep> {
+        let n = self.tap_mask.len();
         let charge = self.species[1];
         let first = self.done - entered.len() as u32;
         let mut deaths = deaths.iter().peekable();
@@ -572,7 +627,13 @@ impl<F: Real> Run<F> {
                 let probes = (0..self.probes)
                     .map(|p| std::array::from_fn(|c| record.get(3 * (b * self.probes + p) + c).copied().unwrap_or(f64::NAN)))
                     .collect();
-                AxiStep { moved, probes }
+                let taps = (0..n)
+                    .map(|t| match self.tap_mask.get(t) {
+                        Some(true) => tapped.get(b * n + t).copied().unwrap_or(f64::NAN) + self.tap_steady.get(t).copied().unwrap_or(0.0),
+                        _ => 0.0,
+                    })
+                    .collect();
+                AxiStep { moved, probes, taps }
             })
             .collect()
     }
@@ -639,5 +700,34 @@ impl<F: Real> Ops for Run<F> {
 
     fn held(&self) -> usize {
         self.held
+    }
+
+    fn tap(&mut self, taps: &[Option<(usize, usize)>]) -> Result<()> {
+        let lens: Vec<usize> = self.fields.iter().map(Buf::len).collect();
+        if taps.iter().flatten().any(|&(which, at)| lens.get(which).is_none_or(|&n| at >= n)) {
+            return Err(invalid("taps", "points on the fields' lattices"));
+        }
+        let (which, at): (Vec<u32>, Vec<u32>) = taps.iter().map(|t| t.map_or((0, 0), |(w, a)| (w as u32, a as u32))).unzip();
+        self.tap_mask = taps.iter().map(Option::is_some).collect();
+        self.tap_steady = taps
+            .iter()
+            .map(|t| match (t, &self.b0) {
+                (Some((w, a)), Some(b0)) if *w >= 3 => b0.get(w - 3).and_then(|b| b.get(*a)).copied().unwrap_or(0.0),
+                _ => 0.0,
+            })
+            .collect();
+        let n = taps.len().max(1);
+        self.tap_which = Ints::new(&self.client, if which.is_empty() { &[0] } else { &which });
+        self.tap_at = Ints::new(&self.client, if at.is_empty() { &[0] } else { &at });
+        self.tap_record = Buf::zeros(&self.client, BATCH * n);
+        Ok(())
+    }
+
+    fn fields(&self) -> Result<[Vec<f64>; 6]> {
+        self.read_fields()
+    }
+
+    fn rings(&self) -> Result<Vec<Ring>> {
+        Ok(self.rings.read(&self.client, self.len)?.0)
     }
 }

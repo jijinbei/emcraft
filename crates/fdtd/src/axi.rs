@@ -235,6 +235,33 @@ impl Plane {
     }
 }
 
+/// Where a plane's fields lie on the lattices ([`AxiPic::plane_taps`]): six taps a ring, E_r,
+/// B_θ below and above, E_θ, B_r below and above, each its lattice (in the order of
+/// [`device::Plan`]: E_r, E_z, E_θ, B_r, B_z, B_θ) and its point there, or none where the
+/// lattice has no such point (read as zero); with the rings' areas.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlaneTaps {
+    pub taps: Vec<Option<(usize, usize)>>,
+    half: Vec<f64>,
+    node: Vec<f64>,
+}
+
+impl PlaneTaps {
+    /// The plane of the taps' `values` (in their order): B's two sides averaged.
+    pub fn plane(&self, values: &[f64]) -> Plane {
+        let v = |n: usize| values.get(n).copied().unwrap_or(0.0);
+        let rings = self.half.len();
+        Plane {
+            er: (0..rings).map(|i| v(6 * i)).collect(),
+            bt: (0..rings).map(|i| 0.5 * (v(6 * i + 1) + v(6 * i + 2))).collect(),
+            half: self.half.clone(),
+            et: (0..rings).map(|i| v(6 * i + 3)).collect(),
+            br: (0..rings).map(|i| 0.5 * (v(6 * i + 4) + v(6 * i + 5))).collect(),
+            node: self.node.clone(),
+        }
+    }
+}
+
 /// A component of the field sampled on its lattice ([`AxiPic::sampled`]): the radii and z (m)
 /// of its points and its values, row by row along z (V/m or T).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -568,22 +595,45 @@ impl AxiPic {
     /// z: E_r and E_θ on the plane, B_θ and B_r averaged from the half cells on either side (E
     /// and B at the same time, at the end of a step), each with its ring's area.
     pub fn plane(&self, z: f64) -> Plane {
+        let taps = self.plane_taps(z);
+        let values: Vec<f64> =
+            taps.taps.iter().map(|t| t.and_then(|(which, at)| self.lattice_values(which).get(at).copied()).unwrap_or(0.0)).collect();
+        taps.plane(&values)
+    }
+
+    /// Where the fields of [`AxiPic::plane`] at `z` lie on their lattices, for a run that holds
+    /// its fields elsewhere (a device) to read them each step and make the plane of them.
+    pub fn plane_taps(&self, z: f64) -> PlaneTaps {
         let g = self.grid;
         let k = (z / g.z.h).round().clamp(0.0, g.z.cells as f64) as isize;
         // The half cells either side of node k along z.
         let (below, above) = (g.z.clamp(k - 1, false), g.z.clamp(k, false));
         let node = g.z.clamp(k, true);
-        let value = |which: usize, values: &[f64], i: usize, k: usize| values.get(self.lats[which].at(i, k)).copied().unwrap_or(0.0);
-        let mean = |which: usize, values: &[f64], i: usize| 0.5 * (value(which, values, i, below) + value(which, values, i, above));
+        let tap = |which: usize, i: usize, k: usize| {
+            let lat = self.lats[which];
+            let at = lat.at(i, k);
+            (at < lat.len()).then_some((which, at))
+        };
         // E_r and B_θ at r = (i + ½) dr, rings of 2π r dr; E_θ and B_r on the nodes r = i dr
         // (E_θ held at zero on the wall).
-        Plane {
-            er: (0..g.nr).map(|i| value(ER, &self.f.er, i, node)).collect(),
-            bt: (0..g.nr).map(|i| mean(BT, &self.f.bt, i)).collect(),
+        PlaneTaps {
+            taps: (0..g.nr)
+                .flat_map(|i| [tap(ER, i, node), tap(BT, i, below), tap(BT, i, above), tap(ET, i, node), tap(BR, i, below), tap(BR, i, above)])
+                .collect(),
             half: (0..g.nr).map(|i| 2.0 * PI * (i as f64 + 0.5) * g.dr * g.dr).collect(),
-            et: (0..g.nr).map(|i| value(ET, &self.f.et, i, node)).collect(),
-            br: (0..g.nr).map(|i| mean(BR, &self.f.br, i)).collect(),
             node: (0..g.nr).map(|i| g.area(i)).collect(),
+        }
+    }
+
+    /// The values of the component whose lattice is `lats[which]`.
+    fn lattice_values(&self, which: usize) -> &[f64] {
+        match which {
+            ER => &self.f.er,
+            EZ => &self.f.ez,
+            ET => &self.f.et,
+            BR => &self.f.br,
+            BZ => &self.f.bz,
+            _ => &self.f.bt,
         }
     }
 
