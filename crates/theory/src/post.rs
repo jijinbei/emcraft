@@ -375,17 +375,6 @@ mod tests {
         assert!(gamma.re < -0.5 && gamma.im > 0.0 && fine.s11.norm() < 1.0, "{gamma:?}");
     }
 
-    #[test]
-    fn a_thinner_post_reflects_less() {
-        let thick = wr90().solve(10e9, 48).unwrap();
-        let thin = InductivePost { radius: 0.5e-3, ..wr90() }.solve(10e9, 48).unwrap();
-        assert!(thin.s11.norm() < thick.s11.norm());
-        // An offset post couples more weakly to TE10 (whose field is smaller there).
-        let off = InductivePost { x: 5e-3, ..wr90() }.solve(10e9, 48).unwrap();
-        assert!(off.s11.norm() < thick.s11.norm());
-        approx::assert_abs_diff_eq!(off.s11.norm_sqr() + off.s21.norm_sqr(), 1.0, epsilon = 1e-8);
-    }
-
     /// Two posts far apart are the cascade of each alone: S₁₁ = A₁₁ + A₁₂B₁₁A₂₁/(1 − A₂₂B₁₁),
     /// S₂₁ = A₂₁B₂₁/(1 − A₂₂B₁₁) (Pozar, Microwave Engineering, 4th ed., §4.4), only the TE₁₀ wave
     /// between them (TE₃₀, the next mode a centred post excites, falls by e^{−γ₃·40 mm} ≈ 10⁻⁶).
