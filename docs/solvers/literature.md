@@ -27,6 +27,13 @@ overlap tests).
 - I. E. Sutherland, G. W. Hodgman, *Reentrant polygon clipping*, Comm. ACM 17(1):32–42, 1974 —
   the overlap of two facing triangles across a narrow gap, whose area sets the gap's element
   estimate (`emcraft-mesh::solid::narrow`).
+- Inclusions that touch face to face (`emcraft-mesh::solid::contact`): the faces in contact found
+  by the same clipping of facing triangles, then triangulated together in their plane — the
+  outlines as constraints of one constrained Delaunay triangulation refined to the size (Sloan
+  1993, Ruppert 1995, above) — so both bodies hold the contact's triangles; a piecewise linear
+  complex whose facet two regions share, in the sense of H. Si, *TetGen, a Delaunay-based quality
+  tetrahedral mesh generator*, ACM Trans. Math. Softw. 41(2), 2015 (the paper only; each region
+  is still meshed on its own against the frozen facets).
 - A. Van Oosterom, J. Strackee, *The solid angle of a plane triangle*, IEEE Trans. Biomed. Eng.
   30(2):125–126, 1983 — the winding number that classifies a Boolean's pieces inside or outside
   the other surface (`emcraft-mesh::csg`), and which pieces of a part's enclosed air are which
@@ -88,7 +95,9 @@ overlap tests).
   10.6 — Bessel functions by backward recurrence, their zeros (`emcraft-fem::bessel`, used by
   `emcraft-theory::bessel` and the circular ports).
 - R. F. Harrington, *Time-Harmonic Electromagnetic Fields*, McGraw-Hill 1961, §6.10 — the
-  resonances of a spherical cavity.
+  resonances of a spherical cavity; carried through concentric dielectric layers (j_n and y_n
+  in each, the tangential fields continuous across the interfaces) for the loaded and the coated
+  sphere (`emcraft-theory::bessel::layered_sphere_resonances`, `coated_sphere_resonances`).
 
 ## Elements and discretisation
 - H. Whitney, *Geometric Integration Theory*, Princeton University Press 1957 — the lowest-order

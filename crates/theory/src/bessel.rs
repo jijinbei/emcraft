@@ -235,6 +235,77 @@ pub fn layered_sphere_resonances(r_in: f64, eps_r: f64, r_out: f64, count: usize
     out
 }
 
+/// The resonances of a spherical cavity of radius `r_out` holding concentric dielectric layers,
+/// lowest first, each listed 2n + 1 times: `layers` from the centre outwards, each its outer
+/// radius (m, ascending, below `r_out`) and its εr, vacuum from the last to the wall — a coated
+/// sphere is two. The radial function f of the field tangential to the spheres (E for TE, H for
+/// TM) is j_n in the core and A j_n + B y_n in each layer after it, A and B from f and (r f)'
+/// (over ε for TM) continuous across each interface; TE has f = 0 at the wall, TM (r f)' = 0
+/// (Harrington 1961, §6.10, carried through the layers as [`layered_sphere_resonances`] does
+/// through one). Nothing when a radius or a permittivity is not finite and positive, or the
+/// radii do not ascend.
+///
+/// ```
+/// use emcraft_theory::bessel::{coated_sphere_resonances, layered_sphere_resonances};
+/// // A 2.5 mm core of εr = 9 in a 5 mm sphere of εr = 4, in a 10 mm cavity: TM11 first, in Hz.
+/// let modes = coated_sphere_resonances(&[(0.0025, 9.0), (0.005, 4.0)], 0.01, 3);
+/// assert!(modes.iter().all(|m| m.1 == "TM11") && modes[0].0 > 9e9 && modes[0].0 < 11e9);
+/// // A core of its coat's filling is one sphere.
+/// let one = layered_sphere_resonances(0.005, 4.0, 0.01, 1)[0].0;
+/// let same = coated_sphere_resonances(&[(0.0025, 4.0), (0.005, 4.0)], 0.01, 1)[0].0;
+/// assert!((one - same).abs() < 1e-9 * one);
+/// // Refused: radii that do not ascend.
+/// assert!(coated_sphere_resonances(&[(0.005, 9.0), (0.0025, 4.0)], 0.01, 3).is_empty());
+/// ```
+pub fn coated_sphere_resonances(layers: &[(f64, f64)], r_out: f64, count: usize) -> Vec<(f64, String)> {
+    let ascending = layers.windows(2).all(|w| w[0].0 < w[1].0) && layers.last().is_none_or(|l| l.0 < r_out);
+    let positive = layers.iter().flat_map(|l| [l.0, l.1]).chain([r_out]).all(|v| v.is_finite() && v > 0.0);
+    if !(ascending && positive) {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let k_max = 25.0 / r_out;
+    // Each layer after the core: its inner radius, its εr and its outer radius.
+    let after: Vec<(f64, f64, f64)> = layers
+        .iter()
+        .zip(layers.iter().skip(1).map(|l| (l.1, l.0)).chain([(1.0, r_out)]))
+        .map(|(inner, (eps, outer))| (inner.0, eps, outer))
+        .collect();
+    for n in 1..5usize {
+        let gj = |x: f64| sph_xj_prime(n, x);
+        let gy = |x: f64| sph_xy_prime(n, x);
+        // f and (r f)' (over ε for TM) at the wall, carried out from the core's j_n.
+        let at_wall = |k0: f64, tm: bool| -> (f64, f64) {
+            let Some(&(r, eps)) = layers.first() else { return (sph_j(n, k0 * r_out), gj(k0 * r_out)) };
+            let over = |eps: f64| if tm { eps } else { 1.0 };
+            let x = k0 * eps.sqrt() * r;
+            after.iter().fold((sph_j(n, x), gj(x) / over(eps)), |(f, g), &(r_in, eps, r_out)| {
+                let k = k0 * eps.sqrt();
+                let (xa, xb) = (k * r_in, k * r_out);
+                // A j_n + B y_n with f and (r f)' as given at the inner radius.
+                let g = g * over(eps);
+                let det = sph_j(n, xa) * gy(xa) - sph_y(n, xa) * gj(xa);
+                let a = (f * gy(xa) - sph_y(n, xa) * g) / det;
+                let b = (sph_j(n, xa) * g - f * gj(xa)) / det;
+                (a * sph_j(n, xb) + b * sph_y(n, xb), (a * gj(xb) + b * gy(xb)) / over(eps))
+            })
+        };
+        let te = |k0: f64| at_wall(k0, false).0;
+        let tm = |k0: f64| at_wall(k0, true).1;
+        for (kind, f) in [("TE", &te as &dyn Fn(f64) -> f64), ("TM", &tm)] {
+            let roots = zeros(|x| f(x / r_out), 6, k_max * r_out);
+            for (p, x) in roots.iter().filter(|x| **x > 0.5 * n as f64).take(3).enumerate() {
+                for _ in 0..2 * n + 1 {
+                    out.push((C0 * x / r_out / (2.0 * PI), format!("{kind}{n}{}", p + 1)));
+                }
+            }
+        }
+    }
+    out.sort_by(|x, y| x.0.total_cmp(&y.0).then(x.1.cmp(&y.1)));
+    out.truncate(count);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +344,30 @@ mod tests {
         assert!(loaded[0].0 < plain[0].0 && loaded[0].0 > plain[0].0 / 2.0);
         // y_n against closed forms.
         approx::assert_abs_diff_eq!(sph_y(1, 2.0), (-(2f64.cos()) / 4.0 - 2f64.sin() / 2.0), epsilon = 1e-15);
+    }
+
+    /// The layers carried through one by one against the two-layer closed form: one layer is
+    /// it; a coat of vacuum, or one of the core's filling, leaves one sphere; with no layer the
+    /// plain sphere's roots (Harrington 1961, §6.10). A denser core lowers the first resonance.
+    #[test]
+    fn a_coated_sphere_with_one_filling_is_the_layered_sphere() {
+        let two = layered_sphere_resonances(0.004, 4.0, 0.01, 8);
+        let cases: [&[(f64, f64)]; 3] = [&[(0.004, 4.0)], &[(0.004, 4.0), (0.007, 1.0)], &[(0.0015, 4.0), (0.004, 4.0)]];
+        for layers in cases {
+            let got = coated_sphere_resonances(layers, 0.01, 8);
+            assert_eq!(got.len(), two.len());
+            for (a, b) in two.iter().zip(&got) {
+                assert!((a.0 - b.0).abs() < 1e-9 * a.0 && a.1 == b.1, "{layers:?}: {a:?} {b:?}");
+            }
+        }
+        let plain = sphere_cavity_resonances(0.01, 1.0, 6);
+        for (a, b) in plain.iter().zip(&coated_sphere_resonances(&[], 0.01, 6)) {
+            assert!((a.0 - b.0).abs() < 1e-9 * a.0 && a.1 == b.1, "{a:?} {b:?}");
+        }
+        let coated = coated_sphere_resonances(&[(0.002, 9.0), (0.004, 4.0)], 0.01, 1);
+        assert!(coated[0].0 < two[0].0 && coated[0].0 > 0.5 * two[0].0, "{coated:?}");
+        assert!(coated_sphere_resonances(&[(0.004, f64::NAN)], 0.01, 3).is_empty());
+        assert!(coated_sphere_resonances(&[(0.02, 4.0)], 0.01, 3).is_empty());
     }
 
     #[test]

@@ -10,6 +10,7 @@
 //! interfaces agree and joined.
 
 mod combine;
+mod contact;
 mod curved;
 mod grid;
 mod mesher;
@@ -418,8 +419,10 @@ struct Regions {
     /// The first tag of the inclusions' interfaces in the outer region (after the solid's own
     /// faces, with a spherical layer the inner sphere's triangles).
     first_tag: u32,
-    /// Each inclusion's interface tags in the outer region.
-    interfaces: Vec<Tags>,
+    /// Per region, the inclusions beyond its faces, each with its interface's tags there: its
+    /// holes (the outer region's are the inclusions inside no other, a dielectric's those
+    /// directly inside it) and, for a dielectric, the inclusions it touches.
+    holes: Vec<Vec<(usize, Tags)>>,
     /// Per region, the first tag of its caps on a sector's cut faces (an inclusion across them):
     /// walls tied by the solver, not an interface.
     caps_from: Vec<Option<u32>>,
@@ -435,6 +438,90 @@ fn adopt(current: &mut Tessellation, seen: Tessellation, size: f64) -> bool {
     differs
 }
 
+/// The holes' interfaces as region `mesh` kept them, in place of those that differ; whether any did.
+fn adopt_holes(interfaces: &mut [Tessellation], mesh: &RegionMesh, holes: &[(usize, Tags)], size: f64) -> bool {
+    holes.iter().fold(false, |changed, (i, tags)| match interfaces.get_mut(*i) {
+        Some(t) => adopt(t, extract(mesh, tags.first, tags.count, false), size) | changed,
+        None => changed,
+    })
+}
+
+/// Appends the interfaces `of` to `t` as holes, their tags from `next` on: each one's tags.
+fn pierce(t: &mut Tessellation, interfaces: &[Tessellation], of: &[usize], mut next: u32) -> Vec<(usize, Tags)> {
+    of.iter()
+        .filter_map(|&i| {
+            let hole = interfaces.get(i)?;
+            let tags = Tags { first: next, count: hole.surface.triangles.len() as u32 };
+            append(t, hole, next, false);
+            next += tags.count;
+            Some((i, tags))
+        })
+        .collect()
+}
+
+/// Each inclusion's parent: the innermost other inclusion it lies inside (`None` when it lies in
+/// the solid itself), from points just inside its surface `surfaces[i]` (each triangle's middle,
+/// moved in by a millionth of the body's extent: a body touching another from outside has none
+/// of them in it). One with some of them inside another and some outside crosses it and is
+/// refused, both named; so is one inside a conductor (nothing is solved there) and two that
+/// fill each other (the same body twice).
+fn parents(model: &Model, surfaces: &[Tessellation]) -> Result<Vec<Option<usize>>> {
+    let incs = model.inclusions();
+    let refuse = |why: String| Err(MeshError::invalid("inclusion", why));
+    let mut around: Vec<Vec<usize>> = Vec::with_capacity(incs.len());
+    // Pairs with some of one's points in the other: crossing, unless the other lies in the one
+    // (against its wall from inside, where the one's points just under that wall are in it).
+    let mut partly: Vec<(usize, usize)> = Vec::new();
+    for (i, (inc, t)) in incs.iter().zip(surfaces).enumerate() {
+        let mut list = Vec::new();
+        let step = 1e-6 * (inc.bounds().max - inc.bounds().min).norm();
+        let within: Vec<Point3> = t
+            .surface
+            .triangles
+            .iter()
+            .filter_map(|tri| crate::shared::corners(&t.surface.positions, tri))
+            .filter_map(|q| Some(Point3::centroid(q)? - (q[1] - q[0]).cross(q[2] - q[0]).normalized()? * step))
+            .collect();
+        for (j, other) in incs.iter().enumerate() {
+            if j == i || !other.bounds().overlaps_inside(inc.bounds()) {
+                continue;
+            }
+            match within.iter().filter(|p| other.contains(**p)).count() {
+                0 => {}
+                n if n == within.len() => list.push(j),
+                _ => partly.push((i, j)),
+            }
+        }
+        around.push(list);
+    }
+    if let Some((i, j)) = partly.into_iter().find(|(i, j)| !around.get(*j).is_some_and(|theirs| theirs.contains(i))) {
+        return refuse(format!("inclusions {} and {} cross: one must lie wholly inside the other, or apart from it", i + 1, j + 1));
+    }
+    let mut parent = Vec::with_capacity(incs.len());
+    for (i, list) in around.iter().enumerate() {
+        if let Some(&j) = list.iter().find(|&&j| around.get(j).is_some_and(|theirs| theirs.contains(&i))) {
+            return refuse(format!("inclusions {} and {} fill the same place", i + 1, j + 1));
+        }
+        // The innermost of those around it: the one with the most around itself.
+        let p = list.iter().copied().max_by_key(|&j| (around.get(j).map_or(0, Vec::len), std::cmp::Reverse(j)));
+        if let Some(j) = p.filter(|&j| incs.get(j).is_some_and(|o| o.material.is_none())) {
+            return refuse(format!("inclusion {} lies inside inclusion {}, a conductor: nothing is solved there", i + 1, j + 1));
+        }
+        // Against its wall from inside, the two surfaces would share a patch: not made yet.
+        if let (Some(j), Some(inc)) = (p, incs.get(i))
+            && incs.get(j).is_some_and(|o| !o.bounds().encloses_inside(inc.bounds()))
+        {
+            return refuse(format!(
+                "not supported yet: inclusion {} against the wall of inclusion {}, which it lies in (keep it off that surface)",
+                i + 1,
+                j + 1
+            ));
+        }
+        parent.push(p);
+    }
+    Ok(parent)
+}
+
 /// The most rounds of meshing the regions again until their interfaces agree.
 const MAX_INTERFACE_ROUNDS: usize = 6;
 
@@ -445,17 +532,37 @@ impl Body<'_> {
     /// (with a spherical layer, its inner sphere's).
     fn regions(&self, mut main: Tessellation) -> Result<Regions> {
         let (model, size) = (self.model, self.size);
+        let incs = model.inclusions();
+        // An interface is tessellated at the smaller of the sizes of the two regions it parts.
+        let surface = |i: usize, inc: &emcraft_model::Inclusion, around: f64| match self.cuts.iter().find(|(k, _)| *k == i) {
+            Some((_, c)) => c.open.clone(),
+            None => {
+                let h = around.min(self.inner_size.get(i).copied().unwrap_or(size));
+                placed(tessellate(&inc.shape, interface_size(&inc.shape, h, inc.material.is_none())), inc.at)
+            }
+        };
+        let first: Vec<Tessellation> = incs.iter().enumerate().map(|(i, inc)| surface(i, inc, size)).collect();
+        let parent = parents(model, &first)?;
+        if !self.frozen.is_empty() && parent.iter().any(Option::is_some) {
+            return Err(MeshError::invalid("rotational symmetry", "not supported yet: an inclusion inside another"));
+        }
+        let children = |of: Option<usize>| -> Vec<usize> { (0..parent.len()).filter(|k| parent.get(*k) == Some(&of)).collect() };
         // The interfaces' current triangulations, oriented out of each inclusion.
-        let mut interfaces: Vec<Tessellation> = model
-            .inclusions()
-            .iter()
-            .zip(&self.inner_size)
+        let around: Vec<f64> = parent.iter().map(|p| p.and_then(|p| self.inner_size.get(p)).copied().unwrap_or(size)).collect();
+        let mut interfaces: Vec<Tessellation> = first
+            .into_iter()
+            .zip(incs.iter().zip(&around))
             .enumerate()
-            .map(|(i, (inc, h))| match self.cuts.iter().find(|(k, _)| *k == i) {
-                Some((_, c)) => c.open.clone(),
-                None => placed(tessellate(&inc.shape, interface_size(&inc.shape, size.min(*h), inc.material.is_none())), inc.at),
-            })
+            .map(|(i, (t, (inc, around)))| if *around < size { surface(i, inc, *around) } else { t })
             .collect();
+        // Inclusions that touch face to face share the contact's triangles: each keeps towards
+        // the region around it what is left of its surface.
+        let fine: Vec<f64> = around.iter().zip(&self.inner_size).map(|(a, h)| a.min(*h)).collect();
+        let scale = model.bounds().map_or(size, |b| (b.max - b.min).norm());
+        let mut contacts = contact::imprint(&mut interfaces, &parent, &fine, GEOMETRY_TOLERANCE * (1.0 + scale))?;
+        if !self.frozen.is_empty() && !contacts.is_empty() {
+            return Err(MeshError::invalid("rotational symmetry", "not supported yet: inclusions that touch"));
+        }
         // Their caps on the cut faces, which only the inclusion's own region holds.
         let mut caps: Vec<Option<Tessellation>> =
             (0..model.inclusions().len()).map(|i| self.cuts.iter().find(|(k, _)| *k == i).map(|(_, c)| c.caps.clone())).collect();
@@ -464,7 +571,7 @@ impl Body<'_> {
             start_face: main.start_face,
             end_face: main.end_face,
             first_tag: 0,
-            interfaces: Vec::new(),
+            holes: Vec::new(),
             caps_from: Vec::new(),
         };
         // A sector's cut faces not yet each other's turn after the last round's meshing.
@@ -474,14 +581,8 @@ impl Body<'_> {
             // each interface's triangles in turn.
             out.first_tag = main.surface.tags.iter().map(|f| f + 1).max().unwrap_or(0);
             let mut outer = main.clone();
-            out.interfaces.clear();
-            let mut next = out.first_tag;
-            for t in &interfaces {
-                let count = t.surface.triangles.len() as u32;
-                append(&mut outer, t, next, false);
-                out.interfaces.push(Tags { first: next, count });
-                next += count;
-            }
+            let outer_holes = pierce(&mut outer, &interfaces, &children(None), out.first_tag);
+            let next = outer_holes.last().map_or(out.first_tag, |(_, t)| t.first + t.count);
             let frozen_from = if self.shell { 0 } else { out.first_tag };
             // A sector: its cut faces kept as triangulated (each other's turn); the solid's other
             // faces remeshed, bound to the cut outlines' points (thinned to the size).
@@ -506,9 +607,7 @@ impl Body<'_> {
                 }
             }
             let mut changed = false;
-            for (t, tags) in interfaces.iter_mut().zip(&out.interfaces) {
-                changed |= adopt(t, extract(&outer_mesh, tags.first, tags.count, false), size);
-            }
+            changed |= adopt_holes(&mut interfaces, &outer_mesh, &outer_holes, size);
             // The layer's shell: the solid's sphere outside, the inner sphere as a hole (tags 1..).
             let shell = if self.shell {
                 changed |= adopt(&mut main, extract(&outer_mesh, 0, out.first_tag, true), size);
@@ -524,26 +623,44 @@ impl Body<'_> {
             out.meshes = vec![(outer_mesh, self.material)];
             out.meshes.extend(shell.map(|m| (m, self.material)));
             out.caps_from = vec![None; out.meshes.len()];
-            for (((inc, t), h), cap) in model.inclusions().iter().zip(&mut interfaces).zip(&self.inner_size).zip(&caps) {
+            out.holes = vec![Vec::new(); out.meshes.len()];
+            if let Some(h) = out.holes.first_mut() {
+                *h = outer_holes;
+            }
+            for (i, ((inc, h), cap)) in incs.iter().zip(&self.inner_size).zip(&caps).enumerate() {
                 let Some(name) = &inc.material else { continue };
                 let (m, _) = model.material(name)?;
-                let n = t.surface.triangles.len() as u32;
+                let Some(mut whole) = interfaces.get(i).cloned() else { continue };
+                let n = whole.surface.triangles.len() as u32;
                 // Across a sector's cut: its surface there closed by its caps.
-                let closed;
-                let whole = match cap {
-                    Some(c) => {
-                        let mut w = t.clone();
-                        append(&mut w, c, n, true);
-                        closed = w;
-                        &closed
-                    }
-                    None => &*t,
-                };
+                if let Some(c) = cap {
+                    append(&mut whole, c, n, true);
+                }
+                // Its contacts with the inclusions it touches: the rest of its surface.
+                let mut shared: Vec<(usize, Tags)> = Vec::new();
+                for (k, c) in contacts.iter().enumerate().filter(|(_, c)| c.a == i || c.b == i) {
+                    let tags = Tags { first: whole.surface.triangles.len() as u32, count: c.patch.surface.triangles.len() as u32 };
+                    append(&mut whole, &c.patch, tags.first, c.a == i);
+                    shared.push((k, tags));
+                }
+                // The inclusions directly inside it: holes in its region.
+                let next = whole.surface.triangles.len() as u32;
+                let mut holes = pierce(&mut whole, &interfaces, &children(Some(i)), next);
                 let all = whole.surface.triangles.len() as u32;
-                let inner = region(whole, *h, (0..all).collect(), &self.locals)?;
-                changed |= adopt(t, extract(&inner, 0, n, true), size);
+                let inner = region(&whole, *h, (0..all).collect(), &self.locals)?;
+                if let Some(t) = interfaces.get_mut(i) {
+                    changed |= adopt(t, extract(&inner, 0, n, true), size);
+                }
+                changed |= adopt_holes(&mut interfaces, &inner, &holes, size);
+                for (k, tags) in shared {
+                    let Some(c) = contacts.get_mut(k) else { continue };
+                    changed |= adopt(&mut c.patch, extract(&inner, tags.first, tags.count, c.a == i), size);
+                    // Beyond these faces lies the other inclusion.
+                    holes.push((if c.a == i { c.b } else { c.a }, tags));
+                }
                 out.meshes.push((inner, m as u32));
                 out.caps_from.push(cap.as_ref().map(|_| n));
+                out.holes.push(holes);
             }
             if !changed {
                 break;
@@ -558,25 +675,27 @@ impl Body<'_> {
         Ok(out)
     }
 
-    /// Whether face `face` of region `r` lies on an interface with a dielectric (the outer
-    /// region's tags on a dielectric's interface; every face of an inner region): with a
-    /// spherical layer, region 1 is its shell (tag 0 its outer wall, the rest the inner sphere)
-    /// and the solid region's own faces are that inner sphere.
-    fn on_dielectric(&self, regions: &Regions, r: usize, face: u32) -> bool {
-        if self.shell && r == 1 {
-            return face >= 1;
+    /// Whether face `face` of region `r` lies on an interface between two regions: a hole's
+    /// when the inclusion there is a dielectric (a conductor's is a wall), else an inner region's
+    /// own surface off its caps on a sector's cut faces. With a spherical layer, region 1 is its
+    /// shell (tag 0 its outer wall, the rest the inner sphere) and the solid region's own faces
+    /// are that inner sphere.
+    fn on_interface(&self, regions: &Regions, r: usize, face: u32) -> bool {
+        let hole = regions.holes.get(r).and_then(|holes| holes.iter().find(|(_, tags)| tags.contains(face)));
+        if let Some((i, _)) = hole {
+            return self.model.inclusions().get(*i).is_some_and(|inc| inc.material.is_some());
         }
-        r > 0
-            || (self.shell && face < regions.first_tag)
-            || regions.interfaces.iter().zip(self.model.inclusions()).any(|(tags, inc)| inc.material.is_some() && tags.contains(face))
+        match r {
+            0 => self.shell && face < regions.first_tag,
+            1 if self.shell => face >= 1,
+            _ => !regions.caps_from.get(r).copied().flatten().is_some_and(|from| face >= from),
+        }
     }
 
     /// The regions joined into one mesh: nodes with the same coordinates (the frozen interfaces'
     /// vertices) become one; the outer region's faces are walls or ports, the shell's outer wall
     /// a wall, and every interface triangle must be seen from both sides.
     fn join(&self, regions: &Regions) -> Result<Mesh> {
-        // The shell, when there is one, is region 1.
-        let shell = self.shell.then_some(1);
         let mut nodes = Nodes::new(GEOMETRY_TOLERANCE * self.size);
         let mut tets = Vec::new();
         let mut tet_material = Vec::new();
@@ -589,20 +708,18 @@ impl Body<'_> {
             tet_material.extend(std::iter::repeat_n(*mat, mesh.tets.len()));
             for &RegionFace { nodes, tet, tag: face } in &mesh.boundary {
                 let n = nodes.map(|v| map[v as usize]);
-                let cap = regions.caps_from.get(r).copied().flatten().is_some_and(|from| face >= from);
-                if !cap && self.on_dielectric(regions, r, face) {
+                if self.on_interface(regions, r, face) {
                     let mut key = n;
                     key.sort_unstable();
                     *interface_sides.entry(key).or_default() += 1;
                     continue;
                 }
+                // What is left is a wall: the solid's faces off its ports, the shell's outer
+                // wall, a conductor's surface, a cap on a sector's cut face.
                 let tag = match r {
                     0 if Some(face) == regions.start_face => Boundary::Port(0),
                     0 if Some(face) == regions.end_face => Boundary::Port(1),
-                    0 => Boundary::Pec,
-                    r if Some(r) == shell => Boundary::Pec,
-                    _ if cap => Boundary::Pec,
-                    _ => continue,
+                    _ => Boundary::Pec,
                 };
                 boundary.push(BoundaryFace { nodes: n, tet: first + tet, tag });
             }
@@ -875,6 +992,187 @@ mod tests {
         assert!(
             m.add_inclusion(Inclusion { shape: Shape::Sphere { radius: metres(0.004) }, at: Point3::new(0.008, 0.0, 0.0), material: None }).is_err()
         );
+    }
+
+    /// A coated sphere: a ball of a second dielectric inside a dielectric ball, and a conductor
+    /// in place of the core. Evidence: the volumes of the core and the coat against 4πr³/3 (flat
+    /// facets, so a little under), and every face held by one or two tetrahedra.
+    #[test]
+    fn an_inclusion_inside_another_is_a_region_inside_its_region() {
+        use emcraft_model::{Inclusion, Material};
+        let mut m = Model::new();
+        m.add_material(Material::new("alumina", 9.8, 1.0).unwrap()).unwrap();
+        m.add_material(Material::new("teflon", 2.1, 1.0).unwrap()).unwrap();
+        m.set_solid(Solid { shape: Shape::Sphere { radius: metres(0.01) }, material: "vacuum".into() }).unwrap();
+        let ball = |r: f64, material: Option<&str>| Inclusion {
+            shape: Shape::Sphere { radius: metres(r) },
+            at: Point3::new(0.001, 0.0, 0.0),
+            material: material.map(str::to_owned),
+        };
+        // The core first: the order the bodies are added in does not matter.
+        m.add_inclusion(ball(0.003, Some("teflon"))).unwrap();
+        m.add_inclusion(ball(0.006, Some("alumina"))).unwrap();
+        let mesh = solid(&m, metres(0.0025)).unwrap();
+        let v = crate::volumes(&mesh);
+        assert!(v.iter().all(|x| *x > 0.0));
+        let of = |k: u32| -> f64 { v.iter().zip(&mesh.tet_material).filter(|(_, m)| **m == k).map(|(v, _)| v).sum() };
+        let sphere = |r: f64| 4.0 / 3.0 * PI * r.powi(3);
+        let (coat, core) = (of(1), of(2));
+        assert!(core < sphere(0.003) && core > 0.97 * sphere(0.003), "{core}");
+        let exact = sphere(0.006) - sphere(0.003);
+        assert!((coat - exact).abs() < 0.03 * exact, "{coat} {exact}");
+        let topo = crate::Topology::new(&mesh);
+        assert_eq!(topo.face_tets.iter().filter(|o| o[1] == crate::NO_TET).count(), mesh.boundary.len());
+        // The point's filling is the innermost body's.
+        assert_eq!(m.material_at(Point3::new(0.001, 0.0, 0.0)), Some(2));
+        assert_eq!(m.material_at(Point3::new(0.005, 0.0, 0.0)), Some(1));
+        // A conducting core: a hole in the coat, its surface a wall there.
+        let mut c = m.clone();
+        let k = c.mesh_view().inclusion_body[0];
+        c.bodies_mut()[k].fill = emcraft_model::Fill::Metal;
+        let hole = solid(&c, metres(0.0025)).unwrap();
+        assert!(hole.tet_material.iter().all(|m| *m < 2));
+        assert!(hole.boundary.len() > mesh.boundary.len());
+        let inner_walls =
+            hole.boundary.iter().filter(|f| f.nodes.iter().all(|n| (hole.nodes[*n as usize] - Point3::new(0.001, 0.0, 0.0)).norm() < 0.0031));
+        assert!(inner_walls.count() > 20);
+        // Refused: a body inside a conductor, and two that cross.
+        let mut inside_metal = c.clone();
+        inside_metal.add_inclusion(ball(0.001, Some("teflon"))).unwrap();
+        let e = solid(&inside_metal, metres(0.0025)).unwrap_err().to_string();
+        assert!(e.contains("a conductor"), "{e}");
+        let mut crossing = Model::new();
+        crossing.add_material(Material::new("alumina", 9.8, 1.0).unwrap()).unwrap();
+        crossing.set_solid(Solid { shape: Shape::Sphere { radius: metres(0.01) }, material: "vacuum".into() }).unwrap();
+        crossing.add_inclusion(ball(0.004, Some("alumina"))).unwrap();
+        let cube = Shape::Box { size: emcraft_model::BoxSize::new(emcraft_model::Vec3::new(0.007, 0.007, 0.007)).unwrap() };
+        crossing.add_inclusion(Inclusion { shape: cube, at: Point3::new(-0.0025, -0.0035, -0.0035), material: Some("alumina".into()) }).unwrap();
+        let e = solid(&crossing, metres(0.0025)).unwrap_err().to_string();
+        assert!(e.contains("cross"), "{e}");
+    }
+
+    /// A model of a 30 mm vacuum box with dielectrics `a` and `b` and the inclusions given.
+    fn boxed(inclusions: &[emcraft_model::Inclusion]) -> Model {
+        use emcraft_model::Material;
+        let mut m = Model::new();
+        m.add_material(Material::new("a", 4.0, 1.0).unwrap()).unwrap();
+        m.add_material(Material::new("b", 9.0, 1.0).unwrap()).unwrap();
+        m.set_solid(Solid { shape: Shape::Box { size: BoxSize::new(Vec3::new(0.03, 0.03, 0.03)).unwrap() }, material: "vacuum".into() }).unwrap();
+        for inc in inclusions {
+            m.add_inclusion(inc.clone()).unwrap();
+        }
+        m
+    }
+
+    fn block(size: [f64; 3], at: [f64; 3], material: Option<&str>) -> emcraft_model::Inclusion {
+        emcraft_model::Inclusion {
+            shape: Shape::Box { size: BoxSize::new(Vec3::new(size[0], size[1], size[2])).unwrap() },
+            at: Point3::new(at[0], at[1], at[2]),
+            material: material.map(str::to_owned),
+        }
+    }
+
+    /// The volume of each material and whether every face is held by one or two tetrahedra,
+    /// the boundary's being those held by one.
+    fn volumes_and_conformity(mesh: &Mesh, materials: u32) -> Vec<f64> {
+        let v = crate::volumes(mesh);
+        assert!(v.iter().all(|x| *x > 0.0));
+        let topo = crate::Topology::new(mesh);
+        assert_eq!(topo.face_tets.iter().filter(|o| o[1] == crate::NO_TET).count(), mesh.boundary.len());
+        (0..materials).map(|k| v.iter().zip(&mesh.tet_material).filter(|(_, m)| **m == k).map(|(v, _)| v).sum()).collect()
+    }
+
+    /// Dielectrics that touch face to face: a small block on a larger one (the contact inside
+    /// the larger one's top face), two blocks of one footprint stacked (their outlines the
+    /// same), and one shifted across the other's edge. Evidence: each material's volume is its
+    /// block's (flat faces, so exact to rounding) and every interior face has two tetrahedra;
+    /// the walls are the box's only.
+    #[rstest::rstest]
+    #[case::inside_the_face([0.012, 0.012, 0.004], [0.009, 0.009, 0.008], [0.006, 0.005, 0.005], [0.012, 0.0125, 0.012])]
+    #[case::the_same_footprint([0.008, 0.008, 0.004], [0.011, 0.011, 0.008], [0.008, 0.008, 0.006], [0.011, 0.011, 0.012])]
+    #[case::across_an_edge([0.010, 0.010, 0.004], [0.008, 0.010, 0.008], [0.010, 0.006, 0.005], [0.013, 0.012, 0.012])]
+    fn dielectrics_that_touch_share_their_contact(#[case] lower: [f64; 3], #[case] at: [f64; 3], #[case] upper: [f64; 3], #[case] above: [f64; 3]) {
+        let m = boxed(&[block(lower, at, Some("a")), block(upper, above, Some("b"))]);
+        let mesh = solid(&m, metres(0.006)).unwrap();
+        let v = volumes_and_conformity(&mesh, 3);
+        let volume = |s: [f64; 3]| s[0] * s[1] * s[2];
+        approx::assert_abs_diff_eq!(v[1], volume(lower), epsilon = 1e-9 * volume(lower));
+        approx::assert_abs_diff_eq!(v[2], volume(upper), epsilon = 1e-9 * volume(upper));
+        approx::assert_abs_diff_eq!(v[0] + v[1] + v[2], 0.03f64.powi(3), epsilon = 1e-9 * 0.03f64.powi(3));
+        let on_wall = |n: &u32| mesh.nodes[*n as usize].iter().any(|c| c.abs() < 1e-12 || (c - 0.03).abs() < 1e-12);
+        assert!(mesh.boundary.iter().all(|f| f.nodes.iter().all(on_wall)));
+    }
+
+    fn plate() -> emcraft_model::Inclusion {
+        block([0.016, 0.016, 0.003], [0.007, 0.007, 0.008], Some("a"))
+    }
+
+    fn rod(material: Option<&str>) -> emcraft_model::Inclusion {
+        emcraft_model::Inclusion {
+            shape: Shape::Cylinder { radius: metres(0.003), length: metres(0.006) },
+            at: Point3::new(0.015, 0.015, 0.011),
+            material: material.map(str::to_owned),
+        }
+    }
+
+    /// A conducting cylinder standing on a dielectric plate: a hole in the box's region, its
+    /// foot (round, inside the plate's top face) a wall of the plate's region. Evidence: the
+    /// plate's volume, and the foot's area — the walls in the plate's top plane — a 12-sided
+    /// polygon's in the circle (the conductor's surface is divided by π/6), with which the
+    /// vacuum's volume is the box's less the plate's and the prism's.
+    #[test]
+    fn a_conductor_standing_on_a_dielectric_makes_its_foot_a_wall() {
+        let mesh = solid(&boxed(&[plate(), rod(None)]), metres(0.006)).unwrap();
+        let v = volumes_and_conformity(&mesh, 2);
+        approx::assert_abs_diff_eq!(v[1], 0.016 * 0.016 * 0.003, epsilon = 1e-15);
+        let foot: f64 = mesh
+            .boundary
+            .iter()
+            .map(|f| f.nodes.map(|n| mesh.nodes[n as usize]))
+            .filter(|q| q.iter().all(|p| (p.z - 0.011).abs() < 1e-12))
+            .map(|q| 0.5 * (q[1] - q[0]).cross(q[2] - q[0]).norm())
+            .sum();
+        let circle = PI * 0.003f64.powi(2);
+        assert!(foot < circle && foot > 0.9 * circle, "{foot} {circle}");
+        approx::assert_abs_diff_eq!(v[0] + v[1], 0.03f64.powi(3) - 0.006 * foot, epsilon = 1e-12);
+    }
+
+    /// A dielectric cylinder standing on a plate (its round cap inside the plate's top face),
+    /// and three bodies around one edge (a plate under two blocks side by side that touch).
+    /// Evidence: the volumes (the cylinder's a prism's inside the circle's).
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn a_cylinder_on_a_plate_and_three_bodies_around_an_edge() {
+        let mesh = solid(&boxed(&[plate(), rod(Some("b"))]), metres(0.003)).unwrap();
+        let v = volumes_and_conformity(&mesh, 3);
+        approx::assert_abs_diff_eq!(v[1], 0.016 * 0.016 * 0.003, epsilon = 1e-15);
+        let round = PI * 0.003f64.powi(2) * 0.006;
+        assert!(v[2] < round && v[2] > 0.95 * round, "{} {round}", v[2]);
+        let left = block([0.006, 0.010, 0.004], [0.009, 0.010, 0.011], Some("b"));
+        let right = block([0.006, 0.008, 0.005], [0.015, 0.011, 0.011], Some("a"));
+        let mesh = solid(&boxed(&[plate(), left, right]), metres(0.003)).unwrap();
+        let v = volumes_and_conformity(&mesh, 3);
+        approx::assert_abs_diff_eq!(v[2], 0.006 * 0.010 * 0.004, epsilon = 1e-15);
+        approx::assert_abs_diff_eq!(v[1], 0.016 * 0.016 * 0.003 + 0.006 * 0.008 * 0.005, epsilon = 1e-15);
+        // A vessel standing on the plate with a liquid inside it: contact and nesting together.
+        let liquid = emcraft_model::Inclusion {
+            shape: Shape::Cylinder { radius: metres(0.002), length: metres(0.004) },
+            at: Point3::new(0.015, 0.015, 0.012),
+            material: Some("a".into()),
+        };
+        let mesh = solid(&boxed(&[plate(), rod(Some("b")), liquid]), metres(0.003)).unwrap();
+        let v = volumes_and_conformity(&mesh, 3);
+        let (vessel, inside) = (PI * 0.003f64.powi(2) * 0.006, PI * 0.002f64.powi(2) * 0.004);
+        assert!(v[2] < vessel - 0.9 * inside && v[2] > 0.93 * (vessel - inside), "{} {vessel} {inside}", v[2]);
+        assert!(v[1] > 0.016 * 0.016 * 0.003 + 0.9 * inside && v[1] < 0.016 * 0.016 * 0.003 + inside, "{}", v[1]);
+        // A body against its vessel's wall from inside is not made a contact yet: refused.
+        let against = emcraft_model::Inclusion {
+            shape: Shape::Cylinder { radius: metres(0.002), length: metres(0.004) },
+            at: Point3::new(0.015, 0.015, 0.011),
+            material: Some("a".into()),
+        };
+        let e = solid(&boxed(&[plate(), rod(Some("b")), against]), metres(0.003)).unwrap_err().to_string();
+        assert!(e.contains("against the wall of inclusion 2"), "{e}");
     }
 
     #[test]

@@ -1,0 +1,10 @@
+{
+ "title": "Spherical cavity, radius 10 mm, with a coated sphere: a core (εr = 9) of radius 2.5 mm inside a ceramic sphere (εr = 4) of radius 5 mm: the TM11 triplet",
+ "kind": "theory",
+ "source": "Three-layer spherical cavity: spherical Bessel functions j₁ in the core and a combination of j₁ and y₁ in the coat and in the vacuum around it, the tangential fields continuous at both interfaces and the tangential E zero at the wall (R. F. Harrington, Time-Harmonic Electromagnetic Fields, 1961, §6.10, carried through the layers); the roots computed by emcraft-theory (bessel::coated_sphere_resonances)",
+ "quantities": [
+  {"id": "tm11_a", "quantity": "TM11 resonance, first of the triplet (GHz)", "measure": {"step": "modes", "pointer": "/modes/0/frequency"}, "value": 9.980997513965061, "tolerance": {"relative": 5e-4}, "reason": "three regions, one inside the next, meshed apart with 3 mm tetrahedra and joined node for node, the wall and both interfaces curved (quadratic tetrahedra): −1.3e-4"},
+  {"id": "tm11_b", "quantity": "TM11 resonance, second of the triplet (GHz)", "measure": {"step": "modes", "pointer": "/modes/1/frequency"}, "value": 9.980997513965061, "tolerance": {"relative": 5e-4}, "reason": "as the first"},
+  {"id": "tm11_c", "quantity": "TM11 resonance, third of the triplet (GHz)", "measure": {"step": "modes", "pointer": "/modes/2/frequency"}, "value": 9.980997513965061, "tolerance": {"relative": 5e-4}, "reason": "as the first"}
+ ]
+}

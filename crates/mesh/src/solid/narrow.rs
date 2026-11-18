@@ -137,7 +137,7 @@ fn corners(t: &Tessellation, i: usize) -> Option<[Point3; 3]> {
 /// The overlap of two triangles of a plane: `a` clipped by each side of `b` in turn
 /// (I. E. Sutherland, G. W. Hodgman, *Reentrant polygon clipping*, Comm. ACM 17(1), 1974), a
 /// convex polygon (empty when they do not overlap).
-fn overlap(a: [[f64; 2]; 3], b: [[f64; 2]; 3]) -> Vec<[f64; 2]> {
+pub(super) fn overlap(a: [[f64; 2]; 3], b: [[f64; 2]; 3]) -> Vec<[f64; 2]> {
     let cross = |o: [f64; 2], p: [f64; 2], q: [f64; 2]| (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
     // `b` counter-clockwise.
     let b = if cross(b[0], b[1], b[2]) < 0.0 { [b[0], b[2], b[1]] } else { b };
@@ -167,7 +167,7 @@ fn overlap(a: [[f64; 2]; 3], b: [[f64; 2]; 3]) -> Vec<[f64; 2]> {
 }
 
 /// A polygon's area (either way round).
-fn polygon_area(p: &[[f64; 2]]) -> f64 {
+pub(super) fn polygon_area(p: &[[f64; 2]]) -> f64 {
     let n = p.len();
     0.5 * (0..n).map(|i| p[i][0] * p[(i + 1) % n][1] - p[(i + 1) % n][0] * p[i][1]).sum::<f64>().abs()
 }

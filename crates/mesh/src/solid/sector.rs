@@ -78,7 +78,7 @@ fn outline(tris: &[[u32; 3]]) -> Vec<[u32; 2]> {
 }
 
 /// The points of `pts` strictly inside segment p–q (within `tol` of it), from p to q.
-fn between(pts: &[[f64; 2]], p: [f64; 2], q: [f64; 2], tol: f64) -> Vec<usize> {
+pub(super) fn between(pts: &[[f64; 2]], p: [f64; 2], q: [f64; 2], tol: f64) -> Vec<usize> {
     let d = [q[0] - p[0], q[1] - p[1]];
     let len2 = d[0] * d[0] + d[1] * d[1];
     if len2 <= 0.0 {
@@ -209,7 +209,7 @@ fn with_bodies(mut t: Tessellation, bodies: &[Tessellation]) -> Tessellation {
 }
 
 /// Whether `c` lies inside the closed outline `segs` (the even–odd rule along +s).
-fn inside(points: &[[f64; 2]], segs: &[[u32; 2]], c: [f64; 2]) -> bool {
+pub(super) fn inside(points: &[[f64; 2]], segs: &[[u32; 2]], c: [f64; 2]) -> bool {
     let mut odd = false;
     for e in segs {
         let (a, b) = (points[e[0] as usize], points[e[1] as usize]);

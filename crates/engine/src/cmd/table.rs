@@ -1254,7 +1254,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "geometry.inclusion",
         label: "Inclusion",
-        doc: "A body inside the solid: a dielectric region (`material`) or, without one, a conductor. The same shapes as geometry.solid, placed with their origin at `at`; it must lie inside the solid, apart from other inclusions. The regions are meshed apart and joined node for node across the interface.",
+        doc: "A body inside the solid: a dielectric region (`material`) or, without one, a conductor. The same shapes as geometry.solid, placed with their origin at `at`; it must lie inside the solid, and apart from each other inclusion, against it face to face (flat faces in one plane: the contact is shared by the two regions, or a wall where one is a conductor) or wholly inside a dielectric one (a coated sphere, a liquid in its vessel: a region inside that one's). Bodies that cross, touch along a curved surface or lie inside a conductor are refused. The regions are meshed apart and joined node for node across their interfaces.",
         params: &[
             SHAPE,
             SIZE,

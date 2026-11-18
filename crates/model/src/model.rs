@@ -251,8 +251,11 @@ impl Model {
         self.mesh = None;
     }
 
-    /// Adds a body inside the solid; it must lie within the solid's bounding box, apart from the
-    /// other inclusions' (the mesher checks the surfaces do not meet).
+    /// Adds a body inside the solid; it must lie within the solid's bounding box, and apart from
+    /// each other inclusion, against it face to face, or inside it (a body inside a dielectric: a
+    /// coating, a liquid in its vessel). Two whose bounding boxes cross are refused when points
+    /// of the boxes' overlap lie in both ([`OVERLAP_SAMPLES`] a side); the mesher checks the
+    /// surfaces themselves, and which body lies inside which.
     pub fn add_inclusion(&mut self, inc: Inclusion) -> Result<()> {
         let solid = self.domain.solid.as_ref().ok_or_else(|| invalid("inclusion", "needs a solid (geometry.solid) to lie in"))?;
         inc.shape.check()?;
@@ -271,8 +274,15 @@ impl Model {
         {
             return Err(invalid("inclusion", "must lie inside the spherical layer's inner sphere"));
         }
-        if self.inclusions().iter().any(|other| other.bounds().overlaps_inside(bounds)) {
-            return Err(invalid("inclusion", "not supported yet: inclusions whose bounding boxes overlap"));
+        let crossed = |o: &Inclusion| {
+            let theirs = o.bounds();
+            theirs.overlaps_inside(bounds) && !theirs.encloses(bounds, 0.0) && !bounds.encloses(theirs, 0.0) && share_points(o, &inc)
+        };
+        if let Some(k) = self.inclusions().iter().position(crossed) {
+            return Err(invalid(
+                "inclusion",
+                format!("overlaps inclusion {}: two bodies lie apart, against each other face to face, or one inside the other", k + 1),
+            ));
         }
         self.bodies_mut().push(inc.into());
         self.mesh = None;
@@ -448,7 +458,9 @@ impl Model {
         if !inside {
             return None;
         }
-        let name = match self.inclusions().iter().find(|inc| inc.contains(p)) {
+        // Of the inclusions around the point (one inside another), the innermost: the smallest.
+        let size = |inc: &&Inclusion| (inc.bounds().max - inc.bounds().min).norm();
+        let name = match self.inclusions().iter().filter(|inc| inc.contains(p)).min_by(|a, b| size(a).total_cmp(&size(b))) {
             Some(inc) => inc.material.as_ref()?,
             None => &s.material,
         };
@@ -492,6 +504,19 @@ impl Model {
 /// Whether a region is pinned (left out of a saved model, as models before regions were).
 pub(crate) fn is_pinned(r: &crate::region::Region) -> bool {
     *r == crate::region::Region::Pinned
+}
+
+/// The points tried along each side of two bounding boxes' overlap for one in both bodies.
+pub const OVERLAP_SAMPLES: usize = 9;
+
+/// Whether a point of the overlap of the two bodies' bounding boxes (on a grid of
+/// [`OVERLAP_SAMPLES`] a side, off its faces) lies in both bodies.
+fn share_points(a: &Inclusion, b: &Inclusion) -> bool {
+    let (ba, bb) = (a.bounds(), b.bounds());
+    let (lo, hi) = (ba.min.max(bb.min), ba.max.min(bb.max));
+    let at = |i: usize, k: usize| lo[k] + (i as f64 + 0.5) / OVERLAP_SAMPLES as f64 * (hi[k] - lo[k]);
+    let n = OVERLAP_SAMPLES;
+    (0..n * n * n).map(|i| Point3::new(at(i % n, 0), at(i / n % n, 1), at(i / (n * n), 2))).any(|p| a.contains(p) && b.contains(p))
 }
 
 #[cfg(test)]
@@ -553,8 +578,26 @@ mod tests {
         let touching = Inclusion { shape: Shape::Sphere { radius: metres(0.005) }, at: Point3::new(0.035, 0.02, 0.02), material: None };
         assert!(m.add_inclusion(touching).is_err());
         let overlapping = Inclusion { shape: Shape::Sphere { radius: metres(0.002) }, at: Point3::new(0.024, 0.02, 0.02), material: None };
-        assert!(m.add_inclusion(overlapping).is_err());
+        let e = m.add_inclusion(overlapping).unwrap_err().to_string();
+        assert!(e.contains("overlaps inclusion 1"), "{e}");
         assert_eq!(m.radiators().count(), 6, "two corners per inclusion and feature");
+        // Taken: a body inside the ceramic (the point's filling then the inner body's), one
+        // against it corner to corner (their boxes cross, the bodies do not), one face to face
+        // with another.
+        m.add_material(Material::new("core", 9.0, 1.0).unwrap()).unwrap();
+        let ball = |r: f64, at: Point3, material: Option<&str>| Inclusion {
+            shape: Shape::Sphere { radius: metres(r) },
+            at,
+            material: material.map(str::to_owned),
+        };
+        m.add_inclusion(ball(0.002, Point3::new(0.021, 0.02, 0.02), Some("core"))).unwrap();
+        assert_eq!(m.material_at(Point3::new(0.021, 0.02, 0.02)), Some(2));
+        assert_eq!(m.material_at(Point3::new(0.017, 0.02, 0.02)), Some(1));
+        m.add_inclusion(ball(0.002, Point3::new(0.0245, 0.0245, 0.0245), None)).unwrap();
+        let block =
+            |at: Point3| Inclusion { shape: Shape::Box { size: box_size(Vec3::new(0.004, 0.004, 0.002)) }, at, material: Some("core".into()) };
+        m.add_inclusion(block(Point3::new(0.004, 0.03, 0.03))).unwrap();
+        m.add_inclusion(block(Point3::new(0.005, 0.031, 0.032))).unwrap();
     }
 
     #[test]
