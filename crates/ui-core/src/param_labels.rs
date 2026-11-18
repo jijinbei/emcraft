@@ -29,7 +29,6 @@ pub const VALUE_LABELS: &[(&str, &str)] = &[
     ("cylinder", t!("Cylinder").en()),
     ("sphere", t!("Sphere").en()),
     ("prism", t!("Prism").en()),
-    ("revolved", t!("Revolved").en()),
     ("cavity", t!("Air the metal encloses").en()),
     ("add", t!("Add").en()),
     ("subtract", t!("Subtract").en()),

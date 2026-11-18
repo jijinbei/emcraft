@@ -129,15 +129,18 @@ const BAND_TOP: ParamSpec = opt("frequency", K::Number, "the frequency (default:
 
 // A primitive body: its shape, dimensions and placement.
 const SHAPE: ParamSpec =
-    req("shape", K::String, "`box`, `cylinder`, `sphere`, `prism` or `revolved`").one_of(&Primitive::IDS).labelled(text!("Shape"));
+    req("shape", K::String, "`box`, `cylinder`, `sphere` or `prism` (a body of revolution or anything else: a SolidCraft design, geometry.import)")
+        .one_of(&Primitive::IDS)
+        .labelled(text!("Shape"));
 const SIZE: ParamSpec = opt("size", K::Array, "the box's [x, y, z]").of(L).labelled(text!("Size"));
 const SIZE_TURNED: ParamSpec = opt("size", K::Array, "the box's [x, y, z] (in its own axes)").of(L).labelled(text!("Size"));
 const RADIUS: ParamSpec = opt("radius", K::Number, "the cylinder's or the sphere's radius").of(L).labelled(text!("Radius"));
 const LENGTH: ParamSpec = opt("length", K::Number, "the cylinder's or the prism's length along z").of(L).labelled(text!("Length"));
 const LENGTH_TURNED: ParamSpec = opt("length", K::Number, "the cylinder's or the prism's length along its axis").of(L).labelled(text!("Length"));
 const PRISM_POINTS: ParamSpec =
-    opt("points", K::Array, "the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0; a revolved body's profile: its points [r, z] from the axis round to the axis (the first and last at r = 0)").of(L).labelled(text!("Points"));
-const SIDES: ParamSpec = opt("sides", K::Integer, "a revolved body's facets round its axis, 3 to 1024 (default 64)").labelled(text!("Facets"));
+    opt("points", K::Array, "the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0")
+        .of(L)
+        .labelled(text!("Points"));
 const AT: ParamSpec = opt("at", K::Array, "where its origin goes (default [0, 0, 0])").of(L).labelled(text!("Position"));
 const AXIS: ParamSpec = opt("axis", K::String, "`x`, `y` or `z` (default): where its own z axis points").one_of(&Axis::IDS).labelled(text!("Axis"));
 const BODY_MATERIAL: ParamSpec = req("material", K::String, "`metal`, the region's material, or another material's name").labelled(text!("Material"));
@@ -1122,14 +1125,13 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "geometry.solid",
         label: "Primitive body",
-        doc: "A body of one material with conducting walls, meshed with unstructured tetrahedra: a box [0, x] × [0, y] × [0, z] (`size`), a cylinder about z from z = 0 (`radius`, `length`), a sphere about the origin (`radius`), a prism, the simple polygon `points` of the plane z = 0 extruded to z = `length` (the outline of a bend, a mitred corner or a junction of guides), or a revolved body, the profile `points` [r, z] turned about z in `sides` facets (a horn, a taper, a lens; a body of revolution's own). Its end faces (z = 0, z = length) can carry ports, and so can its other flat faces across x, y or z (model.port.create with `face` and `axis`); a closed body is a cavity for `solve.eigenmodes`. Replaces any geometry, mesh and results.",
+        doc: "A body of one material with conducting walls, meshed with unstructured tetrahedra: a box [0, x] × [0, y] × [0, z] (`size`), a cylinder about z from z = 0 (`radius`, `length`), a sphere about the origin (`radius`), a prism, the simple polygon `points` of the plane z = 0 extruded to z = `length` (the outline of a bend, a mitred corner or a junction of guides); a horn, a taper, a body of revolution or anything else is a SolidCraft design (geometry.import). Its end faces (z = 0, z = length) can carry ports, and so can its other flat faces across x, y or z (model.port.create with `face` and `axis`); a closed body is a cavity for `solve.eigenmodes`. Replaces any geometry, mesh and results.",
         params: &[
             SHAPE,
             SIZE,
             RADIUS,
             LENGTH,
             PRISM_POINTS,
-            SIDES,
             opt("material", K::String, "the filling (default vacuum)").labelled(text!("Material")),
         ],
         effect: Effect::Record,
@@ -1197,7 +1199,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "geometry.body",
         label: "Body",
-        doc: "A body in the region, by what it is made of: `interior` (the region itself — a housing's inside drawn as its air: inside it is solved, outside it is metal; the bodies placed stay, the region pinned and closed; a box anywhere, a prism or revolved profile anywhere, a cylinder or sphere on the origin), `metal` (a perfect conductor: the region loses its volume and its surface becomes wall; it may reach the region's boundary), the region's own material (giving back what metal took: the inside of a metal shell, an opening), or another material (a dielectric body inside the region, apart from other dielectric ones). Later bodies win where they overlap. The same shapes as geometry.solid, its origin at `at` and its z axis turned onto `axis` (dielectric bodies along z).",
+        doc: "A body in the region, by what it is made of: `interior` (the region itself — a housing's inside drawn as its air: inside it is solved, outside it is metal; the bodies placed stay, the region pinned and closed; a box, a prism or an imported design anywhere, a cylinder or sphere on the origin), `metal` (a perfect conductor: the region loses its volume and its surface becomes wall; it may reach the region's boundary), the region's own material (giving back what metal took: the inside of a metal shell, an opening), or another material (a dielectric body inside the region, apart from other dielectric ones). Later bodies win where they overlap. The same shapes as geometry.solid, its origin at `at` and its z axis turned onto `axis` (dielectric bodies along z).",
         params: &[
             BODY_MATERIAL,
             SHAPE,
@@ -1205,7 +1207,6 @@ pub static COMMANDS: &[CommandSpec] = &[
             RADIUS,
             LENGTH_TURNED,
             PRISM_POINTS,
-            SIDES,
             AT,
             AXIS,
         ],
@@ -1234,7 +1235,6 @@ pub static COMMANDS: &[CommandSpec] = &[
             RADIUS,
             LENGTH_TURNED,
             PRISM_POINTS,
-            SIDES,
             opt("at", K::Array, "where its origin goes").of(L).labelled(text!("Position")),
             opt("axis", K::String, "`x`, `y` or `z`: where its own z axis points").one_of(&Axis::IDS).labelled(text!("Axis")),
         ],
@@ -1261,7 +1261,6 @@ pub static COMMANDS: &[CommandSpec] = &[
             RADIUS,
             LENGTH,
             PRISM_POINTS,
-            SIDES,
             AT,
             opt("material", K::String, "its filling; a perfect conductor when left out").labelled(text!("Material")),
         ],
@@ -1280,7 +1279,6 @@ pub static COMMANDS: &[CommandSpec] = &[
             RADIUS,
             LENGTH_TURNED,
             PRISM_POINTS,
-            SIDES,
             AT,
             AXIS,
         ],

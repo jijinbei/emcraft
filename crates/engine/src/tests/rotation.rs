@@ -747,10 +747,15 @@ fn an_open_ended_guide_as_a_body_of_revolution_radiates_as_in_3d() {
 fn a_conical_horn_as_a_body_of_revolution_has_its_aperture_s_directivity() {
     let mut s = Session::new();
     s.execute("geometry.solid", &json!({"shape": "cylinder", "radius": 80, "length": 150})).unwrap();
-    s.execute("geometry.feature", &json!({"combine": "subtract", "shape": "revolved", "points": [[0, 38], [13, 38], [13, 60], [27, 100], [0, 100]]}))
-        .unwrap();
-    s.execute("geometry.feature", &json!({"combine": "add", "shape": "revolved", "points": [[0, 40], [11, 40], [11, 60], [25.7, 102], [0, 102]]}))
-        .unwrap();
+    // The horn's outer wall taken out and its air put back, each a profile turned in 64 sides (a
+    // SolidCraft design's tessellation, drawn here directly).
+    let turned = |combine, mm: &[[f64; 2]]| {
+        let metres: Vec<[f64; 2]> = mm.iter().map(|p| [p[0] * 1e-3, p[1] * 1e-3]).collect();
+        let shape = emcraft_model::Shape::revolved("horn", &metres, 64).unwrap();
+        emcraft_model::Feature { combine, shape, at: emcraft_model::Point3::ORIGIN, axis: emcraft_model::Axis::Z }
+    };
+    s.model.add_feature(turned(emcraft_model::Combine::Subtract, &[[0.0, 38.0], [13.0, 38.0], [13.0, 60.0], [27.0, 100.0], [0.0, 100.0]])).unwrap();
+    s.model.add_feature(turned(emcraft_model::Combine::Add, &[[0.0, 40.0], [11.0, 40.0], [11.0, 60.0], [25.7, 102.0], [0.0, 102.0]])).unwrap();
     s.execute("model.port.create", &json!({"name": "feed", "end": "start", "modes": 2, "face": [40, -11, -11, 22, 22]})).unwrap();
     s.execute("model.open", &json!({"thickness": 15, "shape": "box"})).unwrap();
     let r = s.execute("solve.revolution.radiation", &json!({"frequency": 10, "theta": [0], "size": 1})).unwrap();

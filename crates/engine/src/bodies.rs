@@ -96,8 +96,8 @@ pub enum Placed {
     Interior,
 }
 
-/// The region an interior body makes: a box anywhere (turned with its axis), a prism or a
-/// revolved profile moved to `at` and turned, a cylinder or a sphere standing on the origin.
+/// The region an interior body makes: a box anywhere (turned with its axis), a prism or an
+/// imported design moved to `at` and turned, a cylinder or a sphere standing on the origin.
 fn interior_shape(shape: Shape, at: Point3, axis: Axis) -> Result<Shape> {
     let reach = Feature { combine: Combine::Add, shape: shape.clone(), at, axis }.bounds();
     match shape {
@@ -108,7 +108,7 @@ fn interior_shape(shape: Shape, at: Point3, axis: Axis) -> Result<Shape> {
             Ok(Shape::Surface { name, positions: positions.into_iter().map(place).collect(), triangles, tags, surfaces })
         }
         other if at == Point3::ORIGIN && axis == Axis::Z => Ok(other),
-        _ => Err(EngineError::failed("an interior cylinder or sphere stands on the origin along z: elsewhere, draw it as a revolved profile")),
+        _ => Err(EngineError::failed("an interior cylinder or sphere stands on the origin along z: elsewhere, import it from a SolidCraft design")),
     }
 }
 

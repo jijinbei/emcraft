@@ -58,7 +58,10 @@ fn a_pillbox_accelerates_as_its_closed_form_says() {
 fn a_beam_pipe_cavity_agrees_with_its_body_of_revolution() {
     let profile = json!([[0, 0], [3, 0], [3, 10], [10, 10], [10, 23.06], [3, 23.06], [3, 33.06], [0, 33.06]]);
     let mut s = Session::new();
-    s.execute("geometry.solid", &json!({"shape": "revolved", "points": profile, "sides": 128})).unwrap();
+    // The profile turned in 128 sides (a SolidCraft design's tessellation, drawn here directly).
+    let metres: Vec<[f64; 2]> = profile.as_array().unwrap().iter().map(|p| [p[0].as_f64().unwrap() * 1e-3, p[1].as_f64().unwrap() * 1e-3]).collect();
+    let shape = emcraft_model::Shape::revolved("cell", &metres, 128).unwrap();
+    s.model.set_solid(emcraft_model::Solid { shape, material: "vacuum".into() }).unwrap();
     s.execute("mesh.generate", &json!({"size": 1.5})).unwrap();
     s.execute("solve.eigenmodes", &json!({"near": 11.3, "count": 1, "order": 2})).unwrap();
     let r = s.execute("results.cavity", &json!({})).unwrap();

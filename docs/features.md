@@ -815,16 +815,15 @@ What fills the model where no body is: a material by name (vacuum by default), t
 
 ## `geometry.solid` — Primitive body
 
-A body of one material with conducting walls, meshed with unstructured tetrahedra: a box [0, x] × [0, y] × [0, z] (`size`), a cylinder about z from z = 0 (`radius`, `length`), a sphere about the origin (`radius`), a prism, the simple polygon `points` of the plane z = 0 extruded to z = `length` (the outline of a bend, a mitred corner or a junction of guides), or a revolved body, the profile `points` [r, z] turned about z in `sides` facets (a horn, a taper, a lens; a body of revolution's own). Its end faces (z = 0, z = length) can carry ports, and so can its other flat faces across x, y or z (model.port.create with `face` and `axis`); a closed body is a cavity for `solve.eigenmodes`. Replaces any geometry, mesh and results.
+A body of one material with conducting walls, meshed with unstructured tetrahedra: a box [0, x] × [0, y] × [0, z] (`size`), a cylinder about z from z = 0 (`radius`, `length`), a sphere about the origin (`radius`), a prism, the simple polygon `points` of the plane z = 0 extruded to z = `length` (the outline of a bend, a mitred corner or a junction of guides); a horn, a taper, a body of revolution or anything else is a SolidCraft design (geometry.import). Its end faces (z = 0, z = length) can carry ports, and so can its other flat faces across x, y or z (model.port.create with `face` and `axis`); a closed body is a cavity for `solve.eigenmodes`. Replaces any geometry, mesh and results.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
-| `shape` | string |  | yes | `box`, `cylinder`, `sphere`, `prism` or `revolved` |
+| `shape` | string |  | yes | `box`, `cylinder`, `sphere` or `prism` (a body of revolution or anything else: a SolidCraft design, geometry.import) |
 | `size` | array | length | no | the box's [x, y, z] |
 | `radius` | number | length | no | the cylinder's or the sphere's radius |
 | `length` | number | length | no | the cylinder's or the prism's length along z |
-| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0; a revolved body's profile: its points [r, z] from the axis round to the axis (the first and last at r = 0) |
-| `sides` | integer |  | no | a revolved body's facets round its axis, 3 to 1024 (default 64) |
+| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0 |
 | `material` | string |  | no | the filling (default vacuum) |
 
 ## `geometry.import` — Import
@@ -875,17 +874,16 @@ Sets a parameter of a SolidCraft design the project imports, where it is importe
 
 ## `geometry.body` — Body
 
-A body in the region, by what it is made of: `interior` (the region itself — a housing's inside drawn as its air: inside it is solved, outside it is metal; the bodies placed stay, the region pinned and closed; a box anywhere, a prism or revolved profile anywhere, a cylinder or sphere on the origin), `metal` (a perfect conductor: the region loses its volume and its surface becomes wall; it may reach the region's boundary), the region's own material (giving back what metal took: the inside of a metal shell, an opening), or another material (a dielectric body inside the region, apart from other dielectric ones). Later bodies win where they overlap. The same shapes as geometry.solid, its origin at `at` and its z axis turned onto `axis` (dielectric bodies along z).
+A body in the region, by what it is made of: `interior` (the region itself — a housing's inside drawn as its air: inside it is solved, outside it is metal; the bodies placed stay, the region pinned and closed; a box, a prism or an imported design anywhere, a cylinder or sphere on the origin), `metal` (a perfect conductor: the region loses its volume and its surface becomes wall; it may reach the region's boundary), the region's own material (giving back what metal took: the inside of a metal shell, an opening), or another material (a dielectric body inside the region, apart from other dielectric ones). Later bodies win where they overlap. The same shapes as geometry.solid, its origin at `at` and its z axis turned onto `axis` (dielectric bodies along z).
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
 | `material` | string |  | yes | `metal`, the region's material, or another material's name |
-| `shape` | string |  | yes | `box`, `cylinder`, `sphere`, `prism` or `revolved` |
+| `shape` | string |  | yes | `box`, `cylinder`, `sphere` or `prism` (a body of revolution or anything else: a SolidCraft design, geometry.import) |
 | `size` | array | length | no | the box's [x, y, z] (in its own axes) |
 | `radius` | number | length | no | the cylinder's or the sphere's radius |
 | `length` | number | length | no | the cylinder's or the prism's length along its axis |
-| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0; a revolved body's profile: its points [r, z] from the axis round to the axis (the first and last at r = 0) |
-| `sides` | integer |  | no | a revolved body's facets round its axis, 3 to 1024 (default 64) |
+| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0 |
 | `at` | array | length | no | where its origin goes (default [0, 0, 0]) |
 | `axis` | string |  | no | `x`, `y` or `z` (default): where its own z axis points |
 
@@ -910,8 +908,7 @@ Changes a body (geometry.body, geometry.feature, geometry.inclusion, an imported
 | `size` | array | length | no | the box's [x, y, z] (in its own axes) |
 | `radius` | number | length | no | the cylinder's or the sphere's radius |
 | `length` | number | length | no | the cylinder's or the prism's length along its axis |
-| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0; a revolved body's profile: its points [r, z] from the axis round to the axis (the first and last at r = 0) |
-| `sides` | integer |  | no | a revolved body's facets round its axis, 3 to 1024 (default 64) |
+| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0 |
 | `at` | array | length | no | where its origin goes |
 | `axis` | string |  | no | `x`, `y` or `z`: where its own z axis points |
 
@@ -929,12 +926,11 @@ A body inside the solid: a dielectric region (`material`) or, without one, a con
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
-| `shape` | string |  | yes | `box`, `cylinder`, `sphere`, `prism` or `revolved` |
+| `shape` | string |  | yes | `box`, `cylinder`, `sphere` or `prism` (a body of revolution or anything else: a SolidCraft design, geometry.import) |
 | `size` | array | length | no | the box's [x, y, z] |
 | `radius` | number | length | no | the cylinder's or the sphere's radius |
 | `length` | number | length | no | the cylinder's or the prism's length along z |
-| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0; a revolved body's profile: its points [r, z] from the axis round to the axis (the first and last at r = 0) |
-| `sides` | integer |  | no | a revolved body's facets round its axis, 3 to 1024 (default 64) |
+| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0 |
 | `at` | array | length | no | where its origin goes (default [0, 0, 0]) |
 | `material` | string |  | no | its filling; a perfect conductor when left out |
 
@@ -945,12 +941,11 @@ Combines a primitive with the solid: `add` (union: a stub, a housing), `subtract
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
 | `combine` | string |  | yes | `add`, `subtract` or `intersect` |
-| `shape` | string |  | yes | `box`, `cylinder`, `sphere`, `prism` or `revolved` |
+| `shape` | string |  | yes | `box`, `cylinder`, `sphere` or `prism` (a body of revolution or anything else: a SolidCraft design, geometry.import) |
 | `size` | array | length | no | the box's [x, y, z] (in its own axes) |
 | `radius` | number | length | no | the cylinder's or the sphere's radius |
 | `length` | number | length | no | the cylinder's or the prism's length along its axis |
-| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0; a revolved body's profile: its points [r, z] from the axis round to the axis (the first and last at r = 0) |
-| `sides` | integer |  | no | a revolved body's facets round its axis, 3 to 1024 (default 64) |
+| `points` | array | length | no | the prism's outline: its corners [x, y] in order (a simple polygon, at most 256), in its own plane z = 0 |
 | `at` | array | length | no | where its origin goes (default [0, 0, 0]) |
 | `axis` | string |  | no | `x`, `y` or `z` (default): where its own z axis points |
 

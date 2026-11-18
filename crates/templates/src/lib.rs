@@ -887,7 +887,7 @@ pub const TEMPLATES: &[Template] = &[
     Template {
         name: "relativistic-bwo",
         title: "Relativistic BWO",
-        label: "A relativistic backward-wave oscillator by particle-in-cell in a body of revolution, the Ku-band one of Na et al. (2017): 1.5 kA of 553 keV electrons on a 9–11 mm ring held by 5 T through 14.5 ripples of 15 ± 2.1 mm every 7.5 mm, open at the collector; it oscillates near 15 GHz on these 0.5 mm cells (15.59 GHz published, its walls smooth)",
+        label: "A relativistic backward-wave oscillator by particle-in-cell in a body of revolution, the Ku-band one of Na et al. (2017): 1.5 kA of 553 keV electrons on a 9–11 mm ring held by 5 T through 14.5 ripples of 15 ± 2.1 mm every 7.5 mm (a SolidCraft design revolved), open at the collector; it oscillates near 15 GHz on these 0.5 mm cells (15.59 GHz published, its walls smooth)",
         script: include_str!("../scripts/relativistic-bwo.json"),
         marks: "{}",
         kinds: &[Analysis::Particles],
@@ -962,6 +962,7 @@ pub const DESIGNS: &[Design] = &[
     Design { file: "monopole.sc", bytes: include_bytes!("../designs/monopole.sc") },
     Design { file: "yagi.sc", bytes: include_bytes!("../designs/yagi.sc") },
     Design { file: "open-waveguide.sc", bytes: include_bytes!("../designs/open-waveguide.sc") },
+    Design { file: "relativistic-bwo.sc", bytes: include_bytes!("../designs/relativistic-bwo.sc") },
     Design { file: "adsb-patch.s1p", bytes: include_bytes!("../designs/adsb-patch.s1p") },
     Design { file: "adsb-bandpass.s2p", bytes: include_bytes!("../designs/adsb-bandpass.s2p") },
 ];
