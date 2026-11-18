@@ -512,8 +512,61 @@ fn a_body_of_revolution_runs_on_the_gpu_kernels_as_on_the_threads() {
         let top = e.iter().fold(0.0f64, |t, v| t.max(v.abs()));
         assert!(top > 0.0 && e.iter().zip(f).all(|(u, v)| (u - v).abs() <= 1e-9 * top));
     }
-    // A Cartesian run says it ran on the CPU's threads.
+}
+
+#[test]
+fn a_box_runs_on_the_gpu_kernels_as_on_the_threads() {
+    // A bunch through a closed pillbox (its outside metal cells) past a probe, on the CPU's
+    // threads and on the GPU's kernels (CubeCL's CPU runtime, double precision): the same
+    // particles, history, probe, wake and moments to rounding (the device sums the current in
+    // fixed point, emcraft_gpu).
+    let solved = |device: &str| {
+        let mut s = Session::new();
+        run(
+            &mut s,
+            &[
+                ("geometry.solid", json!({"shape": "cylinder", "radius": 5, "length": 8})),
+                ("project.analysis", json!({"kind": "particles"})),
+                ("particles.bunch", json!({"face": "z-", "charge": 0.1, "length": 1, "energy": 1e6, "radius": 2})),
+                ("particles.probe", json!({"at": [1, 1, 4]})),
+            ],
+        );
+        let r = s.execute("solve.particles", &json!({"time": 0.025, "cell": 0.5, "device": device, "precision": "double", "frames": 3}));
+        (r.unwrap(), s.results.particles.clone().unwrap())
+    };
+    let (cpu, a) = solved("cpu");
+    let (gpu, b) = solved("cubecl-cpu");
+    assert_eq!((cpu["device"].as_str(), gpu["device"].as_str(), gpu["precision"].as_str()), (Some("cpu"), Some("cubecl-cpu"), Some("double")));
+    assert!(a.particles > 50 && a.particles == b.particles, "{} against {}", a.particles, b.particles);
+    let close = |x: f64, y: f64| (x - y).abs() <= 1e-9 * x.abs().max(y.abs()).max(1e-300);
+    for (p, q) in a.history.iter().zip(&b.history) {
+        assert!(close(p.field, q.field) && close(p.kinetic, q.kinetic) && p.particles == q.particles, "{p:?} against {q:?}");
+    }
+    let top = a.probes[0].e.iter().flatten().fold(0.0f64, |m, v| m.max(v.abs()));
+    let worst = a.probes[0].e.iter().flatten().zip(b.probes[0].e.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0.0, f64::max);
+    assert!(top > 0.0 && worst <= 1e-9 * top, "{worst:e} of {top:e}");
+    let k = |r: &Value| r["loss_factor_v_per_pc"].as_f64().unwrap();
+    assert!(k(&cpu) > 0.0 && close(k(&cpu), k(&gpu)), "{} against {}", k(&cpu), k(&gpu));
+    assert_eq!((a.moments.len(), b.moments.len()), (3, 3));
+    for (m, n) in a.moments.iter().zip(&b.moments) {
+        assert!(m.t == n.t && m.particles.len() == n.particles.len() && !m.particles.is_empty());
+        assert!(m.particles.iter().zip(&n.particles).all(|(x, y)| x.x.iter().zip(&y.x).all(|(u, v)| (u - v).abs() < 1e-10)));
+    }
+    // Two populations of a plasma run there too; an emitting wall's run (its emission reads E at
+    // the wall each step) on the CPU's threads.
     let mut s = plasma();
     let r = s.execute("solve.particles", &json!({"time": 0.05, "device": "cubecl-cpu"})).unwrap();
+    assert_eq!(r["device"], json!("cubecl-cpu"));
+    let mut s = Session::new();
+    run(
+        &mut s,
+        &[
+            ("geometry.solid", json!({"shape": "box", "size": [0.25, 0.25, 10]})),
+            ("project.analysis", json!({"kind": "particles"})),
+            ("particles.walls", json!({"x": "periodic", "y": "periodic"})),
+            ("particles.emitter", json!({"face": "z-"})),
+        ],
+    );
+    let r = s.execute("solve.particles", &json!({"time": 0.01, "cell": 0.25, "device": "cubecl-cpu"})).unwrap();
     assert_eq!(r["device"], json!("cpu"));
 }

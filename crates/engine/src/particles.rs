@@ -28,6 +28,7 @@ use serde_json::{Value, json};
 use crate::{EngineError, Params, Result, Session};
 
 mod axi;
+mod cartesian;
 pub(crate) mod export;
 
 /// The most records of the run's history, samples of each probe and particles kept at the end.
@@ -477,12 +478,17 @@ impl Run for Cartesian {
         self.pic.time()
     }
     fn snapshot(&self) -> Vec<Snap> {
-        let stride = self.pic.particles().div_ceil(SNAPSHOT).max(1);
-        self.pic
-            .populations()
-            .iter()
-            .enumerate()
-            .flat_map(|(k, pop)| pop.particles.iter().map(move |p| (k, pop.species, p)))
+        let particles = self.pic.populations().iter().enumerate().flat_map(|(k, pop)| pop.particles.iter().map(move |p| (k, pop.species, p)));
+        self.snaps(self.pic.particles(), particles)
+    }
+}
+
+impl Cartesian {
+    /// At most [`SNAPSHOT`] of `count` particles (each its population and species), evenly
+    /// chosen, in the model's coordinates.
+    fn snaps<'a>(&self, count: usize, particles: impl Iterator<Item = (usize, emcraft_particles::Species, &'a pic::Particle)>) -> Vec<Snap> {
+        let stride = count.div_ceil(SNAPSHOT).max(1);
+        particles
             .step_by(stride)
             .map(|(population, species, p)| Snap {
                 x: std::array::from_fn(|d| p.x[d] + self.origin[d]),
@@ -1031,10 +1037,17 @@ pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
     let pic = build(s, grid, &region, dt, set.pusher)?;
     let probes: Vec<[f64; 3]> = s.model.particles.probes.iter().map(|x| std::array::from_fn(|d| x[d] - origin[d])).collect();
     let frame = Frame { origin, cells: grid.axes.map(|a| a.cells), h: grid.axes.map(|a| a.h), dt, steps, axisymmetric: false };
-    // The Cartesian grid runs on the CPU's threads.
     let frames = frames_of(p, steps, dt)?;
-    let reply = run_to_end(s, &mut Cartesian { pic, origin }, frame, &probes, frames)?;
-    Ok(ran_on(reply, crate::solve::Device::Cpu, None))
+    let run = Cartesian { pic, origin };
+    // Emitting walls (their emission reads E at the wall each step) and a held voltage run on
+    // the CPU's threads.
+    let m = &s.model.particles;
+    let gpu = gpu.filter(|_| m.emitters.is_empty() && m.voltage.is_none());
+    let reply = match gpu {
+        Some(gpu) => run_to_end(s, &mut cartesian::OnDevice::new(run, gpu, &probes)?, frame, &probes, frames)?,
+        None => run_to_end(s, &mut { run }, frame, &probes, frames)?,
+    };
+    Ok(ran_on(reply, device, gpu))
 }
 
 /// `reply` with where the run ran: the device and the fields' precision.

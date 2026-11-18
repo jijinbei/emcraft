@@ -7,7 +7,7 @@
 
 use emcraft_fdtd::axi::{AxiGrid, AxiPic, Component, Injection, Ring, Rings};
 use emcraft_fdtd::pic::{Axis, Moved, Pulse, Wall};
-use emcraft_gpu::{AxiStep, Backend, Gpu, Precision};
+use emcraft_gpu::{Backend, DeviceStep, Gpu, Precision};
 use emcraft_model::particles::{ELECTRON, Pusher};
 use emcraft_model::units::C0;
 
@@ -108,7 +108,7 @@ fn on_device_of(mut pic: AxiPic, backend: Backend, precision: Precision, span: u
     let taps = pic.plane_taps(PLANE);
     let mut dev = Gpu { backend, precision }.axi(&mut pic, &PROBES).unwrap();
     dev.tap(&taps.taps).unwrap();
-    let mut steps: Vec<AxiStep> = Vec::new();
+    let mut steps: Vec<DeviceStep> = Vec::new();
     let mut half = Default::default();
     while steps.len() < STEPS {
         // Spans that stop at HALF, where the state is read back and the run goes on.

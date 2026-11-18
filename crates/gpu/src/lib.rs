@@ -29,11 +29,15 @@ mod guide;
 mod kernels;
 mod lattice;
 mod open;
+mod particles;
+mod pic;
 mod slots;
 
-pub use axi::{AxiDevice, AxiStep};
+pub use axi::AxiDevice;
 pub use device::{Available, Backend, Precision, available};
 pub use front::{Fronts, MAX_ROWS, MIN_ROWS};
+pub use particles::DeviceStep;
+pub use pic::PicDevice;
 
 use cubecl::prelude::Client;
 

@@ -14,6 +14,8 @@ pub(crate) mod axi;
 pub(crate) mod front;
 pub(crate) mod guide;
 pub(crate) mod open;
+pub(crate) mod particles;
+pub(crate) mod pic;
 
 /// One array per axis: a field's components, their coefficients, the grid's steps.
 #[derive(CubeLaunch, CubeType)]

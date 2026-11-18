@@ -1,16 +1,8 @@
 //! The axisymmetric particle-in-cell run's kernels (`emcraft_fdtd::axi`, whose docs give the
 //! r–z Yee lattice, the rings and the scheme): the rings pushed and their current deposited,
 //! one unit a ring; B's half steps and E's step, one unit a point; the probes; the rings'
-//! kinetic energy summed in a fixed tree.
-//!
-//! **The current, deterministically.** Many rings add to the same point in one step, in an
-//! order the device does not fix; floating-point sums in that order would differ run to run. So
-//! each addition is made an integer, J × `scale` rounded toward zero to 64 bits, and the
-//! integers are added atomically: integer addition is associative, so the sum is the same in any
-//! order, bit for bit, and E's step turns it back into J (the fixed-point accumulation of
-//! S. Le Grand, A. W. Götz, R. C. Walker, *SPFP: Speed without compromise — a mixed precision
-//! model for GPU accelerated molecular dynamics simulations*, Comput. Phys. Commun.
-//! 184:374–380, 2013). The host picks `scale` so that no point's sum can overflow.
+//! kinetic energy summed in a fixed tree. The current is summed in fixed point
+//! (`kernels::particles`).
 //!
 //! Lattices (`emcraft_fdtd::axi::device::Plan`'s order): E_r nr × Nz, E_z (nr + 1) × Cz,
 //! E_θ (nr + 1) × Nz, B_r (nr + 1) × Cz, B_z nr × Nz, B_θ nr × Cz; Nz z's nodes (cells + 1
@@ -19,6 +11,7 @@
 use cubecl::prelude::*;
 
 use crate::buffer::Real;
+use crate::kernels::particles::{Deaths, U, add, finite, gamma, kinetic as kinetic_of, leave, push, shape, take};
 
 /// The r–z grid: cells along r and z, whether z is periodic, the cells' sizes (m) and the step
 /// (s); with the speed of light (m/s) and π in the run's precision (literals in a kernel are
@@ -120,19 +113,6 @@ pub(crate) struct Species<F: Float> {
     pub(crate) rest: F,
 }
 
-/// The rings that left the run: each one's step and index, how (0 dropped, its momentum not a
-/// number; 1 the outer wall; 2 the low end; 3 the high end; 4 the metal), its weight and its
-/// kinetic energy (J); `count` how many so far.
-#[derive(CubeLaunch, CubeType)]
-pub(crate) struct Deaths<F: Float> {
-    pub(crate) step: Box<[u32]>,
-    pub(crate) slot: Box<[u32]>,
-    pub(crate) how: Box<[u32]>,
-    pub(crate) w: Box<[F]>,
-    pub(crate) kinetic: Box<[F]>,
-    pub(crate) count: Box<[Atomic<u32>]>,
-}
-
 /// z's points along a lattice: its nodes (`node`) or centres.
 #[cube]
 fn z_points<F: Real>(g: &Grid<F>, #[comptime] node: bool) -> i32 {
@@ -213,77 +193,6 @@ fn gather<F: Real>(values: &[F], g: &Grid<F>, nr: u32, r: F, z: F, #[comptime] r
     sum
 }
 
-/// The first-order shape: the weight on a node `s` cells away.
-#[cube]
-fn shape<F: Real>(s: F) -> F {
-    F::max(F::new(1.0_f32) - s.abs(), F::new(0.0_f32))
-}
-
-/// Adds `v` to point `id` of a fixed-point sum.
-#[cube]
-fn add<F: Real>(sum: &[Atomic<u64>], id: u32, v: F, scale: F) {
-    sum[id as usize].fetch_add(u64::cast_from(i64::cast_from(v * scale)));
-}
-
-/// γ of u (m/s), `c` the speed of light (m/s).
-#[cube]
-fn gamma<F: Real>(u0: F, u1: F, u2: F, c: F) -> F {
-    (F::new(1.0_f32) + (u0 * u0 + u1 * u1 + u2 * u2) / (c * c)).sqrt()
-}
-
-/// A momentum (m/s).
-#[derive(CubeType)]
-struct U<F: Float> {
-    r: F,
-    t: F,
-    z: F,
-}
-
-/// u pushed by E and B a step (`emcraft_particles::push`): Boris's or Vay's (`vay`).
-#[cube]
-fn push<F: Real>(u: U<F>, e: U<F>, b: U<F>, kick: F, c: F, #[comptime] vay: bool) -> U<F> {
-    let one = F::new(1.0_f32);
-    let half = F::new(0.5_f32);
-    let two = F::new(2.0_f32);
-    let mut out = U::<F> { r: u.r, t: u.t, z: u.z };
-    if vay {
-        let g = gamma::<F>(u.r, u.t, u.z, c);
-        let (vr, vt, vz) = (u.r / g, u.t / g, u.z / g);
-        // u′ = u + k (E + ½ v × B).
-        let pr = u.r + kick * (e.r + half * (vt * b.z - vz * b.t));
-        let pt = u.t + kick * (e.t + half * (vz * b.r - vr * b.z));
-        let pz = u.z + kick * (e.z + half * (vr * b.t - vt * b.r));
-        let (tr, tt, tz) = (half * kick * b.r, half * kick * b.t, half * kick * b.z);
-        let tau2 = tr * tr + tt * tt + tz * tz;
-        let ustar = (pr * tr + pt * tt + pz * tz) / c;
-        let gp = gamma::<F>(pr, pt, pz, c);
-        let sigma = gp * gp - tau2;
-        let gn = (half * (sigma + (sigma * sigma + F::new(4.0_f32) * (tau2 + ustar * ustar)).sqrt())).sqrt();
-        let (sr, st, sz) = (tr / gn, tt / gn, tz / gn);
-        let s = one / (one + sr * sr + st * st + sz * sz);
-        let pt_ = pr * sr + pt * st + pz * sz;
-        out.r = s * (pr + sr * pt_ + (pt * sz - pz * st));
-        out.t = s * (pt + st * pt_ + (pz * sr - pr * sz));
-        out.z = s * (pz + sz * pt_ + (pr * st - pt * sr));
-    } else {
-        let k = half * kick;
-        let mr = u.r + e.r * k;
-        let mt = u.t + e.t * k;
-        let mz = u.z + e.z * k;
-        let g = gamma::<F>(mr, mt, mz, c);
-        let (tr, tt, tz) = (b.r * (k / g), b.t * (k / g), b.z * (k / g));
-        let qr = mr + (mt * tz - mz * tt);
-        let qt = mt + (mz * tr - mr * tz);
-        let qz = mz + (mr * tt - mt * tr);
-        let f = two / (one + tr * tr + tt * tt + tz * tz);
-        let (sr, st, sz) = (tr * f, tt * f, tz * f);
-        out.r = mr + (qt * sz - qz * st) + e.r * k;
-        out.t = mt + (qz * sr - qr * sz) + e.t * k;
-        out.z = mz + (qr * st - qt * sr) + e.z * k;
-    }
-    out
-}
-
 /// Whether cell (i, k) is metal (none outside the grid).
 #[cube]
 fn metal_cell<F: Real>(metal: &Metal, g: &Grid<F>, i: i32, k: i32, #[comptime] any: bool) -> bool {
@@ -335,35 +244,27 @@ pub(crate) fn push_rings<F: Real>(
         let nr = g.nr;
         let (r, z, w) = (rings.r[id], rings.z[id], rings.w[id]);
         let e = U::<F> {
-            r: gather::<F>(&fields.er, g, nr, r, z, false, true, true),
-            t: gather::<F>(&fields.et, g, nr + 1, r, z, true, true, true),
+            x: gather::<F>(&fields.er, g, nr, r, z, false, true, true),
+            y: gather::<F>(&fields.et, g, nr + 1, r, z, true, true, true),
             z: gather::<F>(&fields.ez, g, nr + 1, r, z, true, false, false),
         };
         let mut b = U::<F> {
-            r: gather::<F>(&fields.br, g, nr + 1, r, z, true, false, true),
-            t: gather::<F>(&fields.bt, g, nr, r, z, false, false, true),
+            x: gather::<F>(&fields.br, g, nr + 1, r, z, true, false, true),
+            y: gather::<F>(&fields.bt, g, nr, r, z, false, false, true),
             z: gather::<F>(&fields.bz, g, nr, r, z, false, true, false),
         };
         if any_steady {
-            b.r += gather::<F>(&steady.br, g, nr + 1, r, z, true, false, true);
-            b.t += gather::<F>(&steady.bt, g, nr, r, z, false, false, true);
+            b.x += gather::<F>(&steady.br, g, nr + 1, r, z, true, false, true);
+            b.y += gather::<F>(&steady.bt, g, nr, r, z, false, false, true);
             b.z += gather::<F>(&steady.bz, g, nr, r, z, false, true, false);
         }
-        let u = push::<F>(U::<F> { r: rings.ur[id], t: rings.ut[id], z: rings.uz[id] }, e, b, species.kick, g.c, vay);
-        // Not a number or not finite (a comparison with NaN fails).
-        let most = F::new(f32::MAX);
-        let bad = !(u.r.abs() <= most && u.t.abs() <= most && u.z.abs() <= most);
-        if bad {
-            let slot = deaths.count[0].fetch_add(1u32) as usize;
-            deaths.step[slot] = step;
-            deaths.slot[slot] = n;
-            deaths.how[slot] = 0u32;
-            deaths.w[slot] = w;
-            deaths.kinetic[slot] = zero;
+        let u = push::<F>(U::<F> { x: rings.ur[id], y: rings.ut[id], z: rings.uz[id] }, e, b, species.kick, g.c, vay);
+        if !finite::<F>(&u) {
+            leave::<F>(&mut deaths, step, n, 0u32, w, zero);
             rings.alive[id] = 0u32;
         } else {
-            let g_u = gamma::<F>(u.r, u.t, u.z, g.c);
-            let (vr, vt, vz) = (u.r / g_u, u.t / g_u, u.z / g_u);
+            let g_u = gamma::<F>(u.x, u.y, u.z, g.c);
+            let (vr, vt, vz) = (u.x / g_u, u.y / g_u, u.z / g_u);
             // Straight in the plane θ = 0, then turned back onto it.
             let x = r + vr * g.dt;
             let y = vt * g.dt;
@@ -375,7 +276,7 @@ pub(crate) fn push_rings<F: Real>(
                 c = x / r1;
                 s = y / r1;
             }
-            let u1 = U::<F> { r: c * u.r + s * u.t, t: -s * u.r + c * u.t, z: u.z };
+            let u1 = U::<F> { x: c * u.x + s * u.y, y: -s * u.x + c * u.y, z: u.z };
             // The walls: the conductor at R and conducting ends.
             let radius = F::cast_from(nr) * g.dr;
             let length = F::cast_from(g.nz) * g.dz;
@@ -412,14 +313,8 @@ pub(crate) fn push_rings<F: Real>(
                 how = 4u32;
             }
             if how != 0 {
-                let u2 = (u1.r * u1.r + u1.t * u1.t + u1.z * u1.z) / (g.c * g.c);
-                let kinetic = w * species.rest * u2 / (gamma::<F>(u1.r, u1.t, u1.z, g.c) + one);
-                let slot = deaths.count[0].fetch_add(1u32) as usize;
-                deaths.step[slot] = step;
-                deaths.slot[slot] = n;
-                deaths.how[slot] = how;
-                deaths.w[slot] = w;
-                deaths.kinetic[slot] = kinetic;
+                let kinetic = kinetic_of::<F>(&u1, w, species.rest, g.c);
+                leave::<F>(&mut deaths, step, n, how, w, kinetic);
                 rings.alive[id] = 0u32;
             } else {
                 rings.r[id] = r1;
@@ -428,8 +323,8 @@ pub(crate) fn push_rings<F: Real>(
                     zn = z1 - length * (z1 / length).floor();
                 }
                 rings.z[id] = zn;
-                rings.ur[id] = u1.r;
-                rings.ut[id] = u1.t;
+                rings.ur[id] = u1.x;
+                rings.ut[id] = u1.y;
                 rings.uz[id] = u1.z;
             }
         }
@@ -570,14 +465,6 @@ pub(crate) fn faraday<F: Real>(mut f: Fields<F>, mut psi: Psi<F>, grading: &Grad
     }
 }
 
-/// The fixed-point sum at `id` as J (A/m²), the sum cleared for the next step.
-#[cube]
-fn take<F: Real>(sum: &[Atomic<u64>], id: usize, scale: F) -> F {
-    let v = sum[id].load();
-    sum[id].store(0u64);
-    F::cast_from(i64::cast_from(v)) / scale
-}
-
 /// E advanced a step: ε₀ ∂E/∂t = ∇ × B/μ₀ − J, off the walls and the metal it is tangential to;
 /// one unit per point (i, k), i < nr + 1, k < Nz. Every point's current is taken (and cleared),
 /// those of E held too.
@@ -711,37 +598,18 @@ pub(crate) fn probe<F: Real>(f: &Fields<F>, g: &Grid<F>, points: &[F], out: &mut
 pub(crate) fn kinetic<F: Real>(rings: &Rings<F>, species: &Species<F>, g: &Grid<F>, out: &mut [F], len: u32, step: u32, #[comptime] width: usize) {
     let u = UNIT_POS as usize;
     let units = CUBE_DIM as usize;
-    let one = F::new(1.0_f32);
     let c = g.c;
     let mut acc = F::new(0.0_f32);
     let mut m = u;
     while m < len as usize {
         if rings.alive[m] == 1 && rings.born[m] <= step {
-            let (a, b, d) = (rings.ur[m], rings.ut[m], rings.uz[m]);
-            let u2 = (a * a + b * b + d * d) / (c * c);
-            acc += rings.w[m] * species.rest * u2 / (gamma::<F>(a, b, d, c) + one);
+            let u = U::<F> { x: rings.ur[m], y: rings.ut[m], z: rings.uz[m] };
+            acc += kinetic_of::<F>(&u, rings.w[m], species.rest, c);
         }
         m += units;
     }
     let total = crate::kernels::fold::<F>(acc, width);
     if u == 0 {
         out[0] = total;
-    }
-}
-
-/// `count` rings of `stage` copied into `rings` from slot `start` on.
-#[cube(launch)]
-pub(crate) fn place<F: Real>(mut rings: Rings<F>, stage: &Rings<F>, start: u32, count: u32) {
-    let m = ABSOLUTE_POS as u32;
-    if m < count {
-        let (d, s) = ((start + m) as usize, m as usize);
-        rings.r[d] = stage.r[s];
-        rings.z[d] = stage.z[s];
-        rings.ur[d] = stage.ur[s];
-        rings.ut[d] = stage.ut[s];
-        rings.uz[d] = stage.uz[s];
-        rings.w[d] = stage.w[s];
-        rings.born[d] = stage.born[s];
-        rings.alive[d] = stage.alive[s];
     }
 }

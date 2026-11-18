@@ -34,6 +34,7 @@ use crate::{FdtdError, Result, invalid};
 
 pub(crate) mod absorb;
 pub(crate) mod deposit;
+pub mod device;
 pub(crate) mod emit;
 mod fields;
 mod filter;
@@ -520,6 +521,18 @@ impl Pic {
 
     /// The walls' emission and the bunches at the step's start; none into a metal cell.
     fn emit_step(&mut self, moved: &mut Moved) -> Result<()> {
+        for (k, new) in self.births(self.particles(), moved)? {
+            if let Some(pop) = self.populations.get_mut(k) {
+                pop.particles.extend(new);
+            }
+        }
+        Ok(())
+    }
+
+    /// The particles born at the step's start (each with its population), the run holding
+    /// `held`: the walls' emission and the bunches, none into a metal cell; what they bring in
+    /// added to `moved`, the charge they leave on the walls to the surface's.
+    fn births(&mut self, mut held: usize, moved: &mut Moved) -> Result<Vec<(usize, Vec<Particle>)>> {
         let t = self.time();
         let made: Vec<(usize, Vec<Particle>)> = self
             .emitters
@@ -537,14 +550,15 @@ impl Pic {
                 Some((bu.population, bu.emit(&self.grid, pop, t, self.dt, &mut self.emitted)))
             })
             .collect();
+        let mut born = Vec::new();
         for (k, mut new) in made.into_iter().chain(sent) {
             if let Some(m) = &self.media {
                 new.retain(|p| !m.at(&self.grid, p.x));
             }
-            if self.particles().saturating_add(new.len()) > MAX_PARTICLES {
+            if held.saturating_add(new.len()) > MAX_PARTICLES {
                 return Err(invalid("particles", format!("the emission would hold more than {MAX_PARTICLES}")));
             }
-            let Some(pop) = self.populations.get_mut(k) else { continue };
+            let Some(pop) = self.populations.get(k) else { continue };
             let species = pop.species;
             moved.emitted += new.iter().map(|p| species.charge * p.w).sum::<f64>();
             moved.kinetic_in += new.iter().map(|p| p.w * species.kinetic(p.u)).sum::<f64>();
@@ -552,9 +566,10 @@ impl Pic {
             for p in &new {
                 deposit::charge(&self.grid, &mut self.surface, p.x, -species.charge * p.w);
             }
-            pop.particles.extend(new);
+            held += new.len();
+            born.push((k, new));
         }
-        Ok(())
+        Ok(born)
     }
 }
 

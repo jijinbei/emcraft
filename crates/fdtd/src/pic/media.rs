@@ -27,10 +27,10 @@ pub enum Medium {
 /// The cells' media and what they make of the E edges.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Media {
-    metal: Vec<bool>,
+    pub(crate) metal: Vec<bool>,
     lattice: Lattice,
-    edges: [Vec<bool>; 3],
-    eps: [Vec<f64>; 3],
+    pub(crate) edges: [Vec<bool>; 3],
+    pub(crate) eps: [Vec<f64>; 3],
 }
 
 /// The cells around edge `p` of E_a: cell p along a, the two either side of its node across
