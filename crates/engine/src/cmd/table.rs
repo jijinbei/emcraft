@@ -831,7 +831,7 @@ pub static COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         id: "particles.probe",
         label: "Field probe",
-        doc: "A point whose electric field the particle run records; its reply gives the frequency the field rings at (the zero crossings of its strongest component about its mean). Undo goes back.",
+        doc: "A point whose electric field the particle run records; its reply gives the frequency the field rings at (where the spectrum of its strongest component peaks over the run's second half). Undo goes back.",
         params: &[req("at", K::Array, "the point [x, y, z]").of(L).labelled(text!("Position"))],
         effect: Effect::Record,
         invalidates: Some(Change::Particles),

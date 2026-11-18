@@ -11,8 +11,8 @@
 //! particles held, the current emitted and collected on each wall, averaged between records)
 //! and each probe's field at most [`PROBE_SAMPLES`] times; at the end, the particles (at most
 //! [`SNAPSHOT`], evenly chosen) and each conducting wall's current over the run's second half.
-//! A probe's frequency is that of the upward crossings of its strongest component through its
-//! mean over the run's second half (a growing oscillation's start left out).
+//! A probe's frequency is where the spectrum of its strongest component peaks over the run's
+//! second half (a growing oscillation's start left out).
 
 use std::sync::Arc;
 
@@ -945,26 +945,54 @@ pub fn bunch_command(s: &mut Session, p: &Params) -> Result<Value> {
     })
 }
 
-/// The frequency (Hz) of the upward crossings of `values`' strongest component through its
-/// mean, sampled every `dt` (s) — a period from one to the next, whatever offset the mean of a
-/// part of a period leaves; none with fewer than three.
+/// The frequency (Hz) at which the spectrum of `values`' strongest component peaks, sampled
+/// every `dt` (s): its last [`SPECTRUM_SAMPLES`] at most, their mean taken out, under a Hann
+/// window; the strongest of the DFT's bins, then the peak of the windowed spectrum between its
+/// neighbours (a bounded golden-section search). Counting crossings instead mistakes a wave
+/// with strong harmonics or a second line for a faster one. None with fewer than 8 samples or
+/// no oscillation.
 fn frequency(values: &[[f64; 3]], dt: f64) -> Option<f64> {
-    let n = values.len() as f64;
-    let mean = |c: usize| values.iter().map(|v| v[c]).sum::<f64>() / n;
+    let values = &values[values.len().saturating_sub(SPECTRUM_SAMPLES)..];
+    let n = values.len();
+    if n < 8 || !dt.is_finite() || dt <= 0.0 {
+        return None;
+    }
+    let mean = |c: usize| values.iter().map(|v| v[c]).sum::<f64>() / n as f64;
     let spread = |c: usize| values.iter().map(|v| (v[c] - mean(c)).powi(2)).sum::<f64>();
     let c = (0..3).max_by(|a, b| spread(*a).total_cmp(&spread(*b)))?;
     let m = mean(c);
-    let crossings: Vec<f64> = values
-        .windows(2)
-        .enumerate()
-        .filter_map(|(k, w)| {
-            let (a, b) = (w[0][c] - m, w[1][c] - m);
-            (a < 0.0 && b >= 0.0).then(|| (k as f64 + a / (a - b)) * dt)
-        })
-        .collect();
-    let (first, last) = (*crossings.first()?, *crossings.last()?);
-    (crossings.len() >= 3 && last > first).then(|| (crossings.len() - 1) as f64 / (last - first))
+    let hann = |k: usize| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * k as f64 / (n - 1) as f64).cos();
+    let x: Vec<f64> = values.iter().enumerate().map(|(k, v)| (v[c] - m) * hann(k)).collect();
+    if !x.iter().all(|v| v.is_finite()) || x.iter().all(|v| *v == 0.0) {
+        return None;
+    }
+    // Power at `cycles` periods over the n samples (Goertzel).
+    let power = |cycles: f64| {
+        let w = 2.0 * std::f64::consts::PI * cycles / n as f64;
+        let k = 2.0 * w.cos();
+        let (mut s1, mut s2) = (0.0, 0.0);
+        for v in &x {
+            (s1, s2) = (v + k * s1 - s2, s1);
+        }
+        s1 * s1 + s2 * s2 - k * s1 * s2
+    };
+    let best = (1..n / 2).max_by(|a, b| power(*a as f64).total_cmp(&power(*b as f64)))?;
+    let (mut lo, mut hi) = (best as f64 - 1.0, best as f64 + 1.0);
+    let g = 0.5 * (5f64.sqrt() - 1.0);
+    for _ in 0..60 {
+        let (a, b) = (hi - g * (hi - lo), lo + g * (hi - lo));
+        if power(a) < power(b) {
+            lo = a;
+        } else {
+            hi = b;
+        }
+    }
+    Some(0.5 * (lo + hi) / (n as f64 * dt))
 }
+
+/// The most samples of a probe [`frequency`] reads (the last ones): its bins grow as their
+/// square.
+const SPECTRUM_SAMPLES: usize = 8192;
 
 /// `solve.particles`: the model's particles run in its box.
 pub fn solve(s: &mut Session, p: &Params) -> Result<Value> {
@@ -1071,4 +1099,27 @@ pub(crate) fn reply(s: &Session, r: &PicResult) -> Value {
         "growth_rate": pic::growth_rate(&r.history.iter().map(|h| h.t).collect::<Vec<_>>(), &r.history.iter().map(|h| h.field).collect::<Vec<_>>()),
         "loss_factor_v_per_pc": r.loss_factor.map(|k| k * 1e-12),
     })
+}
+
+#[cfg(test)]
+mod frequency_tests {
+    use super::frequency;
+
+    fn wave(lines: &[(f64, f64)], n: usize, dt: f64) -> Vec<[f64; 3]> {
+        (0..n).map(|k| [0.0, 0.0, 1.0 + lines.iter().map(|(a, f)| a * (2.0 * std::f64::consts::PI * f * k as f64 * dt).sin()).sum::<f64>()]).collect()
+    }
+
+    #[test]
+    fn a_probe_rings_at_its_strongest_line_not_at_its_crossings() {
+        // 3.4 GHz with 0.7 of it at 5.1 GHz (the S-band BWO's probe): the sum crosses its mean
+        // more often than 3.4 GHz does; the spectrum's peak is the strong line, between bins.
+        let dt = 3.5e-12;
+        let f = frequency(&wave(&[(1.0, 3.4e9), (0.7, 5.1e9)], 8000, dt), dt).unwrap();
+        assert!((f / 3.4e9 - 1.0).abs() < 2e-4, "{f:e} Hz");
+        // A single line over six periods only.
+        let f = frequency(&wave(&[(1.0, 0.9e9)], 6700, 1e-12), 1e-12).unwrap();
+        assert!((f / 0.9e9 - 1.0).abs() < 2e-4, "{f:e} Hz");
+        assert_eq!(frequency(&wave(&[], 100, dt), dt), None);
+        assert_eq!(frequency(&wave(&[(1.0, 3.4e9)], 5, dt), dt), None);
+    }
 }

@@ -573,7 +573,7 @@ A static magnetic field through the particle run's box (a beam's focusing field,
 
 ## `particles.probe` — Field probe
 
-A point whose electric field the particle run records; its reply gives the frequency the field rings at (the zero crossings of its strongest component about its mean). Undo goes back.
+A point whose electric field the particle run records; its reply gives the frequency the field rings at (where the spectrum of its strongest component peaks over the run's second half). Undo goes back.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
