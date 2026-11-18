@@ -447,16 +447,73 @@ fn on_axis(model: &Model, at: Point3) -> Option<u32> {
     ((at.x - rot.centre[0]).hypot(at.y - rot.centre[1]) <= GEOMETRY_TOLERANCE * scale).then_some(rot.n)
 }
 
+/// The gap between two bodies' boxes, if a thin layer of something lies between them: for one
+/// inside the other the least distance between their faces, for two side by side their distance
+/// apart; none where they touch (to `tol`) or neither holds.
+fn gap(a: Aabb, b: Aabb, tol: f64) -> Option<f64> {
+    let positive = |d: f64| (d > tol).then_some(d);
+    let within = |inner: Aabb, outer: Aabb| {
+        (0..3).flat_map(|k| [inner.min[k] - outer.min[k], outer.max[k] - inner.max[k]]).filter_map(positive).reduce(f64::min)
+    };
+    if b.encloses(a, tol) {
+        within(a, b)
+    } else if a.encloses(b, tol) {
+        within(b, a)
+    } else {
+        // Apart along one axis, over each other across the two others.
+        let apart = |k: usize| positive(a.min[k] - b.max[k]).or_else(|| positive(b.min[k] - a.max[k]));
+        let over = |k: usize| a.min[k] < b.max[k] && b.min[k] < a.max[k];
+        (0..3).filter(|k| (0..3).all(|o| o == *k || over(o))).filter_map(apart).reduce(f64::min)
+    }
+}
+
+/// How many times the gap to a body next to it an inclusion's surface is divided at, at most.
+const THIN: f64 = 4.0;
+
+/// The size each inclusion's surface is divided at. From `sizes` (the smaller of the sizes of
+/// the two regions it parts), no more than [`THIN`] times the gap to an inclusion it lies in, one inside
+/// it or one beside it in the same body (`parent`; a thin wall or layer between two frozen
+/// surfaces cannot be filled from triangles much wider than it; not below an eighth of the
+/// size) and, for a curved one, as its curvature asks
+/// ([`interface_size`]); cylinders of one axis and radius, which may stand on each other, at
+/// the smallest of theirs, so their rims are the same polygon. With each one's size so limited.
+fn divisions(model: &Model, sizes: &[f64], parent: Option<&[Option<usize>]>) -> (Vec<f64>, Vec<f64>) {
+    let incs = model.inclusions();
+    let tol = GEOMETRY_TOLERANCE * model.bounds().map_or(1.0, |b| (b.max - b.min).norm());
+    let limited: Vec<f64> = incs
+        .iter()
+        .zip(sizes)
+        .enumerate()
+        .map(|(i, (inc, h))| {
+            // The bodies a layer between this one and them is a region's whole thickness.
+            let by = |j: usize| parent.is_some_and(|p| j != i && (p.get(i) == p.get(j) || p.get(i) == Some(&Some(j)) || p.get(j) == Some(&Some(i))));
+            let others = incs.iter().enumerate().filter(|(j, _)| by(*j));
+            let least = others.filter_map(|(_, o)| gap(inc.bounds(), o.bounds(), tol)).fold(f64::INFINITY, f64::min);
+            h.min((THIN * least).max(h / 8.0))
+        })
+        .collect();
+    let own: Vec<f64> = incs.iter().zip(&limited).map(|(inc, h)| interface_size(&inc.shape, *h, inc.material.is_none())).collect();
+    let column = |inc: &emcraft_model::Inclusion| match inc.shape {
+        Shape::Cylinder { radius, .. } => Some((radius.get(), inc.at)),
+        _ => None,
+    };
+    let together = |a: &emcraft_model::Inclusion, b: &emcraft_model::Inclusion| match (column(a), column(b)) {
+        (Some((r, p)), Some((q, o))) => (r - q).abs() <= tol && (p.x - o.x).hypot(p.y - o.y) <= tol,
+        _ => false,
+    };
+    let shared =
+        incs.iter().zip(&own).map(|(inc, d)| incs.iter().zip(&own).filter(|(o, _)| together(inc, o)).map(|(_, e)| *e).fold(*d, f64::min)).collect();
+    (shared, limited)
+}
+
 /// The inclusions' surfaces as patches between two spaces: each inclusion's towards the body it
 /// lies in first (patch `i` is inclusion `i`'s), then those of inclusions in contact
 /// (`contact::imprint`). An interface is tessellated at the smaller of the sizes of the two
-/// regions it parts: `size` the solid's, `inner_size` each inclusion's.
+/// regions it parts ([`divisions`]): `size` the solid's, `inner_size` each inclusion's.
 fn interfaces(model: &Model, size: f64, inner_size: &[f64]) -> Result<Vec<contact::Patch>> {
     let incs = model.inclusions();
     // With the cylinder each triangle lies on.
-    let surface = |i: usize, inc: &emcraft_model::Inclusion, around: f64| {
-        let h = around.min(inner_size.get(i).copied().unwrap_or(size));
-        let division = interface_size(&inc.shape, h, inc.material.is_none());
+    let surface = |inc: &emcraft_model::Inclusion, division: f64| {
         let t = match on_axis(model, inc.at) {
             Some(turns) => tessellate_turned(&inc.shape, division, turns),
             None => tessellate(&inc.shape, division),
@@ -464,17 +521,21 @@ fn interfaces(model: &Model, size: f64, inner_size: &[f64]) -> Result<Vec<contac
         let round = cylinders(&t, inc.at);
         (placed(t, inc.at), round)
     };
-    let first: Vec<(Tessellation, Vec<Option<contact::Round>>)> = incs.iter().enumerate().map(|(i, inc)| surface(i, inc, size)).collect();
+    // As if each lay in the solid's own region first, to find which lies in which.
+    let outside: Vec<f64> = inner_size.iter().map(|h| h.min(size)).collect();
+    let (rough, _) = divisions(model, &outside, None);
+    let first: Vec<(Tessellation, Vec<Option<contact::Round>>)> = incs.iter().zip(&rough).map(|(inc, d)| surface(inc, *d)).collect();
     let shapes: Vec<Tessellation> = first.iter().map(|(t, _)| t.clone()).collect();
     let parent = parents(model, &shapes)?;
-    let around: Vec<f64> = parent.iter().map(|p| p.and_then(|p| inner_size.get(p)).copied().unwrap_or(size)).collect();
+    let around = |i: usize| parent.get(i).copied().flatten().and_then(|p| inner_size.get(p)).copied().unwrap_or(size);
+    let between: Vec<f64> = inner_size.iter().enumerate().map(|(i, h)| h.min(around(i))).collect();
+    let (division, fine) = divisions(model, &between, Some(&parent));
     let (surfaces, round): (Vec<Tessellation>, Vec<Vec<Option<contact::Round>>>) = first
         .into_iter()
-        .zip(incs.iter().zip(&around))
-        .enumerate()
-        .map(|(i, (t, (inc, around)))| if *around < size { surface(i, inc, *around) } else { t })
+        .zip(incs.iter())
+        .zip(division.iter().zip(&rough))
+        .map(|((t, inc), (d, was))| if d == was { t } else { surface(inc, *d) })
         .unzip();
-    let fine: Vec<f64> = around.iter().zip(inner_size).map(|(a, h)| a.min(*h)).collect();
     let scale = model.bounds().map_or(size, |b| (b.max - b.min).norm());
     // A sector's cut planes, for the contacts along cylinders about its axis.
     let meridians = model.domain.rotation.as_ref().map_or_else(contact::Meridians::default, |rot| contact::Meridians {
@@ -1256,8 +1317,6 @@ mod tests {
         };
         let (sphere, round) = (|r: f64| 4.0 / 3.0 * PI * r.powi(3), |r: f64, l: f64| PI * r * r * l);
         let (bodies, whole): (Vec<Inclusion>, [f64; 2]) = match which {
-            0 if std::env::var("DBG1").is_ok() => (vec![ball(0.006, "a")], [sphere(0.006), 0.0]),
-            1 if std::env::var("DBG1").is_ok() => (vec![disc(0.006, 0.004, 0.006, "a")], [round(0.006, 0.004), 0.0]),
             0 => (vec![ball(0.006, "a"), ball(0.003, "b")], [sphere(0.006) - sphere(0.003), sphere(0.003)]),
             1 => (vec![disc(0.006, 0.004, 0.006, "a"), disc(0.004, 0.005, 0.010, "b")], [round(0.006, 0.004), round(0.004, 0.005)]),
             _ => (vec![disc(0.005, 0.010, 0.006, "a"), disc(0.005, 0.004, 0.009, "b")], [round(0.005, 0.006), round(0.005, 0.004)]),
@@ -1272,6 +1331,40 @@ mod tests {
             let quarter = 0.25 * whole[k];
             assert!(v[k + 1] < 1.001 * quarter && v[k + 1] > 0.95 * quarter, "material {}: {} of {quarter}", k + 1, v[k + 1]);
         }
+    }
+
+    /// A microwave oven's test load as it stands: a glass beaker (85 mm across, 100 mm high,
+    /// its wall and bottom 2 mm) on a glass plate, 275 ml of water in it and air above the water
+    /// up to the rim: glass at 14 mm and air at 31 mm (a quarter of their wavelengths at
+    /// 2.45 GHz), the water at 8 mm. The 2 mm wall lies between surfaces divided for elements
+    /// several times as wide: their division is held to four times the wall, and the tetrahedra
+    /// without volume the mesher leaves at points it puts on their edges are taken out. Evidence: the water's volume 275 ml (a prism's in its circle, so a little
+    /// under) and every face held by one or two tetrahedra.
+    #[test]
+    #[ignore = "heavy: cargo xtask test --heavy (CI heavy job)"]
+    fn a_beaker_of_water_stands_on_a_plate() {
+        use emcraft_model::{Inclusion, Material};
+        let mut m = Model::new();
+        m.add_material(Material::new("water", 77.2, 1.0).unwrap()).unwrap();
+        m.add_material(Material::new("glass", 4.6, 1.0).unwrap()).unwrap();
+        m.set_solid(Solid { shape: Shape::Box { size: BoxSize::new(Vec3::new(0.33, 0.33, 0.21)).unwrap() }, material: "vacuum".into() }).unwrap();
+        let column = |radius: f64, length: f64, z: f64, material: &str| Inclusion {
+            shape: Shape::Cylinder { radius: metres(radius), length: metres(length) },
+            at: Point3::new(0.165, 0.165, z),
+            material: Some(material.into()),
+        };
+        for inc in [
+            column(0.14, 0.006, 0.012, "glass"),
+            column(0.0425, 0.1, 0.018, "glass"),
+            column(0.0405, 0.0534, 0.02, "water"),
+            column(0.0405, 0.0446, 0.0734, "vacuum"),
+        ] {
+            m.add_inclusion(inc).unwrap();
+        }
+        let sizes = Sizes { default: metres(0.0306), per_material: vec![Some(metres(0.0306)), Some(metres(0.008)), Some(metres(0.01427))] };
+        let mesh = solid_with(&m, &SolidOptions { sizes, curved: true, refine: Vec::new() }).unwrap();
+        let v = volumes_and_conformity(&mesh, 3);
+        assert!(v[1] < 275e-6 && v[1] > 0.99 * 275e-6, "{}", v[1]);
     }
 
     fn plate() -> emcraft_model::Inclusion {

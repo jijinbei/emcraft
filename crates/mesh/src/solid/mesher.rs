@@ -61,7 +61,7 @@ pub(super) fn region(t: &Tessellation, size: f64, frozen: Vec<u32>, locals: &[Lo
     if tets.len() != q.elements.len() {
         return Err(MeshError::Invalid { what: "tetrahedral meshing".into(), why: "elements other than linear tetrahedra".into() });
     }
-    let boundary = q
+    let boundary: Vec<RegionFace> = q
         .boundary
         .iter()
         .filter_map(|b| {
@@ -71,5 +71,80 @@ pub(super) fn region(t: &Tessellation, size: f64, frozen: Vec<u32>, locals: &[Lo
             Some(RegionFace { nodes: [n[0], n[1], n[2]], tet: b.tet, tag: b.face })
         })
         .collect();
-    Ok(RegionMesh { points: q.points.into_iter().map(model_point).collect(), tets, boundary })
+    let mut mesh = RegionMesh { points: q.points.into_iter().map(model_point).collect(), tets, boundary };
+    peel(&mut mesh);
+    Ok(mesh)
+}
+
+/// A tetrahedron's volume times six.
+fn six_volumes(points: &[Point3], t: &[u32; 4]) -> Option<(f64, f64)> {
+    let q = [*points.get(t[0] as usize)?, *points.get(t[1] as usize)?, *points.get(t[2] as usize)?, *points.get(t[3] as usize)?];
+    let longest = (0..4).flat_map(|i| (i + 1..4).map(move |j| (i, j))).map(|(i, j)| (q[j] - q[i]).norm()).fold(0.0, f64::max);
+    Some(((q[1] - q[0]).cross(q[2] - q[0]).dot(q[3] - q[0]), longest))
+}
+
+/// How flat a tetrahedron at the boundary is taken out: its volume under this part of its
+/// longest edge's cube (one with a point on an edge of a boundary triangle has none at all).
+const FLAT: f64 = 1e-9;
+
+/// Takes the tetrahedra without volume off the region's boundary. Where the mesher puts a
+/// point on an edge of a triangle it must keep (a frozen face), it keeps the triangle by a
+/// tetrahedron of that triangle and the point — flat, the point on its edge — over the two
+/// halves the point cuts it in. Such a tetrahedron goes, and the faces it had inside the mesh
+/// are boundary faces in its place (with its triangle's tag): the triangle is then the two
+/// halves, which the region on its other side is given to mesh against in the next round.
+fn peel(mesh: &mut RegionMesh) {
+    use std::collections::BTreeMap;
+    let key = |t: &[u32; 4], k: usize| -> [u32; 3] {
+        let mut f = [t[(k + 1) % 4], t[(k + 2) % 4], t[(k + 3) % 4]];
+        f.sort_unstable();
+        f
+    };
+    let flat = |points: &[Point3], t: &[u32; 4]| six_volumes(points, t).is_some_and(|(v, longest)| v.abs() <= FLAT * longest.powi(3));
+    let mut candidates: Vec<usize> = (0..mesh.tets.len()).filter(|t| flat(&mesh.points, &mesh.tets[*t])).collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let mut holders: BTreeMap<[u32; 3], Vec<u32>> = BTreeMap::new();
+    for (t, tet) in mesh.tets.iter().enumerate() {
+        for k in 0..4 {
+            holders.entry(key(tet, k)).or_default().push(t as u32);
+        }
+    }
+    let sorted = |n: [u32; 3]| {
+        let mut f = n;
+        f.sort_unstable();
+        f
+    };
+    let mut outside: BTreeMap<[u32; 3], RegionFace> = mesh.boundary.iter().map(|f| (sorted(f.nodes), *f)).collect();
+    let mut gone = vec![false; mesh.tets.len()];
+    // Each pass takes those now at the boundary; at most as many passes as there are of them.
+    for _ in 0..candidates.len() {
+        let at_boundary = |t: &usize| (0..4).any(|k| outside.contains_key(&key(&mesh.tets[*t], k)));
+        let Some(position) = candidates.iter().position(at_boundary) else { break };
+        let t = candidates.remove(position);
+        let tet = mesh.tets[t];
+        let Some(tag) = (0..4).find_map(|k| outside.get(&key(&tet, k)).map(|f| f.tag)) else { continue };
+        gone[t] = true;
+        for k in 0..4 {
+            let face = key(&tet, k);
+            if outside.remove(&face).is_some() {
+                continue;
+            }
+            let other = holders.get(&face).and_then(|list| list.iter().copied().find(|u| *u as usize != t && !gone[*u as usize]));
+            if let Some(u) = other {
+                outside.insert(face, RegionFace { nodes: face, tet: u, tag });
+            }
+        }
+    }
+    // The tetrahedra left, numbered anew.
+    let mut number = vec![u32::MAX; mesh.tets.len()];
+    let mut kept = Vec::with_capacity(mesh.tets.len());
+    for (t, tet) in mesh.tets.iter().enumerate().filter(|(t, _)| !gone[*t]) {
+        number[t] = kept.len() as u32;
+        kept.push(*tet);
+    }
+    mesh.tets = kept;
+    mesh.boundary =
+        outside.into_values().filter(|f| number[f.tet as usize] != u32::MAX).map(|f| RegionFace { tet: number[f.tet as usize], ..f }).collect();
 }

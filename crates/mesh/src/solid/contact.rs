@@ -443,11 +443,20 @@ fn put(bodies: &mut [Body], nesting: &Nesting, vertex_of: &mut BTreeMap<usize, B
 
 /// Triangulates the faces in contact through one plane together and puts the triangles in
 /// their bodies in place of the faces' ([`put`]).
-fn retriangulate(bodies: &mut [Body], faces: &[&Face], nesting: &Nesting, size: f64) -> Result<()> {
+fn retriangulate(bodies: &mut [Body], faces: &[&Face], nesting: &Nesting, sizes: &[f64]) -> Result<()> {
     let Drawing { frame, points, outlines, vertices } = draw(bodies, faces)?;
     let segments: Vec<[u32; 2]> = outlines.iter().flatten().map(|s| [s[0].min(s[1]), s[0].max(s[1])]).collect::<BTreeSet<_>>().into_iter().collect();
     let within = |c: [f64; 2]| -> Vec<usize> { (0..faces.len()).filter(|f| outlines.get(*f).is_some_and(|o| inside(&points, o, c))).collect() };
-    let (out, triangles) = crate::planar::pslg_keep(&points, &segments, size, &|c| !within(c).is_empty())?;
+    // As fine at each place as the finest of the bodies whose faces lie there: a small body's
+    // foot on a large plate is divided for the small one, the plate around it for itself.
+    let size_of = |f: usize| faces.get(f).and_then(|face| sizes.get(face.body)).copied().unwrap_or(f64::INFINITY);
+    let finest = (0..faces.len()).map(size_of).fold(f64::INFINITY, f64::min);
+    if !(finest.is_finite() && finest > 0.0) {
+        return Err(fail("an element size that is not finite and > 0"));
+    }
+    let size = |c: [f64; 2]| within(c).into_iter().map(size_of).fold(f64::INFINITY, f64::min);
+    let (out, triangles) =
+        crate::planar::pslg_graded(&points, &segments, finest, &|c| if size(c).is_finite() { size(c) } else { finest }, &|c| !within(c).is_empty())?;
     // The faces' own triangles go; the points keep their vertices, now exactly on the
     // triangulation's.
     let mut gone: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
@@ -718,10 +727,6 @@ pub(super) fn imprint(
     // found again by what was taken out before it.
     let mut done: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
     for cluster in clusters.values().filter(|c| c.len() > 1) {
-        let size = cluster.iter().map(|f| size_of(f.body)).fold(f64::INFINITY, f64::min);
-        if !(size.is_finite() && size > 0.0) {
-            return Err(fail("an element size that is not finite and > 0"));
-        }
         let shifted: Vec<Face> = cluster
             .iter()
             .map(|f| {
@@ -736,7 +741,7 @@ pub(super) fn imprint(
                 }
             })
             .collect();
-        retriangulate(&mut bodies, &shifted.iter().collect::<Vec<_>>(), &nesting, size)?;
+        retriangulate(&mut bodies, &shifted.iter().collect::<Vec<_>>(), &nesting, sizes)?;
         for f in cluster {
             done.entry(f.body).or_default().extend(&f.triangles);
             touched.insert(f.body);

@@ -427,7 +427,7 @@ pub fn polygon(ring: &[[f64; 2]], size: f64) -> Result<(Vec<[f64; 2]>, Vec<[u32;
 /// # Ok::<(), emcraft_mesh::MeshError>(())
 /// ```
 pub fn pslg(points: &[[f64; 2]], segments: &[[u32; 2]], size: f64) -> Result<(Vec<[f64; 2]>, Vec<[u32; 3]>)> {
-    pslg_inner(points, segments, size, None)
+    pslg_inner(points, segments, size, None, None)
 }
 
 /// [`pslg`] with the segments as constraints only, the triangles kept being those whose middle
@@ -447,7 +447,32 @@ pub fn pslg(points: &[[f64; 2]], segments: &[[u32; 2]], size: f64) -> Result<(Ve
 /// # Ok::<(), emcraft_mesh::MeshError>(())
 /// ```
 pub fn pslg_keep(points: &[[f64; 2]], segments: &[[u32; 2]], size: f64, keep: &dyn Fn([f64; 2]) -> bool) -> Result<(Vec<[f64; 2]>, Vec<[u32; 3]>)> {
-    pslg_inner(points, segments, size, Some(keep))
+    pslg_inner(points, segments, size, Some(keep), None)
+}
+
+/// [`pslg_keep`] with the size from place to place: `size` (m) at each point, never below
+/// `finest` (m, the smallest it gets); the triangles grow from the fine places to the coarse
+/// ones as the refinement's quality bound lets them.
+///
+/// ```
+/// // A 20 mm square, 0.5 mm triangles in its left tenth and 4 mm ones elsewhere.
+/// let p = [[0.0, 0.0], [0.02, 0.0], [0.02, 0.02], [0.0, 0.02]];
+/// let s = [[0, 1], [1, 2], [2, 3], [3, 0]];
+/// let size = |c: [f64; 2]| if c[0] < 0.002 { 0.0005 } else { 0.004 };
+/// let (points, graded) = emcraft_mesh::planar::pslg_graded(&p, &s, 0.0005, &size, &|_| true)?;
+/// let (_, fine) = emcraft_mesh::planar::pslg_keep(&p, &s, 0.0005, &|_| true)?;
+/// assert!(graded.len() < fine.len() / 3 && points.len() > 100);
+/// assert!(emcraft_mesh::planar::pslg_graded(&p, &s, 0.0, &size, &|_| true).is_err());
+/// # Ok::<(), emcraft_mesh::MeshError>(())
+/// ```
+pub fn pslg_graded(
+    points: &[[f64; 2]],
+    segments: &[[u32; 2]],
+    finest: f64,
+    size: &dyn Fn([f64; 2]) -> f64,
+    keep: &dyn Fn([f64; 2]) -> bool,
+) -> Result<(Vec<[f64; 2]>, Vec<[u32; 3]>)> {
+    pslg_inner(points, segments, finest, Some(keep), Some(size))
 }
 
 fn pslg_inner(
@@ -455,6 +480,7 @@ fn pslg_inner(
     segments: &[[u32; 2]],
     size: f64,
     keep: Option<&dyn Fn([f64; 2]) -> bool>,
+    local: Option<&dyn Fn([f64; 2]) -> f64>,
 ) -> Result<(Vec<[f64; 2]>, Vec<[u32; 3]>)> {
     if points.len() < 3 || points.len() > MAX_POINTS || !points.iter().flatten().all(|v| v.is_finite()) {
         return Err(invalid("a planar graph needs 3 or more finite points"));
@@ -479,13 +505,16 @@ fn pslg_inner(
         return Err(invalid("two points of the graph are the same lattice point"));
     }
     let h = size / lattice::STEP;
-    // Each segment split to the size first: refinement then keeps its points off the segments
-    // (a long one left whole draws them to within a hair of it).
+    // The size at a lattice point, in steps: the local one where given, never below the finest.
+    let at = |q: [f64; 2]| local.map_or(h, |f| (f(lattice.back(q)) / lattice::STEP).max(h));
+    // Each segment split to the size (at its middle) first: refinement then keeps its points
+    // off the segments (a long one left whole draws them to within a hair of it).
     let mut on = on;
     let mut kinds: Vec<([u32; 2], Kind)> = Vec::with_capacity(segments.len());
     for s in segments {
         let (a, b) = (on[s[0] as usize], on[s[1] as usize]);
-        let n = ((b[0] - a[0]).hypot(b[1] - a[1]) / h).ceil().clamp(1.0, 1e5) as usize;
+        let here = at([0.5 * (a[0] + b[0]), 0.5 * (a[1] + b[1])]);
+        let n = ((b[0] - a[0]).hypot(b[1] - a[1]) / here).ceil().clamp(1.0, 1e5) as usize;
         let mut prev = s[0];
         for i in 1..n {
             let t = i as f64 / n as f64;
@@ -497,7 +526,7 @@ fn pslg_inner(
         kinds.push(([prev, s[1]], Kind::Outline));
     }
     let mut cdt = Cdt::build(&exact(&on)?, &kinds, MAX_TRIANGLES)?;
-    cdt.refine(&|_| h, &|_, _| true)?;
+    cdt.refine(&at, &|_, _| true)?;
     let t = cdt.into_triangulation();
     // Inside: a triangle whose middle the segments enclose an odd number of times (a hole's
     // triangles are enclosed twice), counted along a ray across +x.
