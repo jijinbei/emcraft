@@ -174,7 +174,17 @@ overlap tests).
   a homogeneous line's L and C share their eigenvectors: the degenerate TEM modes of several
   strips are split along them, power-orthogonal with orthogonal conductor currents (the even and
   odd modes), and each mode's impedance per conductor 2P/Σ|I|² is the impedance matrix's
-  eigenvalue (`emcraft-solver::portmode::coupled`).
+  eigenvalue (`emcraft-solver::portmode::coupled`). §7.3 — weakly coupled matched lines'
+  crosstalk from the per-unit-length matrices: near end (k_L + k_C)/4, far end
+  (k_C − k_L)/2 · T_d/t_r (`pcb.crosstalk`; oracle `pcb-crosstalk-stripline` against Cohn's
+  coupled striplines).
+- H. A. Wheeler, *Formulas for the skin effect*, Proc. IRE 30(9):412–424, 1942 — the
+  incremental inductance rule R = (R_s/μ₀) ∂L/∂n, a line's conductor loss from the change of its
+  inductance as its conductors' faces recede (`emcraft-solver::portmode::strips`, by the finite
+  elements' vacuum capacitances at faces moved out and in; `pcb.impedance`'s losses). Its
+  thick-stripline fit in D. M. Pozar, *Microwave Engineering*, 4th ed., Wiley 2012, eq. 3.198,
+  with the thick strip's impedance of S. B. Cohn, *Problems in strip transmission lines*, IRE
+  Trans. MTT 3(2):119–126, 1955, is the reference of oracle `pcb-line-loss`.
 - E. M. T. Jones, J. T. Bolljahn, *Coupled-strip-transmission-line filters and directional
   couplers*, IRE Trans. MTT 4(2):75–81, 1956; D. M. Pozar, *Microwave Engineering*, 4th ed.,
   Wiley 2012, §8.7 — the open-circuited coupled section's impedance matrix and chain matrix,

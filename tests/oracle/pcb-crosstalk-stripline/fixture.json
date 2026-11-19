@@ -1,0 +1,17 @@
+{
+  "note": "EMCraft's accepted results for this case, written by `cargo xtask oracle --bless`. A result outside its band fails CI.",
+  "values": {
+    "apart_next": {
+      "band": 4.455953312446462e-11,
+      "value": 0.04455853312446462
+    },
+    "close_fext": {
+      "band": 1.0000000009999999e-6,
+      "value": -0.0
+    },
+    "close_next": {
+      "band": 1.0042374813775032e-10,
+      "value": 0.10042274813775032
+    }
+  }
+}

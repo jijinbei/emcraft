@@ -20,14 +20,21 @@
 //! partner on its layer beside its middle: their odd and even modes, Z_diff = 2 Z_odd and
 //! Z_common = Z_even / 2. A segment without one is solved alone.
 //!
+//! **Delay and losses.** A segment's delay is its length over the mode's speed, c/√ε_eff (a
+//! pair's odd mode's). At a `frequency`, its losses: the dielectrics' by their loss tangents (each
+//! layer's `loss_below`, a mask's `loss`) weighed by the electric energy in each, the copper's by
+//! Wheeler's incremental inductance rule at the skin effect's surface resistance √(π f μ₀/σ) —
+//! smooth copper many skin depths thick (a sheet has no conductor loss, copper under two skin
+//! depths thick is said to be).
+//!
 //! Each distinct cross-section is solved once (on the threads), segments sharing it share its
-//! result. The model is quasi-TEM and lossless, the box's sides conducting walls far from the
-//! strips.
+//! result. The model is quasi-TEM, the box's sides conducting walls far from the strips.
 
 use std::collections::BTreeMap;
 
 use emcraft_model::pcb::{Board, Segment};
-use emcraft_solver::portmode::strips::{Block, Line, Section, Slab, Strip};
+use emcraft_model::units::MU0;
+use emcraft_solver::portmode::strips::{Block, Line, Mode, Section, Slab, Strip};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
@@ -85,23 +92,47 @@ pub fn partner_name(net: &str, has: impl Fn(&str) -> bool) -> Option<String> {
     swaps.iter().find_map(|(a, b)| net.strip_suffix(a).map(|stem| format!("{stem}{b}")).filter(|other| other != net && has(other)))
 }
 
-/// A segment's cross-section as the solver takes it: its strips, slabs, box; its references'
-/// layers (below, above) and the closed form a single line's kind has, if any.
+/// What a cross-section takes beside its segment: nothing, its differential partner's parallel
+/// segment (however far across), or the nearest parallel segment of another net (`net`, else
+/// any) whose edge is within `within` (m) of the segment's.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Beside<'a> {
+    Alone,
+    Partner(&'a str),
+    Neighbour { net: Option<&'a str>, within: f64 },
+}
+
+/// The segment beside one: its net, the gap between the two strips' edges and the length the
+/// two run side by side (m).
+struct Near {
+    net: String,
+    gap: f64,
+    overlap: f64,
+}
+
+/// A segment's cross-section as the solver takes it: its strips (the segment's the `own`th),
+/// slabs, box; its references' layers (below, above), what lies beside it and the closed form a
+/// single line's kind has, if any.
 struct Built {
     section: Section,
     below: Option<usize>,
     above: Option<usize>,
-    partner: Option<(String, f64)>,
+    near: Option<Near>,
+    own: usize,
     closed: Option<f64>,
 }
 
-/// The cross-section of segment `g` (its partner `partner`'s segments beside it, if any).
-fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option<Built> {
+/// The cross-section of segment `g` (with what `beside` takes beside it).
+fn build(board: &Board, g: &Segment, net: &str, beside: Beside) -> Option<Built> {
     let heights = board.heights();
     let li = board.layers.iter().position(|l| l.name == g.layer)?;
     let h0 = heights[li];
     let at = middle(g);
-    let foreign = |n: &str| n != net && Some(n) != partner;
+    let named = |n: &str| match beside {
+        Beside::Alone | Beside::Neighbour { net: None, .. } => false,
+        Beside::Partner(p) | Beside::Neighbour { net: Some(p), .. } => n == p,
+    };
+    let foreign = |n: &str| n != net && !named(n);
     let covered = |l: usize| {
         let name = &board.layers[l].name;
         board.copper.iter().any(|c| &c.layer == name && foreign(&c.net) && inside(&c.polygon, at))
@@ -114,32 +145,40 @@ fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option
             section: Section { half_width: 0.0, floor: 0.0, ceiling: 0.0, slabs: vec![], blocks: vec![], strips: vec![] },
             below,
             above,
-            partner: None,
+            near: None,
+            own: 0,
             closed: None,
         });
     }
-    // The partner's parallel segment on the layer beside the middle: its offset across (signed,
-    // to the left of the segment's direction) and width.
-    let (dir, _) = direction(g);
-    let beside = partner.and_then(|p| {
-        board
-            .segments
-            .iter()
-            .filter(|x| x.net == p && x.layer == g.layer)
-            .filter_map(|x| {
-                let (d, len) = direction(x);
-                let parallel = (dir[0] * d[1] - dir[1] * d[0]).abs() < 0.02;
-                let along = (at[0] - x.start[0]) * d[0] + (at[1] - x.start[1]) * d[1];
-                // The foot of the middle on the partner's centre line, seen across the segment
-                // (its left normal positive).
-                let foot = [x.start[0] + along * d[0], x.start[1] + along * d[1]];
-                let offset = (foot[0] - at[0]) * -dir[1] + (foot[1] - at[1]) * dir[0];
-                (parallel && (0.0..=len).contains(&along) && offset.abs() > 0.5 * (g.width + x.width)).then_some((offset, x.width))
-            })
-            .min_by(|a, b| a.0.abs().total_cmp(&b.0.abs()))
-    });
+    // The parallel segment beside the middle on the layer: its offset across (signed, to the
+    // left of the segment's direction), width, net, gap and the length it runs beside.
+    let (dir, length) = direction(g);
+    let (wanted, within): (&dyn Fn(&str) -> bool, f64) = match beside {
+        Beside::Alone => (&|_| false, 0.0),
+        Beside::Partner(p) => (&move |n: &str| n == p, f64::INFINITY),
+        Beside::Neighbour { net: a, within } => (&move |n: &str| n != net && a.is_none_or(|a| n == a), within),
+    };
+    let beside = board
+        .segments
+        .iter()
+        .filter(|x| x.layer == g.layer && wanted(&x.net))
+        .filter_map(|x| {
+            let (d, len) = direction(x);
+            let parallel = (dir[0] * d[1] - dir[1] * d[0]).abs() < 0.02;
+            let along = (at[0] - x.start[0]) * d[0] + (at[1] - x.start[1]) * d[1];
+            // The foot of the middle on the other's centre line, seen across the segment (its
+            // left normal positive).
+            let foot = [x.start[0] + along * d[0], x.start[1] + along * d[1]];
+            let offset = (foot[0] - at[0]) * -dir[1] + (foot[1] - at[1]) * dir[0];
+            let gap = offset.abs() - 0.5 * (g.width + x.width);
+            // The other's ends along the segment, and how much of the segment lies between them.
+            let ends = [x.start, x.end].map(|e| (e[0] - g.start[0]) * dir[0] + (e[1] - g.start[1]) * dir[1]);
+            let overlap = (ends[0].max(ends[1]).min(length) - ends[0].min(ends[1]).max(0.0)).max(0.0);
+            (parallel && (0.0..=len).contains(&along) && gap > 0.0 && gap <= within).then_some((offset, x.width, x.net.as_str(), gap, overlap))
+        })
+        .min_by(|a, b| a.0.abs().total_cmp(&b.0.abs()));
     let reach = [below.map(|l| h0 - heights[l]), above.map(|l| heights[l] - h0)].into_iter().flatten().fold(f64::INFINITY, f64::min);
-    let span = g.width + beside.map_or(0.0, |(o, w)| o.abs() + 0.5 * w);
+    let span = g.width + beside.map_or(0.0, |(o, w, ..)| o.abs() + 0.5 * w);
     let open = 20.0 * reach.max(span);
     // Each layer's copper: its thickness and how far it reaches below and above the layer — up
     // into the air on top, down on the bottom, half each way inside.
@@ -159,16 +198,20 @@ fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option
     let slabs = (0..board.layers.len().saturating_sub(1))
         .filter_map(|i| {
             let (top, bottom) = (heights[i].min(ceiling), heights[i + 1].max(floor));
-            (bottom < top && board.layers[i].eps_below > 1.0).then_some(Slab { bottom, top, eps: board.layers[i].eps_below })
+            let l = &board.layers[i];
+            (bottom < top && (l.eps_below > 1.0 || l.loss_below > 0.0)).then_some(Slab { bottom, top, eps: l.eps_below, loss: l.loss_below })
         })
         .collect();
     let (down, thickness) = (reaches(li).0, board.layers[li].copper);
     let strip = |left: f64, right: f64| Strip { left, right, height: h0 - down, thickness };
     let mut strips = vec![strip(-0.5 * g.width, 0.5 * g.width)];
-    if let Some((o, w)) = beside {
+    if let Some((o, w, ..)) = beside {
         strips.push(strip(o - 0.5 * w, o + 0.5 * w));
         strips.sort_by(|a, b| a.left.total_cmp(&b.left));
     }
+    // The segment's strip among the two sorted across: the second when the other's offset is
+    // negative (it sorts first).
+    let own = usize::from(beside.is_some_and(|(o, ..)| o < 0.0));
     // The masks over the outer faces in the box: a coat over the face, and over the strips when
     // they are on that face's layer.
     let mut blocks = Vec::new();
@@ -179,11 +222,11 @@ fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option
         if hi <= floor || lo >= ceiling {
             continue;
         }
-        blocks.push(Block { left: -half_width, right: half_width, bottom: lo, top: hi, eps: m.eps });
+        blocks.push(Block { left: -half_width, right: half_width, bottom: lo, top: hi, eps: m.eps, loss: m.loss });
         if l == li {
             for s in &strips {
                 let (bottom, top) = if sign > 0.0 { (face, s.top() + m.thickness) } else { (s.height - m.thickness, face) };
-                blocks.push(Block { left: s.left - m.thickness, right: s.right + m.thickness, bottom, top, eps: m.eps });
+                blocks.push(Block { left: s.left - m.thickness, right: s.right + m.thickness, bottom, top, eps: m.eps, loss: m.loss });
             }
         }
     }
@@ -207,8 +250,8 @@ fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option
         }
         _ => None,
     };
-    let partner = beside.and(partner).map(|p| (p.to_owned(), beside.map_or(0.0, |(o, w)| o.abs() - 0.5 * (g.width + w))));
-    Some(Built { section: Section { half_width, floor, ceiling, slabs, blocks, strips }, below, above, partner, closed })
+    let near = beside.map(|(_, _, net, gap, overlap)| Near { net: net.to_owned(), gap, overlap });
+    Some(Built { section: Section { half_width, floor, ceiling, slabs, blocks, strips }, below, above, near, own, closed })
 }
 
 /// A key equal for segments whose cross-sections are the same to a nanometre.
@@ -216,27 +259,47 @@ fn key(b: &Built) -> String {
     let nm = |x: f64| (x * 1e9).round() as i64;
     let s = &b.section;
     let strips: Vec<_> = s.strips.iter().map(|x| [nm(x.left), nm(x.right), nm(x.height), nm(x.thickness)]).collect();
-    let slabs: Vec<_> = s.slabs.iter().map(|x| [nm(x.bottom), nm(x.top), (x.eps * 1e9).round() as i64]).collect();
-    let blocks: Vec<_> = s.blocks.iter().map(|x| [nm(x.left), nm(x.right), nm(x.bottom), nm(x.top), (x.eps * 1e9).round() as i64]).collect();
+    let n9 = |x: f64| (x * 1e9).round() as i64;
+    let slabs: Vec<_> = s.slabs.iter().map(|x| [nm(x.bottom), nm(x.top), n9(x.eps), n9(x.loss)]).collect();
+    let blocks: Vec<_> = s.blocks.iter().map(|x| [nm(x.left), nm(x.right), nm(x.bottom), nm(x.top), n9(x.eps), n9(x.loss)]).collect();
     format!("{:?}{:?}{:?}{:?}{:?}", [nm(s.half_width), nm(s.floor), nm(s.ceiling)], strips, slabs, blocks, (b.below, b.above))
 }
 
-/// What a segment's cross-section gives: nothing (and why), a single line's impedance (with its
-/// closed form, if its kind has one) or a pair's odd and even modes beside its partner.
+/// What a segment's cross-section gives: nothing (and why), a single line's mode (with its
+/// impedance's closed form, if its kind has one), a pair's odd and even modes beside its partner,
+/// or two coupled lines beside a neighbour.
 pub(crate) enum Outcome {
     None(String),
     Single {
-        z: f64,
-        eps_eff: f64,
+        mode: Mode,
         closed: Option<f64>,
     },
-    /// The partner, the gap between the strips' edges (m), the odd and even modes' (Z, ε_eff).
+    /// The partner, the gap between the strips' edges (m), the odd and even modes.
     Pair {
         partner: String,
         gap: f64,
-        odd: (f64, f64),
-        even: (f64, f64),
+        odd: Mode,
+        even: Mode,
     },
+    /// The neighbour, the gap between the strips' edges and the length they run side by side
+    /// (m), the two lines (the segment's the `own`th strip).
+    Coupled {
+        neighbour: String,
+        gap: f64,
+        overlap: f64,
+        line: Line,
+        own: usize,
+    },
+}
+
+impl Outcome {
+    /// The mode a signal on the segment travels in: a single line's, a pair's odd.
+    pub(crate) fn mode(&self) -> Option<&Mode> {
+        match self {
+            Outcome::Single { mode, .. } | Outcome::Pair { odd: mode, .. } => Some(mode),
+            Outcome::None(_) | Outcome::Coupled { .. } => None,
+        }
+    }
 }
 
 /// A segment of a net and what its cross-section gives: its references' layers (below, above)
@@ -252,20 +315,23 @@ pub(crate) struct Solved<'a> {
 /// The most segments of a net solved at once.
 const MAX_ROUTE: usize = 512;
 
-/// Every segment of `net` solved (its pair's segments beside it with `partner`), each distinct
-/// cross-section once, on the threads. Refused: more than [`MAX_ROUTE`] segments.
-pub(crate) fn solve_net<'a>(board: &'a Board, net: &str, partner: Option<&str>) -> std::result::Result<Vec<Solved<'a>>, String> {
+/// Every segment of `net` solved (with what `beside` takes beside it; with the modes' resistance
+/// when `lossy`), each distinct cross-section once, on the threads. Refused: more than
+/// [`MAX_ROUTE`] segments.
+pub(crate) fn solve_net<'a>(board: &'a Board, net: &str, beside: Beside, lossy: bool) -> std::result::Result<Vec<Solved<'a>>, String> {
     let segments: Vec<&Segment> = board.segments.iter().filter(|g| g.net == net).collect();
     if segments.len() > MAX_ROUTE {
         return Err(format!("`{net}` has more than {MAX_ROUTE} segments"));
     }
-    let built: Vec<Option<Built>> = segments.iter().map(|g| build(board, g, net, partner)).collect();
+    let built: Vec<Option<Built>> = segments.iter().map(|g| build(board, g, net, beside)).collect();
     let mut distinct: BTreeMap<String, &Section> = BTreeMap::new();
     for b in built.iter().flatten().filter(|b| !b.section.strips.is_empty()) {
         distinct.entry(key(b)).or_insert(&b.section);
     }
-    let solved: BTreeMap<String, std::result::Result<Line, String>> =
-        distinct.into_par_iter().map(|(k, section)| (k, section.solve().map_err(|e| e.to_string()))).collect();
+    let solved: BTreeMap<String, std::result::Result<Line, String>> = distinct
+        .into_par_iter()
+        .map(|(k, section)| (k, if lossy { section.solve_lossy() } else { section.solve() }.map_err(|e| e.to_string())))
+        .collect();
     let last = board.layers.len().saturating_sub(1);
     let rows = segments
         .into_iter()
@@ -286,12 +352,14 @@ pub(crate) fn solve_net<'a>(board: &'a Board, net: &str, partner: Option<&str>) 
                 (false, false) => "embedded microstrip",
             };
             let outcome = match solved.get(&key(&b)) {
-                Some(Ok(line)) => match (line.single(), line.pair(), b.partner) {
-                    (Some(z), _, _) => Outcome::Single { z, eps_eff: line.modes[0].eps_eff, closed: b.closed },
-                    (None, Some((odd, even)), Some((partner, gap))) => {
-                        Outcome::Pair { partner, gap, odd: (odd.impedance, odd.eps_eff), even: (even.impedance, even.eps_eff) }
-                    }
-                    _ => Outcome::None("the pair's modes could not be told apart".into()),
+                Some(Ok(line)) => match (b.near, beside, &line.modes[..]) {
+                    (None, _, [mode]) => Outcome::Single { mode: *mode, closed: b.closed },
+                    (Some(n), Beside::Partner(_), _) => match line.pair() {
+                        Some((odd, even)) => Outcome::Pair { partner: n.net, gap: n.gap, odd, even },
+                        None => Outcome::None("the pair's modes could not be told apart".into()),
+                    },
+                    (Some(n), _, _) => Outcome::Coupled { neighbour: n.net, gap: n.gap, overlap: n.overlap, line: line.clone(), own: b.own },
+                    (None, ..) => Outcome::None("not one line".into()),
                 },
                 Some(Err(e)) => Outcome::None(e.clone()),
                 None => Outcome::None("not solved".into()),
@@ -318,8 +386,73 @@ pub(crate) fn ohms(z: f64) -> f64 {
     (z * 1e3).round() / 1e3
 }
 
+/// Rounded to a thousandth, as replies show picoseconds and percentages.
+pub(crate) fn thousandth(x: f64) -> f64 {
+    (x * 1e3).round() / 1e3
+}
+
+/// Rounded to a micro-decibel, as replies show losses.
+pub(crate) fn db(x: f64) -> f64 {
+    (x * 1e6).round() / 1e6
+}
+
+/// Copper's conductivity (S/m, annealed: IEC 60028), when `conductivity` is not given.
+pub(crate) const COPPER: f64 = 5.8e7;
+
+/// Decibels in a neper, 20/ln 10.
+const NEPER: f64 = 20.0 / std::f64::consts::LN_10;
+
+/// A line's losses at `frequency` (Hz) with conductors of `conductivity` (S/m).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Lossy {
+    pub frequency: f64,
+    pub conductivity: f64,
+}
+
+impl Lossy {
+    /// The parameters `frequency` (display units) and `conductivity` (S/m, default copper's):
+    /// none without a frequency.
+    pub(crate) fn read(p: &Params) -> Result<Option<Lossy>> {
+        let conductivity = p.positive("conductivity").check(|s| (1e5..=1e9).contains(s), "is in S/m, 1e5–1e9").optional()?.unwrap_or(COPPER);
+        Ok(p.frequency("frequency").optional()?.map(|frequency| Lossy { frequency, conductivity }))
+    }
+
+    /// The skin depth (m), 1/√(π f μ₀ σ).
+    pub(crate) fn depth(&self) -> f64 {
+        1.0 / (std::f64::consts::PI * self.frequency * MU0 * self.conductivity).sqrt()
+    }
+
+    /// A mode's conductor loss (none for a sheet) and dielectric loss over `length` (m), dB: at
+    /// the surface resistance 1/(σ δ).
+    pub(crate) fn loss(&self, mode: &Mode, length: f64) -> (Option<f64>, f64) {
+        let (conductor, dielectric) = mode.attenuation(self.frequency, 1.0 / (self.conductivity * self.depth()));
+        (conductor.map(|a| NEPER * a * length), NEPER * dielectric * length)
+    }
+
+    /// What its model leaves out on `board`: a sheet's conductor loss, copper under two skin
+    /// depths thick.
+    pub(crate) fn notes(&self, board: &Board) -> Vec<String> {
+        let depth = self.depth();
+        let sheets = board.layers.iter().filter(|l| l.copper <= 0.0).map(|l| l.name.as_str()).collect::<Vec<_>>();
+        let thin = board.layers.iter().filter(|l| l.copper > 0.0 && l.copper < 2.0 * depth).map(|l| l.name.as_str()).collect::<Vec<_>>();
+        let mut notes = Vec::new();
+        if !sheets.is_empty() {
+            notes.push(format!("{} have no copper thickness: their lines' conductor loss is not given", sheets.join(", ")));
+        }
+        if !thin.is_empty() {
+            notes.push(format!(
+                "{}'s copper is under two skin depths ({:.2} µm) thick at this frequency: its conductor loss is underestimated",
+                thin.join(", "),
+                depth * 1e6
+            ));
+        }
+        notes.push("smooth copper: a rough foil's extra loss is not included".into());
+        notes
+    }
+}
+
 /// `pcb.impedance`: the impedance of every segment of `net` (and of its pair), its cross-section
-/// solved (module docs).
+/// solved (module docs); its delay, and at a `frequency` its losses.
 pub fn impedance(s: &mut Session, p: &Params) -> Result<Value> {
     let board = s.model.pcb().ok_or_else(|| failed("load a PCB with pcb.import, pcb.load or pcb.sample"))?;
     let net = p.string("net").required()?;
@@ -328,11 +461,14 @@ pub fn impedance(s: &mut Session, p: &Params) -> Result<Value> {
         return Err(p.error("net", "names no routed net of this board"));
     }
     let partner = partner(p, net, has)?;
-    let rows = solve_net(board, net, partner.as_deref()).map_err(|e| p.error("net", &e))?;
+    let lossy = Lossy::read(p)?;
+    let beside = partner.as_deref().map_or(Beside::Alone, Beside::Partner);
+    let rows = solve_net(board, net, beside, lossy.is_some()).map_err(|e| p.error("net", &e))?;
     let length = s.display.length;
     let name = |l: Option<usize>| l.and_then(|l| board.layers.get(l)).map(|l| l.name.clone());
     let mut shown = Vec::new();
     let mut weighted: Vec<(f64, f64)> = Vec::new();
+    let (mut delay, mut conductor, mut dielectric, mut unsolved) = (0.0, Some(0.0), 0.0, 0usize);
     for r in &rows {
         let g = r.segment;
         let len = direction(g).1;
@@ -346,25 +482,39 @@ pub fn impedance(s: &mut Session, p: &Params) -> Result<Value> {
         }
         match &r.outcome {
             Outcome::None(why) => row["note"] = json!(why),
-            Outcome::Single { z, eps_eff, closed } => {
-                row["z0"] = json!(ohms(*z));
-                row["eps_eff"] = json!(eps_eff);
+            Outcome::Single { mode, closed } => {
+                row["z0"] = json!(ohms(mode.impedance));
+                row["eps_eff"] = json!(mode.eps_eff);
                 if let Some(c) = closed {
                     row["closed_form"] = json!(ohms(*c));
                 }
-                weighted.push((*z, len));
+                weighted.push((mode.impedance, len));
             }
             Outcome::Pair { partner, gap, odd, even } => {
                 row["pair"] = json!(partner);
                 row["gap"] = json!(length.from_si(*gap));
-                row["z_odd"] = json!(ohms(odd.0));
-                row["z_even"] = json!(ohms(even.0));
-                row["z_diff"] = json!(ohms(2.0 * odd.0));
-                row["z_common"] = json!(ohms(0.5 * even.0));
-                row["eps_eff_odd"] = json!(odd.1);
-                row["eps_eff_even"] = json!(even.1);
-                weighted.push((2.0 * odd.0, len));
+                row["z_odd"] = json!(ohms(odd.impedance));
+                row["z_even"] = json!(ohms(even.impedance));
+                row["z_diff"] = json!(ohms(2.0 * odd.impedance));
+                row["z_common"] = json!(ohms(0.5 * even.impedance));
+                row["eps_eff_odd"] = json!(odd.eps_eff);
+                row["eps_eff_even"] = json!(even.eps_eff);
+                weighted.push((2.0 * odd.impedance, len));
             }
+            Outcome::Coupled { .. } => row["note"] = json!("solved beside another net"),
+        }
+        match r.outcome.mode() {
+            Some(mode) => {
+                row["delay"] = json!(thousandth(mode.delay() * len * 1e12));
+                delay += mode.delay() * len;
+                if let Some(l) = lossy {
+                    let (c, d) = l.loss(mode, len);
+                    row["loss"] = json!({"conductor": c.map(db), "dielectric": db(d), "total": c.map(|c| db(c + d))});
+                    conductor = conductor.zip(c).map(|(a, b)| a + b);
+                    dielectric += d;
+                }
+            }
+            None => unsolved += 1,
         }
         shown.push(row);
     }
@@ -373,12 +523,27 @@ pub fn impedance(s: &mut Session, p: &Params) -> Result<Value> {
         let (lo, hi) = weighted.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), (z, _)| (a.min(*z), b.max(*z)));
         json!({"min": ohms(lo), "max": ohms(hi), "mean": ohms(weighted.iter().map(|(z, l)| z * l).sum::<f64>() / total)})
     });
+    let routed: f64 = rows.iter().map(|r| direction(r.segment).1).sum();
+    let mut route = json!({"length": length.from_si(routed), "delay": thousandth(delay * 1e12), "unsolved": unsolved});
+    let mut notes = Vec::new();
+    if let Some(l) = lossy {
+        route["loss"] = json!({"conductor": conductor.map(db), "dielectric": db(dielectric), "total": conductor.map(|c| db(c + dielectric))});
+        route["frequency"] = json!(s.display.frequency.from_si(l.frequency));
+        notes = l.notes(board);
+    }
+    if unsolved > 0 {
+        notes.push(format!("{unsolved} segment(s) without an impedance are left out of the route's delay and loss"));
+    }
     Ok(json!({
         "net": net,
         "pair": partner,
         "length_unit": length.symbol(),
+        "delay_unit": "ps",
+        "loss_unit": "dB",
         "sections": shown,
         "impedance": summary,
-        "model": "each segment's cross-section by the finite elements, quasi-statically (its capacitances with and without the dielectrics): quasi-TEM, lossless, each layer's copper its thickness (outer layers' standing into the air, inner ones' centred), the solder masks a coat over the outer faces and their strips, references the nearest planes of other nets above and below; a pair's segments with the partner's parallel segment beside (z_diff = 2 z_odd); the summary is length-weighted, of z0 or of z_diff",
+        "route": route,
+        "notes": notes,
+        "model": "each segment's cross-section by the finite elements, quasi-statically (its capacitances with and without the dielectrics): quasi-TEM, each layer's copper its thickness (outer layers' standing into the air, inner ones' centred), the solder masks a coat over the outer faces and their strips, references the nearest planes of other nets above and below; a pair's segments with the partner's parallel segment beside (z_diff = 2 z_odd); the summary is length-weighted, of z0 or of z_diff. A segment's delay is its length at the speed c/√ε_eff (a pair's odd mode's); its loss at `frequency` the dielectrics' (their loss tangents weighed by the electric energy in each) and the copper's (Wheeler's incremental inductance rule at the skin effect's surface resistance, smooth copper); the route's are the sums over its segments (vias left out)",
     }))
 }

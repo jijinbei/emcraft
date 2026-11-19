@@ -176,7 +176,8 @@ pub const MAX_CLASSES: usize = 64;
 
 /// A class of nets and the impedance their lines should have: its nets by name, each name a
 /// pattern (`*` any run of characters), the single-ended `z0` and the differential `z_diff` it
-/// asks for (Ω, either or both) within `tolerance` (a fraction of the target).
+/// asks for (Ω) within `tolerance` (a fraction of the target), and the limits on each net's
+/// route — at least one target or limit.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NetClass {
     pub name: String,
@@ -186,6 +187,43 @@ pub struct NetClass {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub z_diff: Option<f64>,
     pub tolerance: f64,
+    #[serde(default, skip_serializing_if = "Limits::is_empty")]
+    pub limits: Limits,
+}
+
+/// The most a class's routes may have: each net's routed length (m), its delay (s), a pair's
+/// skew between its two nets' delays (s), and its loss (dB) at `frequency` (Hz).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Limits {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub length: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delay: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skew: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loss: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frequency: Option<f64>,
+}
+
+impl Limits {
+    /// Whether it limits nothing.
+    pub fn is_empty(&self) -> bool {
+        self.length.is_none() && self.delay.is_none() && self.skew.is_none() && self.loss.is_none()
+    }
+
+    /// Whether each limit is in range — a length up to 10 m, a delay or skew up to 1 µs, a loss up
+    /// to 1000 dB, each above 0 — and a loss has its frequency (up to 1 THz), and only a loss.
+    fn valid(&self) -> bool {
+        let within = |x: Option<f64>, top: f64| x.is_none_or(|x| x.is_finite() && x > 0.0 && x <= top);
+        within(self.length, 10.0)
+            && within(self.delay, 1e-6)
+            && within(self.skew, 1e-6)
+            && within(self.loss, 1e3)
+            && within(self.frequency, 1e12)
+            && self.loss.is_some() == self.frequency.is_some()
+    }
 }
 
 impl NetClass {
@@ -193,7 +231,7 @@ impl NetClass {
     ///
     /// ```
     /// use emcraft_model::pcb::NetClass;
-    /// let c = NetClass { name: "USB".into(), nets: vec!["USB_D*".into(), "VBUS".into()], z0: None, z_diff: Some(90.0), tolerance: 0.1 };
+    /// let c = NetClass { name: "USB".into(), nets: vec!["USB_D*".into(), "VBUS".into()], z0: None, z_diff: Some(90.0), tolerance: 0.1, limits: Default::default() };
     /// assert!(c.matches("USB_D+") && c.matches("VBUS"));
     /// assert!(!c.matches("SDA") && !c.matches("VBUS2"));
     /// ```
@@ -201,15 +239,19 @@ impl NetClass {
         self.nets.iter().any(|p| glob(p, net))
     }
 
-    /// Refuses a class with no name or nets, no target, a target outside 0.1–10 000 Ω or a
-    /// tolerance outside (0, 1].
+    /// Refuses a class with no name or nets, no target or limit, a target outside 0.1–10 000 Ω,
+    /// a tolerance outside (0, 1] or a limit out of range ([`Limits`]).
     ///
     /// ```
-    /// use emcraft_model::pcb::NetClass;
-    /// let c = NetClass { name: "50".into(), nets: vec!["*".into()], z0: Some(50.0), z_diff: None, tolerance: 0.1 };
+    /// use emcraft_model::pcb::{Limits, NetClass};
+    /// let c = NetClass { name: "50".into(), nets: vec!["*".into()], z0: Some(50.0), z_diff: None, tolerance: 0.1, limits: Limits::default() };
     /// assert!(c.check().is_ok());
     /// assert!(NetClass { z0: None, ..c.clone() }.check().is_err());
-    /// assert!(NetClass { tolerance: f64::NAN, ..c }.check().is_err());
+    /// assert!(NetClass { tolerance: f64::NAN, ..c.clone() }.check().is_err());
+    /// // A delay limit alone (1 ns) is a class; a loss limit needs its frequency.
+    /// let delay = Limits { delay: Some(1e-9), ..Limits::default() };
+    /// assert!(NetClass { z0: None, limits: delay, ..c.clone() }.check().is_ok());
+    /// assert!(NetClass { limits: Limits { loss: Some(3.0), ..delay }, ..c }.check().is_err());
     /// ```
     pub fn check(&self) -> Result<()> {
         let name = |s: &str| !s.trim().is_empty() && s.chars().count() <= 128;
@@ -218,7 +260,8 @@ impl NetClass {
             && !self.nets.is_empty()
             && self.nets.len() <= 256
             && self.nets.iter().all(|n| name(n))
-            && (self.z0.is_some() || self.z_diff.is_some())
+            && (self.z0.is_some() || self.z_diff.is_some() || !self.limits.is_empty())
+            && self.limits.valid()
             && target(self.z0)
             && target(self.z_diff)
             && self.tolerance.is_finite()
@@ -227,7 +270,10 @@ impl NetClass {
         if ok {
             Ok(())
         } else {
-            Err(invalid("net class", "needs a name, nets, a z0 or z_diff target of 0.1–10000 Ω and a tolerance of (0, 100] %"))
+            Err(invalid(
+                "net class",
+                "needs a name, nets, a z0 or z_diff target of 0.1–10000 Ω or a limit, a tolerance of (0, 100] %, a length limit up to 10 m, a delay or skew one up to 1 µs and a loss one up to 1000 dB with its frequency",
+            ))
         }
     }
 }

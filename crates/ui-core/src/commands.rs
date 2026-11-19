@@ -37,6 +37,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ui("pcb.ports", None, Some(Glyph::Port), false),
     ui("pcb.element", Some(t!("Chip part").en()), Some(Glyph::Lumped), false),
     ui("pcb.impedance", None, Some(Glyph::Chart), false),
+    ui("pcb.crosstalk", None, Some(Glyph::Chart), false),
     ui("pcb.class", None, None, false),
     ui("pcb.class.delete", None, None, false),
     ui("pcb.check", None, Some(Glyph::Chart), false),

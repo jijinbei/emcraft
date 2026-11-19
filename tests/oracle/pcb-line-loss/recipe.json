@@ -1,0 +1,202 @@
+[
+  {
+    "command": "pcb.load",
+    "params": {
+      "data": {
+        "name": "stripline 0.5 mm wide, 0.07 mm thick",
+        "layers": [
+          {
+            "name": "TOP",
+            "z": 0,
+            "eps_below": 4.3,
+            "loss_below": 0.02,
+            "copper": 0.035
+          },
+          {
+            "name": "MID",
+            "z": 0.5,
+            "eps_below": 4.3,
+            "loss_below": 0.02,
+            "copper": 0.07
+          },
+          {
+            "name": "BOT",
+            "z": 1.0,
+            "eps_below": 1,
+            "copper": 0.035
+          }
+        ],
+        "segments": [
+          {
+            "id": "sl",
+            "net": "SL",
+            "layer": "MID",
+            "start": [
+              0,
+              0
+            ],
+            "end": [
+              40,
+              0
+            ],
+            "width": 0.5
+          }
+        ],
+        "copper": [
+          {
+            "net": "GND",
+            "layer": "TOP",
+            "polygon": [
+              [
+                -5,
+                -10
+              ],
+              [
+                45,
+                -10
+              ],
+              [
+                45,
+                10
+              ],
+              [
+                -5,
+                10
+              ]
+            ]
+          },
+          {
+            "net": "GND",
+            "layer": "BOT",
+            "polygon": [
+              [
+                -5,
+                -10
+              ],
+              [
+                45,
+                -10
+              ],
+              [
+                45,
+                10
+              ],
+              [
+                -5,
+                10
+              ]
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "command": "pcb.impedance",
+    "params": {
+      "net": "SL",
+      "frequency": 1
+    },
+    "id": "wide"
+  },
+  {
+    "command": "pcb.load",
+    "params": {
+      "data": {
+        "name": "stripline 0.4 mm wide, 0.035 mm thick",
+        "layers": [
+          {
+            "name": "TOP",
+            "z": 0,
+            "eps_below": 4.3,
+            "loss_below": 0.02,
+            "copper": 0.035
+          },
+          {
+            "name": "MID",
+            "z": 0.5,
+            "eps_below": 4.3,
+            "loss_below": 0.02,
+            "copper": 0.035
+          },
+          {
+            "name": "BOT",
+            "z": 1.0,
+            "eps_below": 1,
+            "copper": 0.035
+          }
+        ],
+        "segments": [
+          {
+            "id": "sl",
+            "net": "SL",
+            "layer": "MID",
+            "start": [
+              0,
+              0
+            ],
+            "end": [
+              40,
+              0
+            ],
+            "width": 0.4
+          }
+        ],
+        "copper": [
+          {
+            "net": "GND",
+            "layer": "TOP",
+            "polygon": [
+              [
+                -5,
+                -10
+              ],
+              [
+                45,
+                -10
+              ],
+              [
+                45,
+                10
+              ],
+              [
+                -5,
+                10
+              ]
+            ]
+          },
+          {
+            "net": "GND",
+            "layer": "BOT",
+            "polygon": [
+              [
+                -5,
+                -10
+              ],
+              [
+                45,
+                -10
+              ],
+              [
+                45,
+                10
+              ],
+              [
+                -5,
+                10
+              ]
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "command": "pcb.impedance",
+    "params": {
+      "net": "SL",
+      "frequency": 1
+    },
+    "id": "narrow"
+  }
+]

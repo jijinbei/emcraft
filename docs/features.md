@@ -143,16 +143,29 @@ A lumped element on a layer of the board's region (pcb.region), from the board p
 
 ## `pcb.impedance` — Line impedance
 
-The impedance of every routed segment of a net, its cross-section solved quasi-statically by the finite elements (its capacitances with and without the dielectrics): the strip at its layer, the board's dielectrics, its reference planes the nearest layers above and below with another net's copper under its middle (an outer microstrip, an embedded one, a stripline); with a differential partner (`pair`, else the net its name pairs with: +/-, _P/_N, P/N) the partner's parallel segment beside it, its odd and even modes, z_diff = 2 z_odd and z_common = z_even/2. Each distinct cross-section is solved once. Lossless quasi-TEM lines of copper of no thickness; a segment without a reference plane has no impedance. The reply lists each segment's (with the closed form for a plain microstrip or centred stripline) and the length-weighted range.
+The impedance of every routed segment of a net, its cross-section solved quasi-statically by the finite elements (its capacitances with and without the dielectrics): the strip at its layer, its copper's thickness, the board's dielectrics and solder masks, its reference planes the nearest layers above and below with another net's copper under its middle (an outer microstrip, an embedded one, a stripline); with a differential partner (`pair`, else the net its name pairs with: +/-, _P/_N, P/N) the partner's parallel segment beside it, its odd and even modes, z_diff = 2 z_odd and z_common = z_even/2. Each distinct cross-section is solved once. Quasi-TEM lines; a segment without a reference plane has no impedance. The reply lists each segment's (with the closed form for a plain microstrip or centred stripline) and its delay, the length-weighted range and the route's length and delay; at a `frequency`, each segment's and the route's loss in dB — the dielectrics' by their loss tangents, the copper's by Wheeler's incremental inductance rule (smooth copper of `conductivity`, copper's by default; none for copper of no thickness).
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
 | `net` | string |  | yes | the signal net |
 | `pair` | string |  | no | its differential partner (default: the net its name pairs with, if the board has it) |
+| `frequency` | number | frequency | no | the frequency of the losses (default: no losses) |
+| `conductivity` | number |  | no | the copper's conductivity in S/m (default 5.8e7) |
+
+## `pcb.crosstalk` — Crosstalk
+
+The crosstalk into a net from the routed nets beside it: each of its segments with another net's parallel segment on its layer (its edge within `within`; the nearest, of `aggressor` when given) solved as two coupled quasi-TEM lines (pcb.impedance's cross-section), its capacitive and inductive coupling, its near-end crosstalk (k_L + k_C)/4 (saturating once the run's round trip outlasts the rise) and far-end (k_C − k_L)/2 · T_d/t_r at the aggressor's `rise_time`, both lines matched; each aggressor's sums over the route.
+
+| Parameter | Type | Unit | Required | Description |
+|---|---|---|---|---|
+| `net` | string |  | yes | the victim net |
+| `aggressor` | string |  | no | only this net beside it (default: every net) |
+| `within` | number | length | no | how far from a segment's edge a neighbour may be (default 1 mm) |
+| `rise_time` | number |  | no | the aggressor's rise time, picoseconds (default 100) |
 
 ## `pcb.class` — Net class
 
-Makes a class of nets and the impedance their lines should have, or changes the class named `name` (only what is given): its nets by name (`*` any characters), a single-ended `z0` and a differential `z_diff` target in ohms (either or both) within `tolerance` percent. pcb.check checks every segment against them. Saved with the board; undoable.
+Makes a class of nets and the impedance their lines should have, or changes the class named `name` (only what is given; `null` clears a target or limit): its nets by name (`*` any characters), a single-ended `z0` and a differential `z_diff` target in ohms within `tolerance` percent, and limits on each net's route — its length, its delay, a pair's skew and its loss at `frequency` — at least one target or limit. pcb.check checks every segment and route against them. Saved with the board; undoable.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|
@@ -161,6 +174,11 @@ Makes a class of nets and the impedance their lines should have, or changes the 
 | `z0` | number |  | no | the single-ended impedance its lines should have, ohms |
 | `z_diff` | number |  | no | the differential impedance its pairs should have, ohms |
 | `tolerance` | number |  | no | how far from the target passes, percent (default 10) |
+| `max_length` | number | length | no | the longest a net's route may be |
+| `max_delay` | number |  | no | the longest a net's delay may be, picoseconds |
+| `max_skew` | number |  | no | the most a pair's two delays may differ, picoseconds |
+| `max_loss` | number |  | no | the most a net's route may lose at `frequency`, dB |
+| `frequency` | number | frequency | no | the frequency of `max_loss` |
 
 ## `pcb.class.delete` — Delete net class
 
@@ -172,7 +190,7 @@ Removes the net class named `name`. Undoable.
 
 ## `pcb.check` — Check line impedances
 
-Checks every segment of each net class's routed nets (or of `class`'s) against its targets, solved as pcb.impedance solves them: alone against `z0`, beside the partner its name pairs with against `z_diff` (2 z_odd). A class passes when every segment is within its tolerance. Each finding — off target, no reference plane, not beside its partner — names its class, net, segment (by the id its source gave it: a PCBCraft board's track id), layer, middle and length, its value, target and deviation.
+Checks every segment of each net class's routed nets (or of `class`'s) against its targets, solved as pcb.impedance solves them: alone against `z0`, beside the partner its name pairs with against `z_diff` (2 z_odd); and each net's route against its limits: its length, its delay (a pair's odd mode's), its loss at the limit's frequency (copper's conductivity) and a pair's skew. A class passes when every segment is within its tolerance and every route within its limits. Each finding — off target, no reference plane, not beside its partner — names its class, net, segment (by the id its source gave it: a PCBCraft board's track id), layer, middle and length, its value, target and deviation; a route's its class, net (and pair), quantity, value and limit.
 
 | Parameter | Type | Unit | Required | Description |
 |---|---|---|---|---|

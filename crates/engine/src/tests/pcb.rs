@@ -240,6 +240,138 @@ fn net_classes_pass_and_fail_their_segments_by_id() {
     assert!(s.execute("pcb.check", &json!({})).is_err());
 }
 
+/// `lines_board` with 35 µm of copper on every layer and a loss tangent of 0.02 in its
+/// dielectrics.
+fn lossy_lines_board() -> serde_json::Value {
+    let mut b = lines_board();
+    for l in 0..4 {
+        b["layers"][l]["copper"] = json!(0.035);
+        if l < 3 {
+            b["layers"][l]["loss_below"] = json!(0.02);
+        }
+    }
+    b
+}
+
+/// The stripline's delay and dielectric loss are exact in its one dielectric (√εr/c over its 40 mm;
+/// π f √εr tan δ / c), its copper's loss grows as √f, the route sums its segments'; copper of no
+/// thickness has no conductor loss, said so.
+#[test]
+fn a_lines_delay_and_losses_come_with_its_impedance() {
+    let mut s = Session::new();
+    s.execute("pcb.load", &json!({"data": lossy_lines_board()})).unwrap();
+    let at = |s: &mut Session, f: f64| s.execute("pcb.impedance", &json!({"net": "SL", "frequency": f})).unwrap();
+    let r = at(&mut s, 1.0);
+    let sl = &r["sections"][0];
+    let c = 299_792_458.0;
+    approx::assert_abs_diff_eq!(sl["delay"].as_f64().unwrap(), 0.04 * 4.3f64.sqrt() / c * 1e12, epsilon = 2e-3);
+    let dielectric = 20.0 / std::f64::consts::LN_10 * std::f64::consts::PI * 1e9 * 4.3f64.sqrt() * 0.02 / c * 0.04;
+    approx::assert_abs_diff_eq!(sl["loss"]["dielectric"].as_f64().unwrap(), dielectric, epsilon = 2e-3);
+    let copper = sl["loss"]["conductor"].as_f64().unwrap();
+    assert!(copper > 0.0 && r["route"]["loss"]["total"] == sl["loss"]["total"] && r["route"]["delay"] == sl["delay"], "{r}");
+    let copper4 = at(&mut s, 4.0)["sections"][0]["loss"]["conductor"].as_f64().unwrap();
+    assert!((copper4 / copper - 2.0).abs() < 0.01, "{copper} {copper4}");
+    // Without a frequency, no losses.
+    let plain = s.execute("pcb.impedance", &json!({"net": "SL"})).unwrap();
+    assert!(plain["sections"][0]["loss"].is_null() && plain["route"]["delay"] == sl["delay"], "{plain}");
+    // A sheet has no conductor loss.
+    s.execute("pcb.load", &json!({"data": lines_board()})).unwrap();
+    let r = at(&mut s, 1.0);
+    assert!(r["sections"][0]["loss"]["conductor"].is_null() && r["route"]["loss"]["total"].is_null(), "{r}");
+    assert!(r["notes"].as_array().unwrap().iter().any(|n| n.as_str().is_some_and(|n| n.contains("no copper thickness"))), "{r}");
+    for bad in [
+        json!({"net": "SL", "frequency": -1}),
+        json!({"net": "SL", "frequency": 1, "conductivity": 0}),
+        json!({"net": "SL", "frequency": 1, "conductivity": 1e12}),
+    ] {
+        assert!(s.execute("pcb.impedance", &bad).is_err(), "{bad}");
+    }
+}
+
+/// A class's limits on its routes: the 40 mm microstrip over a 30 mm limit, within a 1 ns
+/// delay; the pair 5 mm apart in length skewed by the delay of 5 mm; a loss limit over a route of
+/// sheets found out (no conductor loss), passed once the copper has its thickness.
+#[test]
+fn a_classes_limits_check_each_routes_length_delay_skew_and_loss() {
+    let mut b = lossy_lines_board();
+    b["segments"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "n2", "net": "USB_D-", "layer": "TOP", "start": [40, 5.35], "end": [44, 5.35], "width": 0.2}));
+    let mut s = Session::new();
+    s.execute("pcb.load", &json!({"data": b})).unwrap();
+    s.execute("pcb.class", &json!({"name": "short", "nets": ["MS"], "max_length": 30, "max_delay": 1000})).unwrap();
+    s.execute("pcb.class", &json!({"name": "pair", "nets": ["USB_D*"], "max_skew": 10, "max_loss": 3, "frequency": 5})).unwrap();
+    let r = s.execute("pcb.check", &json!({})).unwrap();
+    let found = |q: &str| r["findings"].as_array().unwrap().iter().filter(|f| f["quantity"] == q).cloned().collect::<Vec<_>>();
+    let length = found("length");
+    assert!(length.len() == 1 && length[0]["net"] == "MS" && length[0]["value"] == 40.0 && length[0]["target"] == 30.0, "{r}");
+    assert!(found("delay").is_empty() && found("loss").is_empty(), "{r}");
+    // 4 mm of USB_D- more: about √ε_eff · 4 mm / c ≈ 24 ps of skew.
+    let skew = found("skew");
+    let value = skew[0]["value"].as_f64().unwrap();
+    assert!(skew.len() == 1 && skew[0]["net"] == "USB_D+" && skew[0]["pair"] == "USB_D-" && (18.0..30.0).contains(&value), "{r}");
+    // A class of the pair's one net checks the pair's skew too.
+    s.execute("pcb.class", &json!({"name": "minus", "nets": ["USB_D-"], "max_skew": 10})).unwrap();
+    let minus = s.execute("pcb.check", &json!({"class": "minus"})).unwrap();
+    assert!(minus["findings"][0]["quantity"] == "skew" && minus["findings"][0]["pair"] == "USB_D+", "{minus}");
+    s.execute("pcb.class.delete", &json!({"name": "minus"})).unwrap();
+    s.execute("pcb.class", &json!({"name": "pair", "max_skew": 40})).unwrap();
+    assert!(s.execute("pcb.check", &json!({"class": "pair"})).unwrap()["verdict"] == "pass");
+    // Cleared, the skew limit is gone; a loss limit without its frequency is refused.
+    s.execute("pcb.class", &json!({"name": "pair", "max_skew": null})).unwrap();
+    assert!(s.model().pcb().unwrap().classes[1].limits.skew.is_none());
+    let before = s.model().clone();
+    for bad in [
+        json!({"name": "pair", "frequency": null}),
+        json!({"name": "new", "nets": ["MS"], "max_loss": 3}),
+        json!({"name": "new", "nets": ["MS"], "max_delay": -1}),
+        json!({"name": "new", "nets": ["MS"], "max_length": 1e9}),
+    ] {
+        assert!(s.execute("pcb.class", &bad).is_err(), "{bad}");
+        assert_eq!(s.model(), &before);
+    }
+    // Sheets of copper: the loss is unknown, found out.
+    s.execute("pcb.load", &json!({"data": lines_board()})).unwrap();
+    s.execute("pcb.class", &json!({"name": "pair", "nets": ["USB_D*"], "max_loss": 3, "frequency": 5})).unwrap();
+    let r = s.execute("pcb.check", &json!({})).unwrap();
+    assert!(r["findings"][0]["quantity"] == "loss" && r["findings"][0]["problem"].as_str().unwrap().contains("no thickness"), "{r}");
+}
+
+/// Two striplines side by side in one dielectric couple as Cohn's even and odd modes say — near
+/// end (Z_e − Z_o)/2(Z_e + Z_o) — with no far-end crosstalk; two microstrips' far end is
+/// negative. A net beyond `within`, or not the aggressor named, is not taken.
+#[test]
+fn crosstalk_comes_from_the_coupled_lines_matrices() {
+    let mut b = lines_board();
+    let seg =
+        |id: &str, net: &str, layer: &str, y: f64, w: f64| json!({"id": id, "net": net, "layer": layer, "start": [0, y], "end": [40, y], "width": w});
+    b["segments"].as_array_mut().unwrap().extend([seg("sl2", "SL2", "L3", 0.4, 0.2), seg("ms2", "MS2", "TOP", 0.6, 0.35)]);
+    let mut s = Session::new();
+    s.execute("pcb.load", &json!({"data": b})).unwrap();
+    let r = s.execute("pcb.crosstalk", &json!({"net": "SL"})).unwrap();
+    let row = &r["segments"][0];
+    let (ze, zo) = emcraft_theory::coupled::z0_even_odd(0.2e-3, 0.2e-3, 0.8e-3, 4.3).unwrap();
+    let cohn = 0.5 * emcraft_theory::coupled::coupling(ze, zo);
+    let kb = row["k_next"].as_f64().unwrap();
+    assert!(row["aggressor"] == "SL2" && (kb / cohn - 1.0).abs() < 0.01, "{r} {cohn}");
+    assert!(row["fext_percent"].as_f64().unwrap().abs() < 1e-3 && r["aggressors"][0]["net"] == "SL2", "{r}");
+    // The 40 mm run's round trip outlasts the 100 ps rise: the near end saturates.
+    approx::assert_abs_diff_eq!(row["next_percent"].as_f64().unwrap(), 100.0 * kb, epsilon = 1e-3);
+    let ms = s.execute("pcb.crosstalk", &json!({"net": "MS", "rise_time": 50})).unwrap();
+    let m = &ms["segments"][0];
+    assert!(m["aggressor"] == "MS2" && m["fext_percent"].as_f64().unwrap() < 0.0, "{ms}");
+    assert!(m["k_inductive"].as_f64().unwrap() > m["k_capacitive"].as_f64().unwrap(), "{ms}");
+    for none in [json!({"net": "SL", "within": 0.1}), json!({"net": "SL", "aggressor": "MS"})] {
+        assert!(s.execute("pcb.crosstalk", &none).unwrap()["segments"].as_array().unwrap().is_empty(), "{none}");
+    }
+    for bad in
+        [json!({"net": "SL", "aggressor": "SL"}), json!({"net": "SL", "within": -1}), json!({"net": "SL", "rise_time": 0}), json!({"net": "NOPE"})]
+    {
+        assert!(s.execute("pcb.crosstalk", &bad).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn board_commands_refuse_hostile_inputs_and_keep_the_model() {
     let mut s = Session::new();

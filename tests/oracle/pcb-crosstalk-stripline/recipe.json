@@ -1,0 +1,218 @@
+[
+  {
+    "command": "pcb.load",
+    "params": {
+      "data": {
+        "name": "coupled striplines 0.2 mm apart",
+        "layers": [
+          {
+            "name": "TOP",
+            "z": 0,
+            "eps_below": 4.3
+          },
+          {
+            "name": "MID",
+            "z": 0.4,
+            "eps_below": 4.3
+          },
+          {
+            "name": "BOT",
+            "z": 0.8,
+            "eps_below": 1
+          }
+        ],
+        "segments": [
+          {
+            "id": "victim",
+            "net": "V",
+            "layer": "MID",
+            "start": [
+              0,
+              0
+            ],
+            "end": [
+              40,
+              0
+            ],
+            "width": 0.2
+          },
+          {
+            "id": "aggressor",
+            "net": "A",
+            "layer": "MID",
+            "start": [
+              0,
+              0.4
+            ],
+            "end": [
+              40,
+              0.4
+            ],
+            "width": 0.2
+          }
+        ],
+        "copper": [
+          {
+            "net": "GND",
+            "layer": "TOP",
+            "polygon": [
+              [
+                -5,
+                -10
+              ],
+              [
+                45,
+                -10
+              ],
+              [
+                45,
+                10
+              ],
+              [
+                -5,
+                10
+              ]
+            ]
+          },
+          {
+            "net": "GND",
+            "layer": "BOT",
+            "polygon": [
+              [
+                -5,
+                -10
+              ],
+              [
+                45,
+                -10
+              ],
+              [
+                45,
+                10
+              ],
+              [
+                -5,
+                10
+              ]
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "command": "pcb.crosstalk",
+    "params": {
+      "net": "V"
+    },
+    "id": "close"
+  },
+  {
+    "command": "pcb.load",
+    "params": {
+      "data": {
+        "name": "coupled striplines 0.4 mm apart",
+        "layers": [
+          {
+            "name": "TOP",
+            "z": 0,
+            "eps_below": 4.3
+          },
+          {
+            "name": "MID",
+            "z": 0.4,
+            "eps_below": 4.3
+          },
+          {
+            "name": "BOT",
+            "z": 0.8,
+            "eps_below": 1
+          }
+        ],
+        "segments": [
+          {
+            "id": "victim",
+            "net": "V",
+            "layer": "MID",
+            "start": [
+              0,
+              0
+            ],
+            "end": [
+              40,
+              0
+            ],
+            "width": 0.2
+          },
+          {
+            "id": "aggressor",
+            "net": "A",
+            "layer": "MID",
+            "start": [
+              0,
+              0.6000000000000001
+            ],
+            "end": [
+              40,
+              0.6000000000000001
+            ],
+            "width": 0.2
+          }
+        ],
+        "copper": [
+          {
+            "net": "GND",
+            "layer": "TOP",
+            "polygon": [
+              [
+                -5,
+                -10
+              ],
+              [
+                45,
+                -10
+              ],
+              [
+                45,
+                10
+              ],
+              [
+                -5,
+                10
+              ]
+            ]
+          },
+          {
+            "net": "GND",
+            "layer": "BOT",
+            "polygon": [
+              [
+                -5,
+                -10
+              ],
+              [
+                45,
+                -10
+              ],
+              [
+                45,
+                10
+              ],
+              [
+                -5,
+                10
+              ]
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "command": "pcb.crosstalk",
+    "params": {
+      "net": "V"
+    },
+    "id": "apart"
+  }
+]

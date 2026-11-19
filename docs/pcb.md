@@ -174,10 +174,37 @@ Hammerstad and Jensen's thick strip, and none is given under a mask
 0.7 % of it). The finite elements of `pcb.region` mesh the outer layers' copper with its
 thickness, an inner layer's as a sheet and no mask; `mesh.generate`'s `notes` say so.
 
+Each segment's `delay` (ps) is its length at the mode's speed c/√ε_eff (a pair's odd mode's),
+and the reply's `route` sums them. With a `frequency` the reply gives each segment's and the
+route's loss in dB: the dielectrics' (each layer's `loss_below`, a mask's `loss`) from the complex
+permittivity — each loss tangent weighed by the electric energy in its dielectric — and the
+copper's by Wheeler's incremental inductance rule, the conductors' faces receded by the finite
+elements, at the skin effect's surface resistance of `conductivity` (copper's 5.8e7 S/m by
+default). The copper is smooth and many skin depths thick: a rough foil's extra loss is left out,
+copper under two skin depths thick is said to be underestimated, and a sheet (no `copper`) has
+no conductor loss ([`pcb-line-loss`](../tests/oracle/pcb-line-loss/README.md): a stripline's
+dielectric loss and delay exact, its conductor loss within 0.6 % of Pozar's fit of Wheeler's
+rule).
+
+`pcb.crosstalk {"net":"SDA"}` finds each of the net's segments with another net's parallel
+segment on its layer within `within` (1 mm by default; of `aggressor` only, when given) and
+solves the two as coupled lines: their capacitive and inductive couplings k_C and k_L, the
+near-end coefficient (k_L + k_C)/4 — saturated once the run's round trip outlasts the
+aggressor's `rise_time` (100 ps by default) — and the far end (k_C − k_L)/2 · T_d/t_r, both lines
+matched and the coupling weak (Paul 2008, §7.3). A stripline in one dielectric has no far-end
+crosstalk, a microstrip a negative one. Each aggressor's sums over the route: the far end added
+along it, the near end up to its largest saturated value — an estimate, not a waveform
+([`pcb-crosstalk-stripline`](../tests/oracle/pcb-crosstalk-stripline/README.md): within 1 % of
+Cohn's coupled striplines).
+
 `pcb.class {"name":"USB","nets":["USB_D*"],"z_diff":90,"tolerance":10}` gives a class of nets
-the impedance its lines should have (`z0`, `z_diff` or both); `pcb.check` checks every segment
-of every class, each failing one a finding — off target, no reference plane, not beside its
-partner — named by its segment's id (a PCBCraft board's track UUID), net, layer and place.
+the impedance its lines should have (`z0`, `z_diff` or both) and limits on each net's route:
+`max_length`, `max_delay` and `max_skew` (ps, a pair's two nets' delays apart) and `max_loss` (dB)
+at `frequency` — `null` clears one. `pcb.check` checks every segment of every class, each failing
+one a finding — off target, no reference plane, not beside its partner — named by its segment's
+id (a PCBCraft board's track UUID), net, layer and place; and every route against its limits,
+each over one (or unknown: a segment without an impedance, copper of no thickness for a loss) a
+finding of its net (and pair) and quantity. Vias' lengths are not counted.
 
 ## The board in 3D
 

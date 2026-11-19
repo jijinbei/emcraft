@@ -1,0 +1,46 @@
+{
+  "title": "Crosstalk between two striplines: 0.2 mm strips 0.2 and 0.4 mm apart, centred between planes 0.8 mm apart in εr 4.3",
+  "kind": "theory",
+  "source": "S. B. Cohn, Shielded coupled-strip transmission line, IRE Trans. MTT 3, 1955, pp. 29–38 (the even and odd impedances of edge-coupled striplines of no thickness, exact by conformal mapping); C. R. Paul, Analysis of Multiconductor Transmission Lines, 2nd ed., Wiley 2008, §7.3 (weakly coupled matched lines: near end (k_L + k_C)/4, far end (k_C − k_L)/2 · T_d/t_r). Reference values evaluated independently of EMCraft from the published formulas.",
+  "quantities": [
+    {
+      "id": "close_next",
+      "quantity": "saturated near-end coefficient, 0.2 mm apart",
+      "measure": {
+        "step": "close",
+        "pointer": "/segments/0/k_next"
+      },
+      "value": 0.09964318620055758,
+      "tolerance": {
+        "relative": 0.02
+      },
+      "reason": "The finite elements' capacitance and inductance couplings of the pair's cross-section against Cohn's exact even and odd impedances (in one dielectric k_L = k_C = (Z_e − Z_o)/(Z_e + Z_o)): a difference of the two modes, so twice their error."
+    },
+    {
+      "id": "apart_next",
+      "quantity": "saturated near-end coefficient, 0.4 mm apart",
+      "measure": {
+        "step": "apart",
+        "pointer": "/segments/0/k_next"
+      },
+      "value": 0.044126656144034555,
+      "tolerance": {
+        "relative": 0.02
+      },
+      "reason": "The finite elements' capacitance and inductance couplings of the pair's cross-section against Cohn's exact even and odd impedances (in one dielectric k_L = k_C = (Z_e − Z_o)/(Z_e + Z_o)): a difference of the two modes, so twice their error."
+    },
+    {
+      "id": "close_fext",
+      "quantity": "far-end crosstalk, 0.2 mm apart, per cent",
+      "measure": {
+        "step": "close",
+        "pointer": "/segments/0/fext_percent"
+      },
+      "value": 0.0,
+      "tolerance": {
+        "absolute": 0.001
+      },
+      "reason": "In one dielectric the capacitive and inductive couplings are equal: no far-end crosstalk, but for rounding."
+    }
+  ]
+}

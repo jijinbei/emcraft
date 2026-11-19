@@ -1,0 +1,59 @@
+{
+  "title": "A stripline's losses and delay: 40 mm of a thick strip centred between planes 1 mm apart in εr 4.3, tan δ 0.02, at 1 GHz",
+  "kind": "theory",
+  "source": "D. M. Pozar, Microwave Engineering, 4th ed., Wiley 2012, §3.8 (eq. 3.198, Wheeler's incremental inductance rule for a thick stripline's conductor attenuation, √εr Z0 < 120) and §2.7 (a TEM line's dielectric attenuation k tan δ / 2); S. B. Cohn, Problems in strip transmission lines, IRE Trans. MTT 3, 1955, pp. 119–126 (the thick centred strip's impedance, W/(b − t) ≥ 0.35); copper of 5.8e7 S/m, R_s = √(π f μ₀/σ). Reference values evaluated independently of EMCraft from the published formulas.",
+  "quantities": [
+    {
+      "id": "wide_conductor",
+      "quantity": "conductor loss of 40 mm, 0.5 mm × 70 µm strip, dB",
+      "measure": {
+        "step": "wide",
+        "pointer": "/sections/0/loss/conductor"
+      },
+      "value": 0.052421844078233304,
+      "tolerance": {
+        "relative": 0.03
+      },
+      "reason": "Wheeler's rule by the finite elements' recessed vacuum capacitances against Pozar's fit of it (with Cohn's thick-strip impedance), itself within a few per cent."
+    },
+    {
+      "id": "narrow_conductor",
+      "quantity": "conductor loss of 40 mm, 0.4 mm × 35 µm strip, dB",
+      "measure": {
+        "step": "narrow",
+        "pointer": "/sections/0/loss/conductor"
+      },
+      "value": 0.05825822455753346,
+      "tolerance": {
+        "relative": 0.03
+      },
+      "reason": "Wheeler's rule by the finite elements' recessed vacuum capacitances against Pozar's fit of it (with Cohn's thick-strip impedance), itself within a few per cent."
+    },
+    {
+      "id": "dielectric",
+      "quantity": "dielectric loss of 40 mm, dB",
+      "measure": {
+        "step": "wide",
+        "pointer": "/sections/0/loss/dielectric"
+      },
+      "value": 0.1509967818886675,
+      "tolerance": {
+        "absolute": 1e-05
+      },
+      "reason": "In one dielectric the line's loss tangent is the dielectric's: exact but for the reply's rounding to a micro-decibel."
+    },
+    {
+      "id": "delay",
+      "quantity": "delay of 40 mm, ps",
+      "measure": {
+        "step": "wide",
+        "pointer": "/sections/0/delay"
+      },
+      "value": 276.6772919060922,
+      "tolerance": {
+        "absolute": 0.002
+      },
+      "reason": "In one dielectric ε_eff is εr: exact but for the reply's rounding to a thousandth of a picosecond."
+    }
+  ]
+}
