@@ -442,4 +442,47 @@ mod tests {
         assert!(ok.solve(10e9, 1 << 20).is_err());
         assert!(InductivePost { radius: 10e-3, width: 100e-3, x: 50e-3, z: 50e-3, length: 100e-3 }.solve(10e9, 32).is_err(), "k r₀ > 2");
     }
+
+    /// A row of posts with one number wrong at a time: a post out through each of the four
+    /// sides or touching it, a guide of no width or length, and node counts that are odd, too
+    /// few or too many over the posts together.
+    #[test]
+    fn each_hostile_number_of_a_row_of_posts_is_refused() {
+        let (a, l, r) = (22.86e-3, 60e-3, 1.5e-3);
+        let row = |first: Post| Posts { width: a, length: l, posts: vec![first, Post { x: 11.43e-3, z: 40e-3, radius: r }] };
+        let mid = Post { x: 11.43e-3, z: 20e-3, radius: r };
+        assert!(row(mid).solve(10e9, 32).is_ok());
+        // Just inside each side, then on it and beyond.
+        for (inside, out) in [(Post { x: r * 1.01, ..mid }, [r, r * 0.5]), (Post { x: a - r * 1.01, ..mid }, [a - r, a - r * 0.5])] {
+            assert!(row(inside).solve(10e9, 32).is_ok(), "{inside:?}");
+            for x in out {
+                assert!(row(Post { x, ..mid }).solve(10e9, 32).is_err(), "x {x}");
+            }
+        }
+        for (inside, out) in [(r * 1.01, [r, r * 0.5]), (l - r * 1.01, [l - r, l - r * 0.5])] {
+            let far = |z: f64| Posts { width: a, length: l, posts: vec![Post { z, ..mid }] };
+            assert!(far(inside).solve(10e9, 32).is_ok(), "z {inside}");
+            for z in out {
+                assert!(far(z).solve(10e9, 32).is_err(), "z {z}");
+            }
+        }
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(Posts { width: bad, ..row(mid) }.solve(10e9, 32).is_err(), "width {bad}");
+            assert!(Posts { length: bad, ..row(mid) }.solve(10e9, 32).is_err(), "length {bad}");
+            assert!(row(Post { radius: bad, ..mid }).solve(10e9, 32).is_err(), "radius {bad}");
+        }
+        assert!(row(Post { x: f64::NAN, ..mid }).solve(10e9, 32).is_err() && row(Post { z: f64::INFINITY, ..mid }).solve(10e9, 32).is_err());
+        // Two posts whose rims just touch, and just clear.
+        let beside = |gap: f64| row(Post { z: 40e-3 - 2.0 * r - gap, ..mid });
+        assert!(beside(0.0).solve(10e9, 32).is_err() && beside(1e-5).solve(10e9, 32).is_ok());
+        for nodes in [6, 7, 33, MAX_NODES / 2 + 2] {
+            assert!(row(mid).solve(10e9, nodes).is_err(), "{nodes}");
+        }
+        assert!(row(mid).solve(10e9, 8).is_ok());
+        for f in [0.0, -1e10, f64::NAN] {
+            assert!(row(mid).solve(f, 32).is_err(), "{f}");
+        }
+        // At cut-off, c/2a, nothing travels.
+        assert!(row(mid).solve(C0 / (2.0 * a), 32).is_err());
+    }
 }

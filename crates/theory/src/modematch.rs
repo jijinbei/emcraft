@@ -789,4 +789,215 @@ mod tests {
         approx::assert_abs_diff_eq!(r.norm_sqr() + f.norm_sqr(), 1.0, epsilon = 1e-9);
         assert!((f - g).norm() < 1e-9, "{f} {g}");
     }
+
+    /// Loss, permeability and ends of two materials in equal apertures: only the fundamental
+    /// takes part, so the three lines are the exact cascade (Pozar, Microwave Engineering, 4th
+    /// ed., §3.3, §4.4) with k² = k₀² εr μr (1 − j tan δ) and the admittance β/μr.
+    #[test]
+    fn lossy_and_magnetic_fillings_reduce_to_the_te10_cascade() {
+        let b = 0.01016;
+        let fill = [(0.015, 1.0, 1.0, 0.0), (0.02, 2.5, 1.5, 0.02), (0.01, 2.0, 1.0, 0.0)];
+        let exact = Te10Line { a: A, layers: fill.iter().map(|&(l, e, m, t)| Layer::lossy(l, e, m, t)).collect() };
+        let h = HPlaneLine { sections: fill.iter().map(|&(l, e, m, t)| HSection { mu_r: m, loss_tangent: t, ..full(l, e) }).collect() };
+        let r = RectLine {
+            sections: fill
+                .iter()
+                .map(|&(length, eps_r, mu_r, loss_tangent)| RectSection { length, eps_r, mu_r, loss_tangent, x0: 0.0, a: A, y0: 0.0, b })
+                .collect(),
+        };
+        for f in [7.0e9, 10.0e9] {
+            let (e11, e21) = exact.solve(f).unwrap().s_power();
+            assert!(e11.norm_sqr() + e21.norm_sqr() < 0.99, "the loss shows");
+            for (s11, s21) in [h.solve(f, 12).unwrap(), r.solve(f, 12).unwrap()] {
+                assert!((s11 - e11).norm() < 1e-12 && (s21 - e21).norm() < 1e-12, "{f}: {s11} {e11} {s21} {e21}");
+            }
+        }
+        // The E-plane line takes one material: a lossy filling's e^(−jβL), nothing reflected.
+        let e = EPlaneLine { a: A, sections: vec![ESection { length: 0.03, eps_r: 2.5, mu_r: 1.5, loss_tangent: 0.02, y0: 0.0, height: b }; 2] };
+        let (r, t) = e.solve(8.0e9, 12).unwrap();
+        let one = Te10Line { a: A, layers: vec![Layer::lossy(0.06, 2.5, 1.5, 0.02)] }.solve(8.0e9).unwrap();
+        assert!(r.norm() < 1e-12 && (t - one.s21).norm() < 1e-12 && t.norm() < 0.9, "{r} {t}");
+    }
+
+    /// The products of two apertures' modes are their integrals, summed by the midpoint rule:
+    /// both bases, apertures away from the origin, equal widths apart (the difference's
+    /// wavenumber zero, its phase not) and the vector modes' factors.
+    #[test]
+    fn products_of_shifted_and_equal_modes_match_quadrature() {
+        let n = 4000;
+        let sum = |lo: f64, hi: f64, f: &dyn Fn(f64) -> f64| {
+            (0..n).map(|i| f(lo + (hi - lo) * (i as f64 + 0.5) / n as f64)).sum::<f64>() * (hi - lo) / n as f64
+        };
+        for (x1, a1, x2, a2) in [(0.003, 0.02, 0.007, 0.012), (0.003, 0.012, 0.005, 0.012)] {
+            let sin = coupling(Basis::Sin, (4, x1, a1), (3, x2, a2));
+            let cos = coupling(Basis::Cos { a: A }, (4, x1, a1), (3, x2, a2));
+            for i in 0..4 {
+                for j in 0..3 {
+                    let (p, q) = ((i + 1) as f64 * PI / a1, (j + 1) as f64 * PI / a2);
+                    let s = sum(x2, x2 + a2, &|x| (p * (x - x1)).sin() * (q * (x - x2)).sin());
+                    assert!((sin.at(i, j).re - s).abs() < 1e-9, "sin {i} {j}");
+                    let (p, q) = (i as f64 * PI / a1, j as f64 * PI / a2);
+                    let c = sum(x2, x2 + a2, &|x| (p * (x - x1)).cos() * (q * (x - x2)).cos());
+                    assert!((cos.at(i, j).re - c).abs() < 1e-9, "cos {i} {j}");
+                    let got = int_product(true, (p, x1), (q, x2), (x2, x2 + a2));
+                    assert!((got - c).abs() < 1e-9, "product {i} {j}");
+                }
+            }
+        }
+        // Equal wavenumbers with a phase between them, over a part of the aperture.
+        let (k, s1, s2, lo, hi) = (300.0, 0.002, 0.005, 0.006, 0.013);
+        for cos in [true, false] {
+            let f = |t: f64| if cos { (k * (t - s1)).cos() * (k * (t - s2)).cos() } else { (k * (t - s1)).sin() * (k * (t - s2)).sin() };
+            assert!((int_product(cos, (k, s1), (k, s2), (lo, hi)) - sum(lo, hi, &f)).abs() < 1e-9, "{cos}");
+        }
+    }
+
+    /// Elimination with a zero on the diagonal needs its rows exchanged: [[0, 2], [1, 0]] x =
+    /// (4, 3) is x = (3, 2); a matrix of rank one has no solution.
+    #[test]
+    fn elimination_pivots_and_refuses_a_singular_matrix() {
+        let m = |v: &[f64], c: usize| Mat { r: v.len() / c, c, v: v.iter().map(|x| C::new(*x, 0.0)).collect() };
+        let x = m(&[0.0, 2.0, 1.0, 0.0], 2).solve(&m(&[4.0, 3.0], 1)).unwrap();
+        assert!((x.at(0, 0) - 3.0).norm() < 1e-15 && (x.at(1, 0) - 2.0).norm() < 1e-15);
+        assert!(m(&[1.0, 2.0, 2.0, 4.0], 2).solve(&m(&[1.0, 1.0], 1)).is_err());
+    }
+
+    /// Which aperture holds which, and what two share: plain geometry of rectangles.
+    #[test]
+    fn apertures_hold_and_meet_as_rectangles() {
+        let r = |x0: f64, a: f64, y0: f64, b: f64| Rect { x0, a, y0, b };
+        let big = r(1.0, 4.0, 2.0, 3.0);
+        assert!(big.holds(&r(2.0, 1.0, 3.0, 1.0), 1e-9) && big.holds(&big, 1e-9));
+        // Out by more than the tolerance on each of the four sides, one at a time.
+        for out in [r(0.9, 1.0, 3.0, 1.0), r(4.5, 1.0, 3.0, 1.0), r(2.0, 1.0, 1.9, 1.0), r(2.0, 1.0, 4.5, 1.0)] {
+            assert!(!big.holds(&out, 1e-9), "{out:?}");
+            assert!(big.holds(&out, 0.6), "within a tolerance of 0.6: {out:?}");
+        }
+        assert_eq!(big.meet(&r(4.0, 3.0, 1.0, 2.0)), Some(r(4.0, 1.0, 2.0, 1.0)));
+        assert_eq!(r(4.0, 3.0, 1.0, 2.0).meet(&big), Some(r(4.0, 1.0, 2.0, 1.0)));
+        assert_eq!(big.meet(&r(2.0, 1.0, 3.0, 1.0)), Some(r(2.0, 1.0, 3.0, 1.0)));
+        // Side by side, corner to corner and apart: no area in common.
+        for apart in [r(5.0, 1.0, 2.0, 3.0), r(1.0, 4.0, 5.0, 1.0), r(5.0, 1.0, 5.0, 1.0), r(7.0, 1.0, 2.0, 3.0), r(1.0, 4.0, -3.0, 1.0)] {
+            assert_eq!(big.meet(&apart), None, "{apart:?}");
+        }
+    }
+
+    /// WR-90's modes in the order of their cut-offs f_c = (c/2)√((m/a)² + (n/b)²) (Pozar §3.3):
+    /// TE10 6.56, TE20 13.11, TE01 14.75, TE11 and TM11 16.15, TE30 19.67, TE21 and TM21
+    /// 19.74 GHz, then TE31 and TM31 at 24.59.
+    #[test]
+    fn a_guides_modes_are_those_below_the_cut_off_in_order() {
+        let wr90 = Rect { x0: 0.0, a: A, y0: 0.0, b: 0.01016 };
+        let kc = |f: f64| 2.0 * PI * f / C0;
+        let list = |f: f64, cap: usize| -> Vec<(bool, u32, u32)> {
+            vmodes(&wr90, kc(f), cap).iter().map(|m| (m.te, (m.kx * A / PI).round() as u32, (m.ky * 0.01016 / PI).round() as u32)).collect()
+        };
+        let expected = [(true, 1, 0), (true, 2, 0), (true, 0, 1), (true, 1, 1), (false, 1, 1), (true, 3, 0), (true, 2, 1), (false, 2, 1)];
+        assert_eq!(list(20.0e9, 100), expected);
+        assert_eq!(list(20.0e9, 3), expected[..3]);
+        assert_eq!(list(16.0e9, 100), expected[..3]);
+        // Below every cut-off: the fundamental alone, along the longer side.
+        assert_eq!(list(1.0e9, 100), [(true, 1, 0)]);
+        let tall = Rect { x0: 0.0, a: 0.01, y0: 0.0, b: 0.02 };
+        let only = vmodes(&tall, kc(1.0e9), 100);
+        assert!(only.len() == 1 && only[0].kx == 0.0 && (only[0].ky - PI / 0.02).abs() < 1e-12 && only[0].te);
+        let square = vmodes(&Rect { b: 0.01, ..tall }, kc(1.0e9), 0);
+        assert!(square.len() == 1 && (square[0].kx - PI / 0.01).abs() < 1e-12 && square[0].ky == 0.0);
+    }
+
+    /// Apertures that overlap only in part: the field on the junction's plane lies on what they
+    /// share, so the line is the one with a guide of that shared aperture between them, as
+    /// short as one likes. With the offset along x that is an H-plane line of three nested
+    /// sections, along y an E-plane line; with both the junction is lossless and reciprocal.
+    #[test]
+    fn apertures_overlapping_in_part_join_through_what_they_share() {
+        let b = 0.01016;
+        let sec = |length: f64, x0: f64, a: f64, y0: f64, h: f64| RectSection { length, eps_r: 1.0, mu_r: 1.0, loss_tangent: 0.0, x0, a, y0, b: h };
+        let thin = 1e-12;
+        // Along x: the second guide 6 mm to the side.
+        let (r, t) = RectLine { sections: vec![sec(0.01, 0.001, A, 0.002, b), sec(0.012, 0.007, A, 0.002, b)] }.solve(10e9, 120).unwrap();
+        approx::assert_abs_diff_eq!(r.norm_sqr() + t.norm_sqr(), 1.0, epsilon = 1e-9);
+        let h = |x0: f64, width: f64, length: f64| HSection { length, eps_r: 1.0, mu_r: 1.0, x0, width, loss_tangent: 0.0 };
+        let line = HPlaneLine { sections: vec![h(0.001, A, 0.01), h(0.007, A - 0.006, thin), h(0.007, A, 0.012)] };
+        let (rh, th) = line.solve(10e9, 100).unwrap();
+        assert!((r - rh).norm() < 5e-3 && (t - th).norm() < 5e-3 && r.norm() > 0.2, "{r} {rh} {t} {th}");
+        // Along y: the second guide 3 mm up.
+        let (r, t) = RectLine { sections: vec![sec(0.01, 0.001, A, 0.002, b), sec(0.012, 0.001, A, 0.005, b)] }.solve(10e9, 250).unwrap();
+        let e = |y0: f64, height: f64, length: f64| ESection { length, eps_r: 1.0, mu_r: 1.0, loss_tangent: 0.0, y0, height };
+        let line = EPlaneLine { a: A, sections: vec![e(0.002, b, 0.01), e(0.005, b - 0.003, thin), e(0.005, b, 0.012)] };
+        let (re, te) = line.solve(10e9, 80).unwrap();
+        assert!((r - re).norm() < 1e-2 && (t - te).norm() < 1e-2 && r.norm() > 0.05, "{r} {re} {t} {te}");
+        // Along both, between two materials, and seen from the other end.
+        let (first, second) = (sec(0.01, 0.0, A, 0.0, b), RectSection { eps_r: 1.5, ..sec(0.012, 0.004, A, 0.003, b) });
+        let (r, f) = RectLine { sections: vec![first, second] }.solve(10e9, 100).unwrap();
+        let (_, g) = RectLine { sections: vec![second, first] }.solve(10e9, 100).unwrap();
+        approx::assert_abs_diff_eq!(r.norm_sqr() + f.norm_sqr(), 1.0, epsilon = 1e-9);
+        assert!((f - g).norm() < 1e-9, "{f} {g}");
+        // Apertures side by side or apart share nothing.
+        for x0 in [A, 2.0 * A] {
+            assert!(RectLine { sections: vec![first, sec(0.01, x0, A, 0.0, b)] }.solve(10e9, 50).is_err(), "{x0}");
+        }
+    }
+
+    /// Each number of a line wrong, one at a time, and nothing else: refused.
+    #[test]
+    fn each_hostile_number_of_a_line_is_refused() {
+        let b = 0.01016;
+        let bad = [0.0, -1.0, f64::NAN, f64::INFINITY];
+        let h = full(0.01, 1.0);
+        let solve_h = |s: HSection| HPlaneLine { sections: vec![full(0.01, 1.0), s] }.solve(1e10, 10);
+        assert!(solve_h(h).is_ok());
+        for v in bad {
+            for s in [HSection { length: v, ..h }, HSection { eps_r: v, ..h }, HSection { mu_r: v, ..h }, HSection { width: v, ..h }] {
+                assert!(solve_h(s).is_err(), "{s:?}");
+            }
+        }
+        for s in [HSection { x0: f64::NAN, ..h }, HSection { loss_tangent: -0.1, ..h }, HSection { loss_tangent: f64::NAN, ..h }] {
+            assert!(solve_h(s).is_err(), "{s:?}");
+        }
+        let line = HPlaneLine { sections: vec![h] };
+        assert!(line.solve(1e10, 2000).is_ok() && line.solve(1e10, 2001).is_err());
+        for f in [0.0, -1e10, f64::INFINITY] {
+            assert!(line.solve(f, 10).is_err(), "{f}");
+        }
+
+        let e = ESection { length: 0.01, eps_r: 1.0, mu_r: 1.0, loss_tangent: 0.0, y0: 0.0, height: b };
+        assert!(EPlaneLine { a: A, sections: vec![e, e] }.solve(1e10, 10).is_ok());
+        for a in bad {
+            assert!(EPlaneLine { a, sections: vec![e] }.solve(1e10, 10).is_err(), "{a}");
+        }
+        // Two materials, differing in one property only.
+        for other in [ESection { mu_r: 2.0, ..e }, ESection { loss_tangent: 0.01, ..e }, ESection { eps_r: 2.0, ..e }] {
+            assert!(EPlaneLine { a: A, sections: vec![e, other] }.solve(1e10, 10).is_err(), "{other:?}");
+        }
+
+        let r = RectSection { length: 0.01, eps_r: 1.0, mu_r: 1.0, loss_tangent: 0.0, x0: 0.0, a: A, y0: 0.0, b };
+        let solve_r = |s: RectSection| RectLine { sections: vec![r, s] }.solve(1e10, 10);
+        assert!(solve_r(r).is_ok());
+        for v in bad {
+            for s in [
+                RectSection { length: v, ..r },
+                RectSection { eps_r: v, ..r },
+                RectSection { mu_r: v, ..r },
+                RectSection { a: v, ..r },
+                RectSection { b: v, ..r },
+            ] {
+                assert!(solve_r(s).is_err(), "{s:?}");
+            }
+        }
+        for s in [
+            RectSection { x0: f64::NAN, ..r },
+            RectSection { y0: f64::INFINITY, ..r },
+            RectSection { loss_tangent: -0.1, ..r },
+            RectSection { loss_tangent: f64::NAN, ..r },
+        ] {
+            assert!(solve_r(s).is_err(), "{s:?}");
+        }
+        let line = RectLine { sections: vec![r] };
+        assert!(line.solve(1e10, 1500).is_ok() && line.solve(1e10, 1501).is_err() && line.solve(1e10, 0).is_err());
+        assert!(RectLine { sections: vec![] }.solve(1e10, 10).is_err());
+        for f in [0.0, -1e10, f64::NAN, f64::INFINITY] {
+            assert!(line.solve(f, 10).is_err(), "{f}");
+        }
+    }
 }

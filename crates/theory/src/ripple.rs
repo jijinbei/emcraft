@@ -183,4 +183,46 @@ mod tests {
             assert!(!found(g, psi, low, high, steps, n), "{psi} {low} {high} {steps} {n}");
         }
     }
+
+    /// Without a ripple the determinant is each space harmonic's J₀(pₙr₀): the modes are the
+    /// smooth guide's TM0m seen at ψ + 2πn, f = c √(((ψ + 2πn)/d)² + (x₀ₘ/r₀)²)/2π, for every
+    /// harmonic kept (−3..3 here) and none beyond.
+    #[test]
+    fn a_smooth_guides_modes_are_every_harmonics_tm0m() {
+        let (r0, d, psi): (f64, f64, f64) = (0.015, 0.0167, 0.9);
+        // J₀'s zeros (Abramowitz & Stegun, Table 9.5); the fifth's modes lie above the search.
+        let zeros = [2.404_825_557_695_773, 5.520_078_110_286_311, 8.653_727_912_911_012, 11.791_534_439_014_281];
+        let top = 40e9;
+        let mut want: Vec<f64> = (-3..=3)
+            .flat_map(|n| zeros.map(|x| C0 * (((psi + 2.0 * PI * n as f64) / d).powi(2) + (x / r0).powi(2)).sqrt() / (2.0 * PI)))
+            .filter(|f| *f < top)
+            .collect();
+        want.sort_by(f64::total_cmp);
+        let got = RippledGuide { radius: r0, ripple: 0.0, period: d }.frequencies(psi, 5e9, top, 7000, 3).unwrap();
+        assert_eq!(got.len(), want.len(), "{got:?} {want:?}");
+        assert!(want.len() >= 12);
+        for (g, w) in got.iter().zip(&want) {
+            assert!((g / w - 1.0).abs() < 1e-9, "{g} against {w}");
+        }
+    }
+
+    /// A shallow ripple's stop band at ψ = π by perturbation of the wall (J. C. Slater,
+    /// *Microwave Electronics*, 1950, §4.7: Δω/ω = ∫(μ|H|² − ε|E|²)dV over the volume taken
+    /// away, by twice the stored energy). The smooth guide's two standing TM01 waves at
+    /// k = π/d, E_z ∝ J₀(pr) cos kz and sin kz, have on the wall ε|E_r|² ∝ k² sin² kz and
+    /// μ|H_φ|² ∝ (ω/c)² cos² kz (or the other way round); against the wall's h cos 2kz they
+    /// move apart by Δf/f = (h/r₀)(1 + (kc/ω)²), to first order in h (the rest as h²: a few
+    /// millionths here).
+    #[test]
+    fn a_shallow_ripples_stop_band_is_slaters_perturbation() {
+        let (r0, d): (f64, f64) = (0.015, 0.0167);
+        let k = PI / d;
+        let w0 = C0 * (k * k + (2.404_825_557_695_773 / r0).powi(2)).sqrt();
+        for h in [2e-5, 4e-5] {
+            let f = RippledGuide { radius: r0, ripple: h, period: d }.frequencies(PI, 9e9, 14e9, 2000, 3).unwrap();
+            let gap = (f[1] - f[0]) / (w0 / (2.0 * PI));
+            let want = h / r0 * (1.0 + (k * C0 / w0).powi(2));
+            assert!((gap / want - 1.0).abs() < 1e-4, "{h}: {gap} against {want}");
+        }
+    }
 }

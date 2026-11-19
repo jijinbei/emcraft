@@ -729,3 +729,349 @@ mod pair_tests {
         assert!(pairs(&b, "A", "GND").unwrap().is_empty());
     }
 }
+
+/// The screening's geometry against plain geometry worked out by hand, and its line against
+/// the textbook's microstrip.
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+    use emcraft_model::pcb::{Copper, Layer};
+
+    const MM: f64 = 1e-3;
+
+    fn seg(id: &str, net: &str, layer: &str, start: [f64; 2], end: [f64; 2], width: f64) -> Segment {
+        Segment { id: id.into(), net: net.into(), layer: layer.into(), start, end, width }
+    }
+
+    fn plane(net: &str, layer: &str, x: [f64; 2], y: [f64; 2]) -> Copper {
+        Copper { net: net.into(), layer: layer.into(), polygon: vec![[x[0], y[0]], [x[1], y[0]], [x[1], y[1]], [x[0], y[1]]] }
+    }
+
+    /// Four layers 0.18, 1.22 and 0.18 mm apart, each dielectric its own permittivity; ground
+    /// 60 × 40 mm on the layers named.
+    fn board(segments: Vec<Segment>, grounds: &[&str]) -> Board {
+        let layer = |name: &str, z: f64, eps_below: f64| Layer { name: name.into(), z, eps_below, loss_below: 0.0, copper: 0.0 };
+        Board {
+            name: "test".into(),
+            layers: vec![layer("top", 0.0, 4.2), layer("g1", 0.18 * MM, 3.0), layer("g2", 1.4 * MM, 2.2), layer("bottom", 1.58 * MM, 1.0)],
+            segments,
+            vias: vec![],
+            copper: grounds.iter().map(|l| plane("GND", l, [0.0, 0.06], [0.0, 0.04])).collect(),
+            notes: vec![],
+            region: None,
+            classes: vec![],
+        }
+    }
+
+    fn codes(r: &Report) -> Vec<Code> {
+        r.findings.iter().map(|f| f.code).collect()
+    }
+
+    /// A 3-4-5 segment from (1, 1) to (4, 5): a point 2 along it and 1.5 to its left is 1.5
+    /// away at 2/5; one behind its start is nearest the start.
+    #[test]
+    fn the_nearest_point_of_a_slanted_segment() {
+        let (a, b) = ([1.0, 1.0], [4.0, 5.0]);
+        let (d, t) = near([1.0, 3.5], a, b);
+        assert!((d - 1.5).abs() < 1e-14 && (t - 0.4).abs() < 1e-14, "{d} {t}");
+        let (d, t) = near([0.4, 0.2], a, b);
+        assert!((d - 1.0).abs() < 1e-14 && t == 0.0, "{d} {t}");
+        let (d, t) = near([7.0, 9.0], a, b);
+        assert!((d - 5.0).abs() < 1e-14 && t == 1.0, "{d} {t}");
+        // A segment of no length: the distance to its point.
+        assert_eq!(near([4.0, 5.0], a, a), (5.0, 0.0));
+    }
+
+    /// An L of unit squares, a diamond met at its corners' heights and a slanted triangle.
+    #[test]
+    fn points_in_and_out_of_polygons() {
+        let l = [[0.0, 0.0], [2.0, 0.0], [2.0, 1.0], [1.0, 1.0], [1.0, 2.0], [0.0, 2.0]];
+        for p in [[0.5, 0.5], [1.5, 0.5], [0.5, 1.5], [1.0, 1.0], [2.0, 0.5], [0.3, 2.0], [0.0, 0.0]] {
+            assert!(inside(p, &l), "{p:?}");
+        }
+        for p in [[1.5, 1.5], [2.5, 0.5], [-0.5, 0.5], [0.5, 2.5], [0.5, -0.5], [1.001, 1.001], [3.0, 1.0], [-1.0, 1.0], [-1.0, 2.0]] {
+            assert!(!inside(p, &l), "{p:?}");
+        }
+        let diamond = [[0.0, -1.0], [1.0, 0.0], [0.0, 1.0], [-1.0, 0.0]];
+        assert!(inside([-0.5, 0.0], &diamond) && inside([0.5, 0.0], &diamond) && inside([0.0, 0.5], &diamond));
+        assert!(!inside([-2.0, 0.0], &diamond) && !inside([2.0, 0.0], &diamond) && !inside([-0.6, 0.6], &diamond) && !inside([0.6, -0.6], &diamond));
+        let triangle = [[1.0, 1.0], [5.0, 2.0], [2.0, 6.0]];
+        assert!(inside([3.0, 3.0], &triangle) && inside([2.0, 4.0], &triangle));
+        assert!(!inside([3.0, 1.2], &triangle) && !inside([4.5, 4.0], &triangle) && !inside([1.2, 3.0], &triangle) && !inside([6.0, 3.0], &triangle));
+    }
+
+    /// A line from x = −1 to 4 over the unit square and the square from 2 to 3: uncovered on
+    /// its fifths 0–1, 2–3 and 4–5. The work is counted: an edge each, then each polygon's
+    /// edges for each stretch until one covers it (8 + 8 + 4 + 8 + 8 + 8).
+    #[test]
+    fn the_stretches_no_polygon_covers() {
+        let squares = [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]], [[2.0, 0.0], [3.0, 0.0], [3.0, 1.0], [2.0, 1.0]]];
+        let polys: Vec<&[[f64; 2]]> = squares.iter().map(|p| &p[..]).collect();
+        let mut budget = 44;
+        let open = gaps([-1.0, 0.5], [4.0, 0.5], &polys, &mut budget).unwrap();
+        assert_eq!(budget, 0);
+        assert_eq!(open.len(), 3);
+        for (got, want) in open.iter().zip([[0.0, 0.2], [0.4, 0.6], [0.8, 1.0]]) {
+            assert!((got[0] - want[0]).abs() < 1e-12 && (got[1] - want[1]).abs() < 1e-12, "{got:?}");
+        }
+        for short in [43, 40, 8, 7, 0] {
+            assert!(gaps([-1.0, 0.5], [4.0, 0.5], &polys, &mut { short }).is_err(), "{short}");
+        }
+        let run = |a: [f64; 2], b: [f64; 2]| gaps(a, b, &polys, &mut 1000).unwrap();
+        // Within one square, along its edge and from corner to corner: covered.
+        assert!(run([0.1, 0.2], [0.9, 0.7]).is_empty() && run([0.0, 0.0], [1.0, 0.0]).is_empty() && run([0.0, 0.0], [1.0, 1.0]).is_empty());
+        // Along the edges' line across the gap between the squares: thirds of 0.5 to 2.5 over
+        // the gap from 1 to 2.
+        let open = run([0.5, 1.0], [2.5, 1.0]);
+        assert!(open.len() == 1 && (open[0][0] - 0.25).abs() < 1e-12 && (open[0][1] - 0.75).abs() < 1e-12, "{open:?}");
+        // Slanted, from the first square's middle to the second's: out between x = 1 and 2.
+        let open = run([0.5, 0.25], [2.5, 0.75]);
+        assert!(open.len() == 1 && (open[0][0] - 0.25).abs() < 1e-12 && (open[0][1] - 0.75).abs() < 1e-12, "{open:?}");
+        // Off every polygon: all of it.
+        assert_eq!(run([0.0, 2.0], [3.0, 2.0]), [[0.0, 1.0]]);
+    }
+
+    /// A route is a line when its segments make one chain whose copper meets nowhere else.
+    #[test]
+    fn routes_that_are_one_line_and_routes_that_are_not() {
+        let w = 0.3 * MM;
+        let chain = |points: &[[f64; 2]], widths: &[f64]| -> Vec<Segment> {
+            points.windows(2).enumerate().map(|(i, p)| seg(&format!("s{i}"), "DATA", "top", p[0], p[1], widths[i % widths.len()])).collect()
+        };
+        let look = |segments: Vec<Segment>| inspect(&board(segments, &["g1"]), "DATA", "GND").unwrap();
+        // Up, across and down, given out of order: 15 + 25 + 12 mm, walked from an end.
+        let mut bent = chain(&[[0.005, 0.005], [0.005, 0.02], [0.03, 0.02], [0.03, 0.008]], &[w]);
+        bent.rotate_left(1);
+        let r = look(bent);
+        assert!(r.model_available && codes(&r).is_empty(), "{:?}", r.findings);
+        assert!(r.path == [2, 0, 1] || r.path == [1, 0, 2], "{:?}", r.path);
+        approx::assert_abs_diff_eq!(r.length, 0.052, epsilon = 1e-15);
+        // Two legs 0.2 and 0.6 mm wide that are not joined to each other touch when their
+        // centres are less than 0.4 mm apart.
+        let hairpin =
+            |apart: f64| chain(&[[0.005, 0.01], [0.03, 0.01], [0.03, 0.01 + apart], [0.005, 0.01 + apart]], &[0.2 * MM, 0.1 * MM, 0.6 * MM]);
+        assert!(!codes(&look(hairpin(0.41 * MM))).contains(&Code::RouteTopology));
+        assert!(codes(&look(hairpin(0.39 * MM))).contains(&Code::RouteTopology));
+        // Legs that would cross if they went on, but stop short: a line. Going on, they cross.
+        let open = [[0.005, 0.005], [0.03, 0.005], [0.03, 0.012], [0.02, 0.008]];
+        assert!(look(chain(&open, &[w])).model_available);
+        let crossing = [[0.005, 0.005], [0.03, 0.005], [0.03, 0.012], [0.015, 0.003]];
+        assert!(codes(&look(chain(&crossing, &[w]))).contains(&Code::RouteTopology));
+        // A closed triangle has no ends; a ring with two tails has two, and branches.
+        let closed = look(chain(&[[0.005, 0.005], [0.03, 0.005], [0.02, 0.02], [0.005, 0.005]], &[w]));
+        assert!(codes(&closed).contains(&Code::RouteTopology) && !closed.model_available);
+        let mut ring = chain(&[[0.005, 0.01], [0.015, 0.01], [0.025, 0.02], [0.035, 0.01], [0.045, 0.01]], &[w]);
+        ring.extend([seg("r0", "DATA", "top", [0.015, 0.01], [0.025, 0.0], w), seg("r1", "DATA", "top", [0.025, 0.0], [0.035, 0.01], w)]);
+        assert!(codes(&look(ring)).contains(&Code::RouteTopology));
+        // 512 segments are looked at, 513 refused.
+        let many = |n: usize| chain(&(0..=n).map(|i| [0.005 + i as f64 * 5e-5, 0.01]).collect::<Vec<_>>(), &[w]);
+        assert!(inspect(&board(many(512), &["g1"]), "DATA", "GND").is_ok());
+        assert!(inspect(&board(many(513), &["g1"]), "DATA", "GND").is_err());
+    }
+
+    /// A microstrip's impedance and effective permittivity by the textbook's closed form
+    /// (Pozar, Microwave Engineering, 4th ed., eqs. 3.195–3.196), within a few per cent of
+    /// Hammerstad and Jensen's.
+    fn pozar(u: f64, er: f64) -> (f64, f64) {
+        let ee = (er + 1.0) / 2.0 + (er - 1.0) / 2.0 / (1.0 + 12.0 / u).sqrt();
+        let z = if u <= 1.0 {
+            60.0 / ee.sqrt() * (8.0 / u + u / 4.0).ln()
+        } else {
+            120.0 * std::f64::consts::PI / (ee.sqrt() * (u + 1.393 + 0.667 * (u + 1.444).ln()))
+        };
+        (z, ee)
+    }
+
+    /// The reference is the nearest layer with ground copper, the line the microstrip of the
+    /// dielectric between the two; what is not an outer microstrip over the next layer has no
+    /// model.
+    #[test]
+    fn the_reference_is_the_nearest_ground_and_the_line_its_microstrip() {
+        let w = 0.3 * MM;
+        let route = |layer: &str, width: f64| vec![seg("route", "DATA", layer, [0.005, 0.01], [0.045, 0.01], width)];
+        let line = |layer: &str, grounds: &[&str], width: f64| inspect(&board(route(layer, width), grounds), "DATA", "GND").unwrap();
+        for (layer, grounds, reference, er) in
+            [("top", ["g1", "g2"], "g1", 4.2), ("bottom", ["g1", "g2"], "g2", 2.2), ("bottom", ["g2", "top"], "g2", 2.2)]
+        {
+            let r = line(layer, &grounds, w);
+            assert!(r.model_available && codes(&r).is_empty(), "{layer}: {:?}", r.findings);
+            let s = &r.sections[0];
+            let (z, ee) = pozar(w / (0.18 * MM), er);
+            assert_eq!(s.reference, reference);
+            approx::assert_abs_diff_eq!(s.h, 0.18 * MM, epsilon = 1e-15);
+            approx::assert_abs_diff_eq!(s.length, 0.04, epsilon = 1e-15);
+            assert!((s.impedance / z - 1.0).abs() < 0.03, "{layer}: {} against {z}", s.impedance);
+            assert!((s.delay / (0.04 * ee.sqrt() / C0) - 1.0).abs() < 0.03, "{layer}: {}", s.delay);
+            assert!(s.uncovered.is_empty());
+        }
+        // Ground two layers down: found, 1.4 mm away, but no microstrip of this model.
+        let far = line("top", &["g2"], w);
+        assert_eq!(codes(&far), [Code::UnsupportedCrossSection]);
+        assert!(far.sections[0].reference == "g2" && (far.sections[0].h - 1.4 * MM).abs() < 1e-15 && !far.model_available);
+        // A trace on an inner layer, and strips far too narrow and too wide.
+        assert_eq!(codes(&line("g1", &["g2"], w)), [Code::UnsupportedCrossSection]);
+        assert_eq!(codes(&line("g2", &["g1"], w)), [Code::UnsupportedCrossSection]);
+        assert_eq!(codes(&line("top", &["g1"], 0.005 * 0.18 * MM)), [Code::UnsupportedCrossSection]);
+        assert!(codes(&line("top", &["g1"], 200.0 * 0.18 * MM)).contains(&Code::UnsupportedCrossSection));
+        // No ground but on the trace's own layer: no reference.
+        assert_eq!(codes(&line("top", &["top"], w)), [Code::NoReference]);
+    }
+
+    /// A slot from x = 20 to 21 mm in the nearest ground is a gap from 3/8 to 2/5 of a route
+    /// from 5 to 45 mm, whatever lies over it: ground on a farther layer, another net's copper
+    /// on the same one.
+    #[test]
+    fn a_slot_is_not_covered_by_other_copper() {
+        let mut b = board(vec![seg("route", "DATA", "top", [0.005, 0.01], [0.045, 0.01], 0.3 * MM)], &["g2"]);
+        b.copper.extend([
+            plane("GND", "g1", [0.0, 0.02], [0.0, 0.04]),
+            plane("GND", "g1", [0.021, 0.06], [0.0, 0.04]),
+            plane("PWR", "g1", [0.019, 0.022], [0.0, 0.04]),
+            plane("GND", "bottom", [0.0, 0.06], [0.0, 0.04]),
+        ]);
+        let r = inspect(&b, "DATA", "GND").unwrap();
+        assert!(codes(&r).contains(&Code::ReturnGap) && !r.model_available);
+        let open = &r.sections[0].uncovered;
+        assert!(open.len() == 1 && (open[0][0] - 0.375).abs() < 1e-12 && (open[0][1] - 0.4).abs() < 1e-12, "{open:?}");
+        assert_eq!(r.sections[0].reference, "g1");
+    }
+
+    /// The return current's corridor is h + W/2 to either side of the trace's centre (here
+    /// 0.18 + 0.25 mm): ground ending 2 % nearer on one side is an edge, 2 % farther is not,
+    /// for a route along x, along y and at 37° and its reverse.
+    #[test]
+    fn the_return_corridor_is_h_and_half_the_width_to_either_side() {
+        let reach = 0.18 * MM + 0.25 * MM;
+        for degrees in [0.0_f64, 90.0, 37.0, 217.0] {
+            let (u, n) = ([degrees.to_radians().cos(), degrees.to_radians().sin()], [-degrees.to_radians().sin(), degrees.to_radians().cos()]);
+            let at = |along: f64, across: f64| [0.05 + along * u[0] + across * n[0], 0.05 + along * u[1] + across * n[1]];
+            let look = |left: f64, right: f64| {
+                let mut b = board(vec![seg("route", "DATA", "top", at(0.0, 0.0), at(0.02, 0.0), 0.5 * MM)], &[]);
+                b.copper = vec![Copper {
+                    net: "GND".into(),
+                    layer: "g1".into(),
+                    polygon: vec![at(-0.005, -right), at(0.025, -right), at(0.025, left), at(-0.005, left)],
+                }];
+                codes(&inspect(&b, "DATA", "GND").unwrap())
+            };
+            assert!(look(1.02 * reach, 1.02 * reach).is_empty(), "{degrees}");
+            assert_eq!(look(0.98 * reach, 5.0 * reach), [Code::ReferenceEdge], "{degrees}");
+            assert_eq!(look(5.0 * reach, 0.98 * reach), [Code::ReferenceEdge], "{degrees}");
+        }
+    }
+
+    /// Another signal on the layer within 3h (0.54 mm) of the trace's edge and within about
+    /// 6° of its direction is named with the gap between the edges; the same net, the ground,
+    /// another layer, a crossing trace and one farther off are not.
+    #[test]
+    fn a_close_parallel_signal_is_named_with_its_gap() {
+        let victim = seg("route", "DATA", "top", [0.005, 0.01], [0.045, 0.01], 0.3 * MM);
+        let look = |other: Segment| {
+            let r = inspect(&board(vec![other, victim.clone()], &["g1"]), "DATA", "GND").unwrap();
+            r.findings.into_iter().find(|f| f.code == Code::NearbySignal).map(|f| f.detail)
+        };
+        // Centres 0.9 mm apart, the traces 0.3 and 0.5 mm wide: edges 0.5 mm apart.
+        let beside = |net: &str, layer: &str, apart: f64| seg("other", net, layer, [0.01, 0.01 + apart], [0.03, 0.01 + apart], 0.5 * MM);
+        let detail = look(beside("CLK", "top", 0.9 * MM)).unwrap();
+        assert!(detail.starts_with("CLK ") && detail.contains("gap 5.000e-4 m"), "{detail}");
+        assert!(look(beside("CLK", "top", -0.9 * MM)).is_some());
+        // It leaves the line its model.
+        assert!(inspect(&board(vec![beside("CLK", "top", 0.9 * MM), victim.clone()], &["g1"]), "DATA", "GND").unwrap().model_available);
+        assert_eq!(look(beside("CLK", "top", 0.96 * MM)), None);
+        assert_eq!(look(beside("GND", "top", 0.9 * MM)), None);
+        assert_eq!(look(beside("DATA", "top", 0.9 * MM)), None);
+        assert_eq!(look(beside("CLK", "bottom", 0.9 * MM)), None);
+        // Overlapping copper: no gap left.
+        assert!(look(beside("CLK", "top", 0.3 * MM)).unwrap().contains("gap 0.000e0 m"));
+        // Turned about a point 0.95 mm off: by 3° still alongside, by 10° and 90° not.
+        let turned = |degrees: f64| {
+            let (c, s) = (degrees.to_radians().cos(), degrees.to_radians().sin());
+            seg("other", "CLK", "top", [0.02 - 0.002 * c, 0.01095 - 0.002 * s], [0.02 + 0.002 * c, 0.01095 + 0.002 * s], 0.5 * MM)
+        };
+        assert!(look(turned(3.0)).is_some() && look(turned(183.0)).is_some());
+        assert_eq!(look(turned(10.0)), None);
+        assert_eq!(look(seg("other", "CLK", "top", [0.02, 0.0106], [0.02, 0.015], 0.5 * MM)), None);
+        // The work is counted, one for each other signal's segment on the layer.
+        let b = board(vec![beside("CLK", "top", 0.9 * MM), beside("GND", "top", 0.9 * MM), victim.clone()], &["g1"]);
+        let mut budget = 1;
+        assert_eq!(nearby_signal(&b, &victim, "GND", 0.18 * MM, &mut budget).unwrap().map(|(net, _)| net), Some("CLK"));
+        assert_eq!(budget, 0);
+        assert!(nearby_signal(&b, &victim, "GND", 0.18 * MM, &mut budget).is_err());
+        assert_eq!(nearby_signal(&b, &victim, "CLK", 0.18 * MM, &mut 5).unwrap().map(|(net, _)| net), Some("GND"));
+    }
+
+    /// A quarter wave of 100 Ω between 50 Ω ends shows 100²/50 = 200 Ω: S11 = 0.6 and
+    /// S21 = −0.8j (Pozar §2.5, §4.4). At 0 Hz the line is not there. Numbers out of range
+    /// are refused.
+    #[test]
+    fn a_quarter_wave_transformer_and_refused_numbers() {
+        let section = Section { id: "line".into(), reference: "gnd".into(), length: 0.1, h: 0.001, impedance: 100.0, delay: 1e-9, uncovered: vec![] };
+        let r = Report { findings: vec![], sections: vec![section], path: vec![0], model_available: true, length: 0.1 };
+        let (s11, s21) = s_parameters(&r, 0.25e9, 50.0).unwrap();
+        assert!((s11 - C::new(0.6, 0.0)).norm() < 1e-14 && (s21 - C::new(0.0, -0.8)).norm() < 1e-14, "{s11} {s21}");
+        let (s11, s21) = s_parameters(&r, 0.0, 50.0).unwrap();
+        assert!(s11.norm() < 1e-15 && (s21 - 1.0).norm() < 1e-15);
+        assert!(s_parameters(&r, 1e12, 0.1).is_ok() && s_parameters(&r, 1e9, 10000.0).is_ok());
+        for (f, z) in
+            [(1.001e12, 50.0), (-1.0, 50.0), (f64::INFINITY, 50.0), (1e9, 0.09), (1e9, 10001.0), (1e9, f64::NAN), (1e9, f64::INFINITY), (1e9, -50.0)]
+        {
+            assert!(s_parameters(&r, f, z).is_err(), "{f} {z}");
+        }
+        assert!(s_parameters(&Report { path: vec![1], ..r.clone() }, 1e9, 50.0).is_err());
+        assert!(s_parameters(&Report { model_available: false, ..r }, 1e9, 50.0).is_err());
+    }
+
+    /// A pair along a 3-4-5 direction: the target 1 mm to the left of a 50 mm source, drawn
+    /// backwards from 30 to 10 mm along it. The stretch they share is 20 mm, the edges
+    /// 1 − (0.3 + 0.5)/2 mm apart; a target reaching beyond an end is cut at the end.
+    #[test]
+    fn a_slanted_pair_is_cut_to_what_the_two_share() {
+        let (u, n) = ([0.6, 0.8], [-0.8, 0.6]);
+        let at = |along: f64, across: f64| [0.01 + along * u[0] + across * n[0], 0.005 + along * u[1] + across * n[1]];
+        let source = seg("s", "A", "top", at(0.0, 0.0), at(0.05, 0.0), 0.3 * MM);
+        let look = |targets: Vec<Segment>| {
+            let mut segments = vec![source.clone()];
+            segments.extend(targets);
+            pairs(&board(segments, &["g1"]), "A", "GND")
+        };
+        let target = |from: f64, to: f64, across: f64| seg("t", "B", "top", at(from, across), at(to, across), 0.5 * MM);
+        let close = |p: [f64; 2], q: [f64; 2]| distance(p, q) < 1e-12;
+        let p = look(vec![target(0.03, 0.01, MM)]).unwrap();
+        assert_eq!(p.len(), 1);
+        approx::assert_abs_diff_eq!(p[0].length, 0.02, epsilon = 1e-12);
+        approx::assert_abs_diff_eq!(p[0].gap, 0.6 * MM, epsilon = 1e-12);
+        assert!(close(p[0].a[0], [0.016, 0.013]) && close(p[0].a[1], [0.028, 0.029]), "{:?}", p[0].a);
+        assert!(close(p[0].b[0], [0.0152, 0.0136]) && close(p[0].b[1], [0.0272, 0.0296]), "{:?}", p[0].b);
+        assert!(p[0].source == "A" && p[0].target == "B" && p[0].source_segment == "s" && p[0].target_segment == "t" && p[0].layer == "top");
+        // Beyond the source's end and before its start.
+        let p = look(vec![target(0.04, 0.07, -MM)]).unwrap();
+        approx::assert_abs_diff_eq!(p[0].length, 0.01, epsilon = 1e-12);
+        assert!(close(p[0].a[1], at(0.05, 0.0)) && close(p[0].b[0], at(0.04, -MM)) && close(p[0].b[1], at(0.05, -MM)));
+        let p = look(vec![target(-0.02, 0.01, MM)]).unwrap();
+        assert!(close(p[0].a[0], at(0.0, 0.0)) && close(p[0].b[0], at(0.0, MM)) && (p[0].length - 0.01).abs() < 1e-12);
+        // Nothing shared: past the end, copper on copper, the ground, and a target a hundred
+        // thousandth of a radian off the source's direction.
+        assert!(look(vec![target(0.05, 0.06, MM)]).unwrap().is_empty());
+        assert!(look(vec![target(0.01, 0.03, 0.3 * MM)]).unwrap().is_empty());
+        assert!(look(vec![Segment { net: "GND".into(), ..target(0.01, 0.03, MM) }]).unwrap().is_empty());
+        assert!(look(vec![seg("t", "B", "top", at(0.01, MM), at(0.03, MM + 2e-7), 0.5 * MM)]).unwrap().is_empty());
+        // 256 pairs are listed, 257 refused.
+        let stack = |count: usize| (0..count).map(|i| Segment { id: format!("t{i}"), ..target(0.01, 0.03, (i + 1) as f64 * MM) }).collect::<Vec<_>>();
+        assert_eq!(look(stack(256)).unwrap().len(), 256);
+        assert!(look(stack(257)).is_err());
+    }
+
+    /// The pairs' work is bounded: 500 source segments against 2000 others is a million
+    /// looks, one more than that is refused; so are 513 segments of the net.
+    #[test]
+    fn the_pairs_work_is_bounded() {
+        let sources = |count: usize| (0..count).map(|i| seg(&format!("s{i}"), "A", "top", [i as f64 * 1e-5, 0.0], [i as f64 * 1e-5, 0.01], 0.3 * MM));
+        let others = |count: usize| {
+            (0..count).map(|i| seg(&format!("t{i}"), "B", "top", [0.0, 0.02 + i as f64 * 1e-6], [0.01, 0.02 + i as f64 * 1e-6], 0.3 * MM))
+        };
+        let look = |s: usize, t: usize| pairs(&board(sources(s).chain(others(t)).collect(), &["g1"]), "A", "GND");
+        assert!(look(500, 2000).unwrap().is_empty());
+        assert!(look(500, 2001).is_err());
+        assert!(look(512, 1).is_ok() && look(513, 1).is_err());
+    }
+}

@@ -234,3 +234,41 @@ pub fn two_stream_growth(wa: f64, va: f64, wb: f64, vb: f64, k: f64) -> Option<f
     // Round-off of a real root is not growth.
     Some(if g < 1e-9 * scale { 0.0 } else { g })
 }
+
+#[cfg(test)]
+mod beam_tests {
+    use super::*;
+
+    use emcraft_model::particles::ELECTRON;
+
+    /// The annular beam's γ_b at a current is where I = I₀ (γ₀ − γ_b) β_b / (2 ln(R/r_b))
+    /// (Miller 1982, §3.2), with I₀ = 4πε₀mc³/e = 17 045 A for electrons, on the fast branch
+    /// between γ₀^{1/3} and γ₀: no current leaves γ₀, the limiting current γ₀^{1/3}, where
+    /// (γ₀ − γ₀^{1/3}) √(1 − γ₀^{−2/3}) = (γ₀^{2/3} − 1)^{3/2}.
+    #[test]
+    fn the_beam_slows_to_where_its_current_is_the_formulas() {
+        let beam = AnnularBeam { gamma0: 2.5, ratio: 1.4, species: ELECTRON };
+        let limit = beam.limiting().unwrap();
+        approx::assert_abs_diff_eq!(limit, 17_045.09 * (2.5f64.powf(2.0 / 3.0) - 1.0).powf(1.5) / (2.0 * 1.4f64.ln()), epsilon = 1e-6 * limit);
+        for part in [0.2, 0.6, 0.95] {
+            let g = beam.depressed(part * limit).unwrap();
+            assert!(g > 2.5f64.cbrt() && g < 2.5, "{g}");
+            let current = 17_045.09 * (2.5 - g) * (1.0 - 1.0 / (g * g)).sqrt() / (2.0 * 1.4f64.ln());
+            assert!((current / (part * limit) - 1.0).abs() < 1e-6, "{part}: {current}");
+        }
+        approx::assert_abs_diff_eq!(beam.depressed(0.0).unwrap(), 2.5, epsilon = 1e-12);
+        approx::assert_abs_diff_eq!(beam.depressed(limit * (1.0 - 1e-10)).unwrap(), 2.5f64.cbrt(), epsilon = 1e-4);
+        // At the limit and beyond, below no current, and for a beam at rest or filling its pipe.
+        for current in [limit, 2.0 * limit, -1.0, f64::NAN] {
+            assert_eq!(beam.depressed(current), None, "{current}");
+        }
+        for bad in [
+            AnnularBeam { gamma0: 1.0, ..beam },
+            AnnularBeam { ratio: 1.0, ..beam },
+            AnnularBeam { ratio: f64::INFINITY, ..beam },
+            AnnularBeam { ratio: 0.5, ..beam },
+        ] {
+            assert!(bad.limiting().is_none() && bad.depressed(1.0).is_none(), "{bad:?}");
+        }
+    }
+}

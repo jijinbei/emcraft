@@ -283,4 +283,50 @@ mod tests {
             assert!(Stack { layers: vec![air(0.0), bad, air(0.0)], ..st.clone() }.s(10e9).is_err(), "{bad:?}");
         }
     }
+
+    /// A period of two sections: cos ψ = cos θ₁ cos θ₂ − ½(Z₁/Z₂ + Z₂/Z₁) sin θ₁ sin θ₂, θ = βl,
+    /// Z ∝ μ/β (Collin, *Foundations for Microwave Engineering*, 2nd ed., §8.2; Pozar §8.1), an
+    /// even function of each β and so good below a section's cut-off too. At a section's
+    /// cut-off (θ₁ = 0, Z₁ sin θ₁ → ωμ₁l₁) it is cos θ₂ − (μ₁l₁β₂/2μ₂) sin θ₂.
+    #[test]
+    fn a_period_of_two_sections_is_its_closed_form() {
+        let a = 0.02286;
+        let sections = [(0.004, 1.0, 1.0), (0.006, 2.5, 1.6)];
+        let beta = |f: f64, (_, eps, mu): (f64, f64, f64)| C::new((2.0 * PI * f / C0).powi(2) * eps * mu - (PI / a).powi(2), 0.0).sqrt();
+        let closed = |f: f64| {
+            let (b1, b2) = (beta(f, sections[0]), beta(f, sections[1]));
+            let (t1, t2) = (b1 * sections[0].0, b2 * sections[1].0);
+            let ratio = sections[0].2 * b2 / (sections[1].2 * b1);
+            (t1.cos() * t2.cos() - 0.5 * (ratio + 1.0 / ratio) * t1.sin() * t2.sin()).re
+        };
+        // 5 GHz: the empty section cut off, the loaded one passing; 3 GHz: both cut off.
+        for f in [3.0e9, 5.0e9, 8.0e9, 14.0e9, 23.0e9] {
+            approx::assert_abs_diff_eq!(bloch_cos(a, &sections, f), closed(f), epsilon = 1e-12 * closed(f).abs().max(1.0));
+        }
+        // The empty section's cut-off, c/2a, and a magnetic one's, c/(2a√(εμ)).
+        for first in [(0.004, 1.0, 1.0), (0.004, 1.0, 4.0_f64)] {
+            let f = C0 / (2.0 * a * (first.1 * first.2).sqrt());
+            let b2 = beta(f, sections[1]).re;
+            let want = (b2 * 0.006).cos() - first.2 * 0.004 * b2 / (2.0 * 1.6) * (b2 * 0.006).sin();
+            let got = bloch_cos(a, &[first, sections[1]], f);
+            assert!(got.is_finite() && (got - want).abs() < 1e-9, "{got} against {want}");
+        }
+        // The Bloch waves' frequencies are where the closed form is cos ψ: as many as it has
+        // crossings, in ascending order.
+        let (psi, top) = (1.1, 30e9);
+        let found = bloch_frequencies(a, &sections, psi, top);
+        let crossings =
+            (1..4000).filter(|i| (closed(top * *i as f64 / 4000.0) - psi.cos()) * (closed(top * (*i + 1) as f64 / 4000.0) - psi.cos()) < 0.0).count();
+        assert!(found.len() == crossings && crossings >= 3, "{found:?} {crossings}");
+        assert!(found.windows(2).all(|w| w[0] < w[1]));
+        for f in &found {
+            assert!((closed(*f) - psi.cos()).abs() < 1e-9, "{f}");
+        }
+        // No wave of a phase outside (0, π), nor below no frequency.
+        for (psi, top) in
+            [(0.0, 30e9), (PI, 30e9), (-1.0, 30e9), (4.0, 30e9), (f64::NAN, 30e9), (1.1, 0.0), (1.1, -30e9), (1.1, f64::NAN), (1.1, f64::INFINITY)]
+        {
+            assert!(bloch_frequencies(a, &sections, psi, top).is_empty(), "{psi} {top}");
+        }
+    }
 }

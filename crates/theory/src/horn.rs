@@ -152,4 +152,28 @@ mod tests {
         let d = 8.0 * std::f64::consts::PI * rho * rho / (a1 * b1) * (cq * cq + sq * sq) * ((cu - cv).powi(2) + (su - sv).powi(2));
         assert!((10.0 * d.log10() - 18.78).abs() < 0.1, "{} dB", 10.0 * d.log10());
     }
+
+    /// The walls meet where similar triangles put them: a side b at the feed and b₁ at the
+    /// mouth, L apart, come together ρ before the mouth with b₁/ρ = b/(ρ − L). From 1 to 3
+    /// over 4: ρ₁ = 6; from 2 to 5: ρ₂ = 20/3. A mouth no larger than the feed either way has
+    /// no apex.
+    #[test]
+    fn the_apexes_are_where_the_walls_meet() {
+        let horn = PyramidalHorn { a: 2.0, b: 1.0, a1: 5.0, b1: 3.0, length: 4.0 };
+        let (rho1, rho2) = horn.apexes().unwrap();
+        assert!((rho1 - 6.0).abs() < 1e-14 && (rho2 - 20.0 / 3.0).abs() < 1e-14, "{rho1} {rho2}");
+        for bad in [
+            PyramidalHorn { a1: 2.0, ..horn },
+            PyramidalHorn { a1: 1.5, ..horn },
+            PyramidalHorn { b1: 1.0, ..horn },
+            PyramidalHorn { b1: 0.5, ..horn },
+            PyramidalHorn { length: 0.0, ..horn },
+            PyramidalHorn { a: -2.0, ..horn },
+            PyramidalHorn { b: f64::NAN, ..horn },
+            PyramidalHorn { b1: f64::INFINITY, ..horn },
+        ] {
+            assert!(bad.apexes().is_err() && bad.directivity(1e10).is_err(), "{bad:?}");
+        }
+        assert!(horn.directivity(0.0).is_err() && horn.directivity(f64::NAN).is_err());
+    }
 }

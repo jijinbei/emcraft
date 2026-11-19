@@ -382,4 +382,61 @@ mod tests {
         let s = sphere_cavity_resonances(0.01, 1.0, 4);
         assert!(s[..3].iter().all(|m| m.1 == "TM11") && s[3].1 == "TM21", "{s:?}");
     }
+
+    /// A filled cylinder's resonances from the tabulated zeros (Abramowitz & Stegun, Table 9.5:
+    /// j₀₁ = 2.404826, j₁₁ = 3.831706, j′₁₁ = 1.841184, j′₂₁ = 3.054237) in Pozar's §6.4
+    /// forms, f = c/(2π√εr) √((x/a)² + (pπ/d)²): radius 10 mm, length 15 mm, εr = 2.5; the
+    /// modes that turn with φ twice each.
+    #[test]
+    fn a_filled_cylinders_resonances_are_the_tabulated_zeros() {
+        let (a, d, eps_r) = (0.01, 0.015, 2.5f64);
+        let want = [
+            ("TM010", 2.404_826, 0.0, 1),
+            ("TE111", 1.841_184, 1.0, 2),
+            ("TM011", 2.404_826, 1.0, 1),
+            ("TE211", 3.054_237, 1.0, 2),
+            ("TM110", 3.831_706, 0.0, 2),
+        ];
+        let got = cylinder_cavity_resonances(a, d, eps_r, 8);
+        let mut at = 0;
+        for (label, x, p, copies) in want {
+            let f = C0 / (2.0 * PI * eps_r.sqrt()) * ((x / a).powi(2) + (p * PI / d).powi(2)).sqrt();
+            for (got_f, got_label) in &got[at..at + copies] {
+                assert!(got_label == label && (got_f / f - 1.0).abs() < 1e-6, "{got_label} {got_f} against {label} {f}");
+            }
+            at += copies;
+        }
+        assert_eq!(at, got.len());
+    }
+
+    /// A filled sphere's resonances, f = c x/(2π a √εr), from the tabulated roots (Harrington
+    /// 1961, Tables 6-1 and 6-2: TM 2.744, 3.870, 4.973; TE 4.493, 5.763), each 2n + 1 times.
+    /// A sphere of one filling to within a millionth of the wall, as one layer or as two, is
+    /// that sphere.
+    #[test]
+    fn a_filled_spheres_resonances_are_the_tabulated_roots() {
+        let (a, eps_r) = (0.01, 2.25f64);
+        let want = [("TM11", 2.743_707, 3), ("TM21", 3.870_239, 5), ("TE11", 4.493_409, 3), ("TM31", 4.973_420, 7), ("TE21", 5.763_459, 5)];
+        let got = sphere_cavity_resonances(a, eps_r, 23);
+        let mut at = 0;
+        for (label, x, copies) in want {
+            let f = C0 * x / (2.0 * PI * a * eps_r.sqrt());
+            for (got_f, got_label) in &got[at..at + copies] {
+                assert!(got_label == label && (got_f / f - 1.0).abs() < 1e-6, "{got_label} {got_f} against {label} {f}");
+            }
+            at += copies;
+        }
+        assert_eq!(at, got.len());
+        let inner = a * (1.0 - 1e-6);
+        for filled in [
+            layered_sphere_resonances(inner, eps_r, a, 23),
+            coated_sphere_resonances(&[(inner, eps_r)], a, 23),
+            coated_sphere_resonances(&[(0.4 * a, eps_r), (inner, eps_r)], a, 23),
+        ] {
+            assert_eq!(filled.len(), 23);
+            for (one, whole) in filled.iter().zip(&got) {
+                assert!(one.1 == whole.1 && (one.0 / whole.0 - 1.0).abs() < 1e-5, "{one:?} {whole:?}");
+            }
+        }
+    }
 }

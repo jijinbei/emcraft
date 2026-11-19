@@ -289,4 +289,28 @@ mod tests {
         assert!(close(-(g * g).re / (k0 * k0), eps_eff) && close(db * g.re * 1e-3, att), "{f}: {g}");
         assert!(close(db * s21.norm().ln(), s21_db) && close(s21.arg().to_degrees(), s21_deg), "{f}: {s21}");
     }
+
+    /// sin(√s x)/√s for every sign of s: the sine, x at zero, the hyperbolic sine below; and
+    /// for complex s its series x(1 − s x²/6) near zero, which meets the function there.
+    #[test]
+    fn the_sines_over_their_roots_are_whole_functions_of_s() {
+        let x = 0.3;
+        approx::assert_abs_diff_eq!(sinc_s(4.0, x), 0.6f64.sin() / 2.0, epsilon = 1e-15);
+        approx::assert_abs_diff_eq!(sinc_s(-4.0, x), 0.6f64.sinh() / 2.0, epsilon = 1e-15);
+        assert_eq!(sinc_s(0.0, x), x);
+        approx::assert_abs_diff_eq!(cos_s(-4.0, x), 0.6f64.cosh(), epsilon = 1e-15);
+        for s in [C::new(4.0, 0.0), C::new(-4.0, 0.0), C::new(1.0, -2.0)] {
+            let k = s.sqrt();
+            assert!((sinc_c(s, x) - (k * x).sin() / k).norm() < 1e-15, "{s}");
+        }
+        // Either side of where the series takes over (|s x²| = 1e-8): x(1 − s x²/6), the next
+        // term (s x²)²/120 below rounding.
+        for size in [0.5e-8, 2e-8] {
+            let s = C::new(0.6, -0.8) * (size / (x * x));
+            let want = x * (1.0 - C::new(0.6, -0.8) * size / 6.0);
+            assert!((sinc_c(s, x) - want).norm() < 1e-15, "{size}: {} {want}", sinc_c(s, x));
+            assert!((sinc_c(s, x) - x).norm() > 1e-10);
+        }
+        assert_eq!(sinc_c(C::new(0.0, 0.0), x), C::new(x, 0.0));
+    }
 }

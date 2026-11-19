@@ -486,4 +486,41 @@ mod tests {
         };
         assert!(through.solve(10e9, ok).is_err());
     }
+
+    /// A smooth guide with one number wrong at a time: its length, filling and frequency, each
+    /// count of the discretisation at 0 and one past its cap, and a wall whose ends differ in
+    /// height or are not level.
+    #[test]
+    fn each_hostile_number_of_a_smooth_guide_is_refused() {
+        let ok = Discretisation { along: 10, across: 2, degree: 3, modes: 4 };
+        let flat = |length: f64, eps_r: f64, plane: Plane| SmoothGuide { plane, length, eps_r, wall: |_z: f64| (B, 0.0), corners: vec![] };
+        let e = Plane::E { width: A };
+        assert!(flat(0.03, 1.0, e).solve(10e9, ok).is_ok() && flat(0.03, 2.0, Plane::H).solve(10e9, ok).is_ok());
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(flat(bad, 1.0, e).solve(10e9, ok).is_err(), "length {bad}");
+            assert!(flat(0.03, bad, e).solve(10e9, ok).is_err(), "εr {bad}");
+            assert!(flat(0.03, 1.0, e).solve(bad, ok).is_err(), "frequency {bad}");
+            assert!(flat(0.03, 1.0, Plane::E { width: bad }).solve(10e9, ok).is_err(), "width {bad}");
+        }
+        for d in [
+            Discretisation { along: 0, ..ok },
+            Discretisation { across: 0, ..ok },
+            Discretisation { across: MAX_ACROSS + 1, ..ok },
+            Discretisation { degree: MAX_DEGREE + 1, ..ok },
+            Discretisation { modes: 0, ..ok },
+            Discretisation { modes: MAX_MODES + 1, ..ok },
+        ] {
+            assert!(flat(0.03, 1.0, e).solve(10e9, d).is_err(), "{d:?}");
+        }
+        let with = |wall: fn(f64) -> (f64, f64)| SmoothGuide { plane: e, length: 0.03, eps_r: 1.0, wall, corners: vec![] };
+        // The far end a millionth higher, each end sloping, an end of no height.
+        assert!(with(|z| (B * (1.0 + 1e-6 * z / 0.03), 0.0)).solve(10e9, ok).is_err());
+        assert!(with(|z| (B, if z == 0.0 { 1e-3 } else { 0.0 })).solve(10e9, ok).is_err());
+        assert!(with(|z| (B, if z == 0.0 { 0.0 } else { 1e-3 })).solve(10e9, ok).is_err());
+        assert!(
+            with(|_| (0.0, 0.0)).solve(10e9, ok).is_err()
+                && with(|_| (f64::INFINITY, 0.0)).solve(10e9, ok).is_err()
+                && with(|_| (-B, 0.0)).solve(10e9, ok).is_err()
+        );
+    }
 }

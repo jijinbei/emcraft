@@ -433,4 +433,21 @@ mod tests {
         approx::assert_abs_diff_eq!((cpl / thr).arg().to_degrees(), 90.0, epsilon = 1e-9);
         assert!((db(at(4e9)[1]) - -10.394285400787203).abs() < 1e-9 && (db(at(6e9)[1]) - -10.394284047483557).abs() < 1e-9);
     }
+
+    /// Strips are refused for each number that is not finite and positive, and for an even
+    /// impedance no higher than the odd one.
+    #[test]
+    fn hostile_coupled_strips_are_refused() {
+        let good = [60.0, 40.0, 0.004, 2.2];
+        let run = |v: [f64; 4]| dimensions(v[0], v[1], v[2], v[3]);
+        assert!(run(good).is_ok());
+        for i in 0..4 {
+            for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+                let mut v = good;
+                v[i] = bad;
+                assert!(run(v).is_err(), "{v:?}");
+            }
+        }
+        assert!(run([50.0, 50.0, 0.004, 2.2]).is_err());
+    }
 }
