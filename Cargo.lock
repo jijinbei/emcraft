@@ -2148,6 +2148,7 @@ dependencies = [
  "pcbcraft-storage",
  "proptest",
  "quick-xml 0.42.0",
+ "serde_json",
  "solidcraft-exchange",
  "thiserror 2.0.21",
  "uuid",

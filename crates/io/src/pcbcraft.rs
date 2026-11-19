@@ -10,18 +10,24 @@
 //! through vias, each with the net PCBCraft resolves for its copper island. Coordinates are
 //! PCBCraft's board coordinates (Y down on screen, as KiCad's), in metres.
 //!
-//! **What is not.** Copper zones (PCBCraft keeps their outlines only, not filled yet), copper
-//! that PCBCraft resolves to no single net, and pads without copper or a net are left out, each
-//! noted. A stackup whose dielectric thickness or permittivity is unknown is refused unless the
+//! The copper zones come back beside the board as pours still to fill ([`Pour`]: their outlines
+//! and fill settings — clearance, the board's when the zone gives none, thermal reliefs, minimum
+//! island, priority): PCBCraft keeps a zone's outline and settings, not filled copper yet, so
+//! the caller fills them (`emcraft_engine`'s `pcb.import`).
+//!
+//! **What is not.** Copper that PCBCraft resolves to no single net, pads without copper or a
+//! net, and zones whose net or layer is not resolved are left out, each noted. A stackup whose dielectric thickness or permittivity is unknown is refused unless the
 //! caller supplies the copper layers itself: no electrical value is guessed.
 
 use std::path::Path;
 
-use emcraft_model::pcb::{Board, Copper, Layer, Segment, Via};
+use emcraft_model::pcb::{Board, Connection, Copper, Layer, Pour, Segment, Via};
+use pcbcraft_engine::Project;
 use pcbcraft_engine::board::definition::PadShape;
 use pcbcraft_engine::board::materials::{Construction, Material, MaterialRef};
 use pcbcraft_engine::board::setup::{BoardSetup, Stratum};
 use pcbcraft_engine::board::view::{CopperLayers, PadView};
+use pcbcraft_engine::board::zones;
 use pcbcraft_engine::schematic::Point;
 
 use crate::{Error, Result};
@@ -52,16 +58,22 @@ pub fn is_project(path: &Path) -> bool {
     ext.as_deref() == Some("pc") || path.file_name().is_some_and(|n| n == "project.json") || path.join("project.json").is_file()
 }
 
-/// The board of the PCBCraft project at `path`, its copper layers the caller's
-/// (`override_layers`, in SI metres, named as the board names its copper layers) or its own
-/// stackup's. Refused: no physical board, a board with no layer setup, an unknown dielectric
-/// thickness or permittivity (without the caller's layers), no routed copper.
+/// The board of the PCBCraft project at `path` and its copper zones as pours still to fill, its
+/// copper layers the caller's (`override_layers`, in SI metres, named as the board names its
+/// copper layers) or its own stackup's. Refused: no physical board, a board with no layer setup,
+/// an unknown dielectric thickness or permittivity (without the caller's layers), no routed
+/// copper.
 ///
 /// ```
 /// assert!(emcraft_io::pcbcraft::read(std::path::Path::new("no/such/project.json"), None).is_err());
 /// ```
-pub fn read(path: &Path, override_layers: Option<Vec<Layer>>) -> Result<Board> {
+pub fn read(path: &Path, override_layers: Option<Vec<Layer>>) -> Result<(Board, Vec<Pour>)> {
     let project = pcbcraft_storage::preview(path).map_err(|e| bad(&e))?;
+    board(&project, override_layers)
+}
+
+/// [`read`] of a project already open: its first physical board.
+pub fn board(project: &Project, override_layers: Option<Vec<Layer>>) -> Result<(Board, Vec<Pour>)> {
     let view = project.boards().next().ok_or_else(|| bad("the project has no physical board"))?;
     let setup = view.setup().ok_or_else(|| bad("the board has no layer setup (create it in PCBCraft's Board setup)"))?;
     let copper: Vec<(uuid::Uuid, String)> =
@@ -136,11 +148,51 @@ pub fn read(path: &Path, override_layers: Option<Vec<Layer>>) -> Result<Board> {
             }
         }
     }
-    if !view.zones().is_empty() {
-        note(&mut board, "Copper zones were skipped: PCBCraft keeps their outlines, not filled copper yet.");
+    let pours = pours(view.zones(), &zone_nets(&view), view.effective_rules().values.clearance_nm, &name_of);
+    if pours.len() < view.zones().len() {
+        note(&mut board, "Copper zones whose net or copper layer is not resolved were skipped.");
     }
     board.check().map_err(|e| bad(&e.to_string()))?;
-    Ok(board)
+    Ok((board, pours))
+}
+
+/// The names of the nets the board's registry knows by id (zones name their net by its id).
+fn zone_nets(view: &pcbcraft_engine::board::view::BoardView) -> Vec<(uuid::Uuid, String)> {
+    let Ok(registry) = view.inspect_zone_nets() else { return Vec::new() };
+    let nets = registry.get("nets").and_then(|n| n.as_array()).map_or(&[][..], Vec::as_slice);
+    nets.iter()
+        .filter_map(|n| {
+            let id = n.get("id").and_then(|v| v.as_str()).and_then(|s| s.parse().ok())?;
+            Some((id, n.get("name")?.as_str()?.to_string()))
+        })
+        .collect()
+}
+
+/// The zones as pours (metres), each on its net's name and its copper layer's; a zone without
+/// its own clearance takes the board's (`board_clearance`, nm). Zones whose net or layer is
+/// unknown are left out.
+fn pours(zones: &[zones::Zone], nets: &[(uuid::Uuid, String)], board_clearance: i64, layer: &impl Fn(uuid::Uuid) -> Option<String>) -> Vec<Pour> {
+    zones
+        .iter()
+        .filter_map(|z| {
+            let net = nets.iter().find(|(id, _)| *id == z.net)?.1.clone();
+            let o = &z.options;
+            let connection = match o.connection {
+                zones::Connection::Thermal => Connection::Thermal { gap: m(o.thermal_gap_nm), spoke: m(o.spoke_width_nm) },
+                zones::Connection::Solid => Connection::Solid,
+                zones::Connection::None => Connection::None,
+            };
+            Some(Pour {
+                net,
+                layer: layer(z.layer)?,
+                outline: z.points.iter().map(|p| xy(*p)).collect(),
+                clearance: m(o.clearance_nm.unwrap_or(board_clearance)),
+                connection,
+                min_island: o.min_island_area_nm2 as f64 * 1e-18,
+                priority: u32::from(o.priority),
+            })
+        })
+        .collect()
 }
 
 /// The copper layers from the stackup, top down: each one's depth z (m) below the top copper,

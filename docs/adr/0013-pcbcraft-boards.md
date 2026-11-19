@@ -27,8 +27,17 @@ the finite elements — is the same for either source.
 - **Nothing guessed.** A dielectric's thickness and permittivity come from the board's own setup
   (the finished thickness, the one Dk its material's reports agree on, their Df the loss
   tangent); when unknown — PCBCraft leaves them blank by default — the import is refused unless
-  the caller gives the copper layers (`stackup`). Zones are left out, noted: PCBCraft keeps their
-  outlines, not filled copper, as the KiCad reader leaves out unfilled zones.
+  the caller gives the copper layers (`stackup`).
+- **Zones filled by EMCraft, until PCBCraft fills them.** PCBCraft keeps a zone's outline and
+  fill settings (clearance, thermal gap and spokes, connection, minimum island, priority), not
+  filled copper (its fill is PCBCraft's issue #232). Without the fill a board's ground pour is
+  missing and its lines have no plane under them, so `emcraft_io::pcbcraft` hands the zones back
+  as pours (`emcraft_model::pcb::Pour`) and `pcb.import` fills them
+  (`emcraft_mesh::planar::fill`, the Boolean found on a constrained triangulation as the planar
+  mesher finds its union of copper): the outline less every other net's copper grown by the
+  clearance, the highest priority first, the net's own pads by their connection. Board-edge
+  clearance and net classes' larger clearances are not applied. When PCBCraft saves or exposes
+  its own fill, the import reads that instead and this fill goes.
 - **Targets are EMCraft's.** PCBCraft's net classes carry dimensions (clearances, widths,
   vias), not impedances, and bind to nets through its identity registry. The impedances a net
   should have are EMCraft's own net classes (`pcb.class`, saved with the board, nets by name);
@@ -40,4 +49,6 @@ the finite elements — is the same for either source.
 PCBCraft is MIT OR Apache-2.0; what its engine and storage add (`geo-index`, `geo-types`,
 `geo-traits`, `dunce`) is MIT or Apache-2.0. None is GPL or LGPL. The test data in
 `crates/io/tests/data/pcbcraft` is PCBCraft's sensor-node example (MIT OR Apache-2.0), with a copy
-whose stackup EMCraft's tests fill in.
+whose stackup EMCraft's tests fill in, and a copy of that with a ground zone added through
+PCBCraft's own `pcb.add_zone` (`sensor-node-pour`, written by the ignored test
+`write_the_pour_example`).

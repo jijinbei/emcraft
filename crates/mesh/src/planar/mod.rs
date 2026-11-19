@@ -46,6 +46,7 @@
 
 mod cdt;
 pub mod extrude;
+pub mod fill;
 mod label;
 pub mod lattice;
 pub mod offset;

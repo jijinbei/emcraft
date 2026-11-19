@@ -52,6 +52,58 @@ fn a_pcbcraft_project_imports_with_its_nets_and_its_stackup() {
     approx::assert_abs_diff_eq!(t.model().pcb().unwrap().layers[1].z, 1.53e-3, epsilon = 1e-15);
 }
 
+/// Whether `q` is inside `polygon` by the even–odd rule.
+fn inside(polygon: &[[f64; 2]], q: [f64; 2]) -> bool {
+    let n = polygon.len();
+    (0..n)
+        .filter(|&k| {
+            let (a, b) = (polygon[k], polygon[(k + 1) % n]);
+            (a[1] > q[1]) != (b[1] > q[1]) && q[0] < a[0] + (q[1] - a[1]) * (b[0] - a[0]) / (b[1] - a[1])
+        })
+        .count()
+        % 2
+        == 1
+}
+
+/// The stackup example with a ground zone over its bottom layer (PCBCraft keeps its outline
+/// only): filled on import, every other net's bottom copper kept its clearance away, so SDA's top
+/// traces have a plane under them and lines' impedances; the board meshes (no two nets overlap).
+#[test]
+fn a_pcbcraft_zone_is_filled_clear_of_other_nets() {
+    let project = concat!(env!("CARGO_MANIFEST_DIR"), "/../io/tests/data/pcbcraft/sensor-node-pour");
+    let mut s = Session::new();
+    s.execute("pcb.import", &json!({"path": project})).unwrap();
+    let board = s.model().pcb().unwrap().clone();
+    let fills: Vec<&[[f64; 2]]> =
+        board.copper.iter().filter(|c| c.net == "GND" && c.layer == "Bottom" && c.polygon.len() > 40).map(|c| c.polygon.as_slice()).collect();
+    assert!(!fills.is_empty(), "{:?}", board.notes);
+    assert!(board.notes.iter().any(|n| n.contains("filled by EMCraft")), "{:?}", board.notes);
+    let filled = |q: [f64; 2]| fills.iter().any(|f| inside(f, q));
+    // Along every other net's bottom trace, at its edges and its middle: no ground there.
+    let others: Vec<_> = board.segments.iter().filter(|t| t.layer == "Bottom" && t.net != "GND").collect();
+    assert!(!others.is_empty());
+    for t in &others {
+        let (d, len) = ([t.end[0] - t.start[0], t.end[1] - t.start[1]], (t.end[0] - t.start[0]).hypot(t.end[1] - t.start[1]));
+        let n = [-d[1] / len * 0.5 * t.width, d[0] / len * 0.5 * t.width];
+        for k in 0..=8 {
+            let f = k as f64 / 8.0;
+            let m = [t.start[0] + f * d[0], t.start[1] + f * d[1]];
+            for q in [m, [m[0] + n[0] * 1.2, m[1] + n[1] * 1.2], [m[0] - n[0] * 1.2, m[1] - n[1] * 1.2]] {
+                assert!(!filled(q), "ground over {} ({}) at {q:?}", t.id, t.net);
+            }
+        }
+    }
+    // SDA's top traces over the ground: impedances now, where the zone's outline alone gave none.
+    let r = s.execute("pcb.impedance", &json!({"net": "SDA"})).unwrap();
+    let solved = r["sections"].as_array().unwrap().iter().filter(|x| x["z0"].as_f64().is_some()).count();
+    assert!(solved > 0, "{r}");
+    // A region 6 mm square round an SDA trace meshes: no two nets' copper overlaps on a layer.
+    let sda = board.segments.iter().find(|t| t.net == "SDA").unwrap();
+    let mid = [500.0 * (sda.start[0] + sda.end[0]), 500.0 * (sda.start[1] + sda.end[1])];
+    s.execute("pcb.region", &json!({"lo": [mid[0] - 3.0, mid[1] - 3.0], "hi": [mid[0] + 3.0, mid[1] + 3.0], "above": 3, "below": 0})).unwrap();
+    s.execute("mesh.generate", &json!({"size": 1, "strip_edge": 0.5})).unwrap();
+}
+
 /// A board in mm: a 0.2 mm FR-4 core (εr 4.3) between TOP and a GND plane on L2, 0.4 mm on to
 /// L3, 0.4 mm more to a GND plane on BOT; a 0.35 mm microstrip, a differential pair named to pair,
 /// a stripline centred between L2 and BOT, and a trace with no plane under it.

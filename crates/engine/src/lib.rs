@@ -188,3 +188,4 @@ pub mod pcb_check;
 pub mod pcb_edit;
 pub mod pcb_fem;
 pub mod pcb_lines;
+mod pcb_pour;

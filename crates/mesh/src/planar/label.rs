@@ -76,6 +76,12 @@ impl Rings {
         [at(0), at(1)]
     }
 
+    /// The outlines that hold `p`: an odd winding number about it (the even–odd rule).
+    pub fn holding(&self, p: [f64; 2]) -> Result<impl Iterator<Item = &Ring>> {
+        let exact = Point2::new(p[0], p[1]).map_err(|e| fail(e.to_string()))?;
+        Ok(self.near(p).filter(move |ring| winding(&ring.points, &exact) % 2 != 0))
+    }
+
     /// The outlines whose boxes may hold `p`.
     fn near(&self, p: [f64; 2]) -> impl Iterator<Item = &Ring> {
         let [i, j] = self.cell(p);
@@ -101,6 +107,62 @@ fn winding(ring: &[Point2], p: &Point2) -> i32 {
     w
 }
 
+/// The components of a triangulation — triangles joined across edges that are not in
+/// `constrained` (each as `[low id, high id]`, sorted) — and a point inside each: each triangle's
+/// component (numbered in the order of their first triangles), and for each component the
+/// centroid of its roundest triangle (largest inradius, 2 area / perimeter; ties by index),
+/// where its covering is decided.
+pub(super) fn components(points: &[[f64; 2]], triangles: &[[u32; 3]], constrained: &[[u32; 2]]) -> (Vec<u32>, Vec<[f64; 2]>) {
+    let mut edges: Vec<([u32; 2], u32)> = triangles
+        .iter()
+        .enumerate()
+        .flat_map(|(t, v)| (0..3).map(move |k| ([v[k].min(v[(k + 1) % 3]), v[k].max(v[(k + 1) % 3])], t as u32)))
+        .collect();
+    edges.sort_unstable();
+    let mut parent: Vec<u32> = (0..triangles.len() as u32).collect();
+    for w in edges.windows(2) {
+        if w[0].0 == w[1].0 && constrained.binary_search(&w[0].0).is_err() {
+            let (a, b) = (root(&mut parent, w[0].1), root(&mut parent, w[1].1));
+            parent[a.max(b) as usize] = a.min(b);
+        }
+    }
+    let corner = |v: u32| points.get(v as usize).copied().unwrap_or([0.0; 2]);
+    let mut best: Vec<(f64, u32)> = vec![(-1.0, 0); triangles.len()];
+    let mut of: Vec<u32> = Vec::with_capacity(triangles.len());
+    for (t, v) in triangles.iter().enumerate() {
+        let [a, b, c] = v.map(corner);
+        let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        let perimeter = (b[0] - a[0]).hypot(b[1] - a[1]) + (c[0] - b[0]).hypot(c[1] - b[1]) + (a[0] - c[0]).hypot(a[1] - c[1]);
+        let k = root(&mut parent, t as u32);
+        of.push(k);
+        if let Some(b) = best.get_mut(k as usize).filter(|b| area / perimeter > b.0) {
+            *b = (area / perimeter, t as u32);
+        }
+    }
+    let mut number = vec![u32::MAX; triangles.len()];
+    let mut middles: Vec<[f64; 2]> = Vec::new();
+    for k in of.iter_mut() {
+        let r = *k as usize;
+        if number[r] == u32::MAX {
+            number[r] = middles.len() as u32;
+            let [a, b, c] = triangles.get(best[r].1 as usize).map_or([[0.0; 2]; 3], |v| v.map(corner));
+            middles.push([(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0]);
+        }
+        *k = number[r];
+    }
+    (of, middles)
+}
+
+/// The root of `t` in the union–find forest `parent`, halving the path on the way.
+pub(super) fn root(parent: &mut [u32], mut t: u32) -> u32 {
+    while parent[t as usize] != t {
+        let up = parent[parent[t as usize] as usize];
+        parent[t as usize] = up;
+        t = up;
+    }
+    t
+}
+
 /// Each layer's net over each triangle ([`NO_NET`] where there is no copper). `constrained`
 /// holds the outlines' edges (each as `[low id, high id]`, sorted); `names` names the layers and
 /// nets for the error when two nets cover the same place on a layer.
@@ -111,56 +173,13 @@ pub(super) fn label(
     rings: &Rings,
     names: (&[String], &[String]),
 ) -> Result<Vec<Vec<u32>>> {
-    let layers = names.0.len();
-    // Components: triangles joined across edges that are not outlines.
-    let mut edges: Vec<([u32; 2], u32)> = triangles
-        .iter()
-        .enumerate()
-        .flat_map(|(t, v)| (0..3).map(move |k| ([v[k].min(v[(k + 1) % 3]), v[k].max(v[(k + 1) % 3])], t as u32)))
-        .collect();
-    edges.sort_unstable();
-    let mut parent: Vec<u32> = (0..triangles.len() as u32).collect();
-    fn root(parent: &mut [u32], mut t: u32) -> u32 {
-        while parent[t as usize] != t {
-            let up = parent[parent[t as usize] as usize];
-            parent[t as usize] = up;
-            t = up;
-        }
-        t
-    }
-    for w in edges.windows(2) {
-        if w[0].0 == w[1].0 && constrained.binary_search(&w[0].0).is_err() {
-            let (a, b) = (root(&mut parent, w[0].1), root(&mut parent, w[1].1));
-            parent[a.max(b) as usize] = a.min(b);
-        }
-    }
-    // Each component's roundest triangle (largest inradius, 2 area / perimeter; ties by index).
-    let corner = |v: u32| points.get(v as usize).copied().unwrap_or([0.0; 2]);
-    let mut best: Vec<(f64, u32)> = vec![(-1.0, 0); triangles.len()];
-    for (t, v) in triangles.iter().enumerate() {
-        let [a, b, c] = v.map(corner);
-        let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-        let perimeter = (b[0] - a[0]).hypot(b[1] - a[1]) + (c[0] - b[0]).hypot(c[1] - b[1]) + (a[0] - c[0]).hypot(a[1] - c[1]);
-        let r = area / perimeter;
-        let k = root(&mut parent, t as u32) as usize;
-        if r > best[k].0 {
-            best[k] = (r, t as u32);
-        }
-    }
-    let mut nets = vec![vec![NO_NET; triangles.len()]; layers];
-    let mut decided: Vec<Option<Vec<u32>>> = vec![None; triangles.len()];
-    for t in 0..triangles.len() {
-        let k = root(&mut parent, t as u32) as usize;
-        if decided[k].is_none() {
-            let [a, b, c] = triangles[best[k].1 as usize].map(corner);
-            let centroid = [(a[0] + b[0] + c[0]) / 3.0, (a[1] + b[1] + c[1]) / 3.0];
-            decided[k] = Some(covering(rings, centroid, names)?);
-        }
-        if let Some(on) = &decided[k] {
-            for (layer, &net) in on.iter().enumerate() {
-                if let Some(x) = nets.get_mut(layer).and_then(|n| n.get_mut(t)) {
-                    *x = net;
-                }
+    let (of, middles) = components(points, triangles, constrained);
+    let decided: Vec<Vec<u32>> = middles.iter().map(|&p| covering(rings, p, names)).collect::<Result<_>>()?;
+    let mut nets = vec![vec![NO_NET; triangles.len()]; names.0.len()];
+    for (t, k) in of.iter().enumerate() {
+        for (layer, &net) in decided.get(*k as usize).into_iter().flatten().enumerate() {
+            if let Some(x) = nets.get_mut(layer).and_then(|n| n.get_mut(t)) {
+                *x = net;
             }
         }
     }
@@ -169,12 +188,8 @@ pub(super) fn label(
 
 /// The net on each layer at `p`, refusing two nets in one place.
 fn covering(rings: &Rings, p: [f64; 2], (layers, nets): (&[String], &[String])) -> Result<Vec<u32>> {
-    let exact = Point2::new(p[0], p[1]).map_err(|e| fail(e.to_string()))?;
     let mut on = vec![NO_NET; layers.len()];
-    for ring in rings.near(p) {
-        if winding(&ring.points, &exact) % 2 == 0 {
-            continue;
-        }
+    for ring in rings.holding(p)? {
         let Some(x) = on.get_mut(ring.layer) else { continue };
         if *x != NO_NET && *x != ring.net {
             let name = |n: u32| nets.get(n as usize).map_or_else(|| n.to_string(), Clone::clone);

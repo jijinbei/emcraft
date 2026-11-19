@@ -270,9 +270,12 @@ pub fn import(s: &mut Session, p: &Params) -> Result<Value> {
             Some(ls)
         }
     };
-    // A PCBCraft project (its folder, entry point or packed archive) names its own board.
+    // A PCBCraft project (its folder, entry point or packed archive) names its own board; its
+    // zones are outlines, filled here.
     if emcraft_io::pcbcraft::is_project(std::path::Path::new(path)) {
-        let board = emcraft_io::pcbcraft::read(std::path::Path::new(path), layers).map_err(failed)?;
+        let (mut board, pours) = emcraft_io::pcbcraft::read(std::path::Path::new(path), layers).map_err(failed)?;
+        crate::pcb_pour::pour(&mut board, &pours);
+        board.check().map_err(failed)?;
         return embedded(s, board);
     }
     let file = std::fs::File::open(path).map_err(failed)?;

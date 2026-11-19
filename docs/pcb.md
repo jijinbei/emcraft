@@ -98,6 +98,16 @@ is 64 MiB, with at most 64 copper layers, 200,000 segments, 200,000 vias, 100,00
 polygons and pads and 2,000,000 polygon vertices. Inspect a net with at most 512 segments; reports exceeding the
 geometric work budget fail visibly. The first release is intended for small routed regions.
 
+A PCBCraft project (its folder, `project.json` or a packed `.pc`) is read through PCBCraft's own
+storage and engine ([ADR 0013](adr/0013-pcbcraft-boards.md)). PCBCraft keeps its copper zones
+as outlines with fill settings, not filled copper, so `pcb.import` fills them: each zone's outline
+less every other net's copper on its layer grown by the zone's clearance (the board's when the
+zone gives none) — traces, vias' pads, pads and the zones filled before it, the highest priority
+first — its own traces and vias joined solid, its own pads by its connection (a thermal relief
+of four spokes across the gap, solid, or none). An island with none of its net's copper on it is
+kept unless smaller than the zone's minimum island area. The board's notes say how many zones
+filled into how many islands. Board-edge clearance and net classes' clearances are not applied.
+
 ## Commands and native board data
 
 All operations use the engine. A CLI script (GHz/mm defaults) can reproduce the example:

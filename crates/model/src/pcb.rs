@@ -91,6 +91,33 @@ pub struct Copper {
     pub polygon: Vec<[f64; 2]>,
 }
 
+/// How a pour meets its own net's pads.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Connection {
+    /// A gap `gap` wide round each pad (m), crossed by four spokes `spoke` wide (m).
+    Thermal { gap: f64, spoke: f64 },
+    /// The pads joined solid.
+    Solid,
+    /// The pads kept the clearance away, not joined.
+    None,
+}
+
+/// A copper zone as its board's file keeps it, not filled yet: its net and layer, its outline (m),
+/// how far it keeps from other nets' copper (`clearance`, m), how it meets its own pads, the
+/// smallest island it keeps that none of its net's copper is on (`min_island`, m²) and its
+/// priority (a higher one fills first; a later pour keeps clear of it).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Pour {
+    pub net: String,
+    pub layer: String,
+    pub outline: Vec<[f64; 2]>,
+    pub clearance: f64,
+    pub connection: Connection,
+    pub min_island: f64,
+    pub priority: u32,
+}
+
 /// The part of a board the finite elements solve: the box over `lo`..`hi` (m) from `below` under
 /// the lowest layer to `above` over the highest, closed by conducting walls (a shielded box: its
 /// sides carry the ports).
