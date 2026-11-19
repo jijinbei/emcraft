@@ -563,4 +563,44 @@ mod tests {
             assert!(b.start().is_none(), "{b:?}");
         }
     }
+
+    /// The matched oscillator on a sampled circuit starts where Johnson's two numbers put it,
+    /// worked out here from the start point alone: with v₀ = c√(1 − 1/γ₀²), N = L f/v₀ and
+    /// C³ = I q K/(2γ₀³ m v₀²) at the circuit's K there (its logarithm between the samples), C N
+    /// is 0.314, and the backward harmonic (2π − ψ)/d of the circuit's phase ψ (between the
+    /// samples) is ahead of β_e = 2πf/v₀ by b C β_e, b = 1.522. A weak echo moves the start
+    /// by its real part to first order, so by nothing on the average over its phase.
+    #[test]
+    fn the_sampled_circuits_start_is_johnsons_in_step_with_the_beam() {
+        let Species { charge: q, mass: m } = ELECTRON;
+        let gamma0 = 1.0 + 1e5 / 510_998.95;
+        let beam = Beam { gamma0, species: ELECTRON, ring: None };
+        let sample = |f: f64, deg: f64, k: f64| Sample { frequency: f, phase: deg.to_radians(), impedance: k, reflection: Z::new(0.0, 0.0) };
+        let circuit = vec![sample(11.25e9, 80.0, 0.35), sample(11.91e9, 100.0, 0.59), sample(12.58e9, 120.0, 1.13)];
+        let (period, periods) = (0.01, 24);
+        let matched = Reflecting { circuit: circuit.clone(), period, periods, beam };
+        let start = matched.start().unwrap();
+        let (i, f) = (start.current, start.frequency);
+        assert!(f > circuit[0].frequency && f < circuit[1].frequency, "{f}");
+        let t = (f - circuit[0].frequency) / (circuit[1].frequency - circuit[0].frequency);
+        let psi = circuit[0].phase + t * (circuit[1].phase - circuit[0].phase);
+        let k = (circuit[0].impedance.ln() + t * (circuit[1].impedance.ln() - circuit[0].impedance.ln())).exp();
+        let v0 = C0 * (1.0 - 1.0 / (gamma0 * gamma0)).sqrt();
+        let n = period * periods as f64 * f / v0;
+        let c = (i * q.abs() * k / (2.0 * gamma0.powi(3) * m * v0 * v0)).cbrt();
+        let be = 2.0 * std::f64::consts::PI * f / v0;
+        let b = ((2.0 * std::f64::consts::PI - psi) / (be * period) - 1.0) / c;
+        approx::assert_abs_diff_eq!(c * n, 0.314, epsilon = 2e-4);
+        approx::assert_abs_diff_eq!(b, 1.522, epsilon = 3e-4);
+        // An echo of 0.02 at eight phases round the circle.
+        let shifts: Vec<f64> = (0..8)
+            .map(|step| {
+                let echo = Z::from_polar(0.02, std::f64::consts::FRAC_PI_4 * step as f64);
+                let ends = Reflecting { circuit: circuit.iter().map(|s| Sample { reflection: echo, ..*s }).collect(), ..matched.clone() };
+                (ends.start().unwrap().current / i).ln()
+            })
+            .collect();
+        let (largest, mean) = (shifts.iter().fold(0.0f64, |a, s| a.max(s.abs())), shifts.iter().sum::<f64>() / 8.0);
+        assert!(largest > 1e-2 && mean.abs() < 0.05 * largest, "{shifts:?}");
+    }
 }

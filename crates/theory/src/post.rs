@@ -485,4 +485,79 @@ mod tests {
         // At cut-off, c/2a, nothing travels.
         assert!(row(mid).solve(C0 / (2.0 * a), 32).is_err());
     }
+
+    /// A thin post at the guide's middle is a shunt reactance (N. Marcuvitz, *Waveguide
+    /// Handbook*, 1951, §5.11; R. E. Collin, *Field Theory of Guided Waves*, 2nd ed., §7.3):
+    /// a filament's current I at x = a/2 gives E_y = −jωμ I G with
+    /// G = Σ_m sin²(mπ/2) e^{−γ_m|z|}/(aγ_m); on the post's rim, r from the filament, the odd
+    /// modes' sum is 1/(jβa) + (1/2π)(ln(2a/πr) − 2) + Σ_{m = 3, 5, …}(1/(aγ_m) − 1/(mπ)), and the
+    /// field vanishing there makes Γ = −1/(1 + 2jX),
+    /// X = (a/2λg)[ln(2a/πr) − 2 + 2 Σ(1/√(m² − (2a/λ)²) − 1/m)],
+    /// to the order (r/a)². The invariants (power, reciprocity, convergence) hold for any
+    /// lossless obstacle: this is what says the obstacle is the post.
+    #[test]
+    fn a_thin_centred_post_is_marcuvitz_shunt_reactance() {
+        let (a, f) = (22.86e-3, 10e9);
+        let lambda = C0 / f;
+        let beta = ((2.0 * PI / lambda).powi(2) - (PI / a).powi(2)).sqrt();
+        let lambda_g = 2.0 * PI / beta;
+        // What is left falls as r²: 1.4e-4 at a/400, 5.6e-4 at a/200.
+        for (r, within) in [(a / 400.0, 2e-4), (a / 200.0, 8e-4)] {
+            let tail: f64 = (1..200_000).map(|i| (2 * i + 1) as f64).map(|m| 1.0 / (m * m - (2.0 * a / lambda).powi(2)).sqrt() - 1.0 / m).sum();
+            let x = a / (2.0 * lambda_g) * ((2.0 * a / (PI * r)).ln() - 2.0 + 2.0 * tail);
+            let gamma = -1.0 / C::new(1.0, 2.0 * x);
+            let (z0, length) = (12e-3, 30e-3);
+            let s = Posts { width: a, length, posts: vec![Post { x: a / 2.0, z: z0, radius: r }] }.solve(f, 32).unwrap();
+            let s11 = gamma * C::new(0.0, -2.0 * beta * z0).exp();
+            let s21 = (1.0 + gamma) * C::new(0.0, -beta * length).exp();
+            assert!((s.s11 - s11).norm() < within && (s.s21 - s21).norm() < within && gamma.norm() > 0.4, "{r}: {} {s11} {} {s21}", s.s11, s.s21);
+        }
+    }
+
+    /// A thick post off the guide's middle, solved another way: the field of filaments inside
+    /// the post (32 on a circle of half its radius), each the guide's own Green's function
+    /// Σ_m sin(mπx/a) sin(mπx′/a) e^{−γ_m|z − z′|}/(aγ_m), their currents such that the field
+    /// with the incident wave vanishes at 32 points of the rim. Such a field satisfies the
+    /// wave equation and the walls; where it also vanishes all round the rim (checked between
+    /// the points) it is the solution, and its TE₁₀ part the S-parameters. No singular
+    /// integral is taken, so this reads the integral equation's logarithmic weights, which a
+    /// thin post's nearly uniform current does not.
+    #[test]
+    fn a_thick_post_is_the_field_of_filaments_inside_it() {
+        let (a, f, length) = (22.86e-3, 10e9, 30e-3);
+        let post = Post { x: 8e-3, z: 14e-3, radius: 2.5e-3 };
+        let k = 2.0 * PI * f / C0;
+        let g1 = C::new(0.0, (k * k - (PI / a).powi(2)).sqrt());
+        // The series' slow part summed in closed form, Σ cos(mθ) e^{−mτ}/m = −½ ln(1 − 2e^{−τ} cos θ + e^{−2τ}).
+        let wave = |p: (f64, f64), q: (f64, f64)| -> C {
+            let dz = (p.1 - q.1).abs();
+            let e = (-PI * dz / a).exp();
+            let log = |x: f64| (1.0 - 2.0 * e * (PI * x / a).cos() + e * e).ln();
+            let slow = (log(p.0 + q.0) - log(p.0 - q.0)) / (4.0 * PI);
+            let rest: C = (1..=6000)
+                .map(|m| {
+                    let kc = m as f64 * PI / a;
+                    let g = if kc > k { C::new((kc * kc - k * k).sqrt(), 0.0) } else { C::new(0.0, (k * k - kc * kc).sqrt()) };
+                    (kc * p.0).sin() * (kc * q.0).sin() * ((-g * dz).exp() / (g * a) - (-kc * dz).exp() / (kc * a))
+                })
+                .sum();
+            slow + rest
+        };
+        let n = 32;
+        let ring = |radius: f64, turn: f64| -> Vec<(f64, f64)> {
+            (0..n).map(|i| 2.0 * PI * (i as f64 + turn) / n as f64).map(|t| (post.x + radius * t.cos(), post.z + radius * t.sin())).collect()
+        };
+        let (inside, rim, between) = (ring(0.5 * post.radius, 0.0), ring(post.radius, 0.0), ring(post.radius, 0.5));
+        let matrix: Vec<C> = rim.iter().flat_map(|p| inside.iter().map(|q| wave(*p, *q))).collect();
+        let incident = |p: (f64, f64)| (PI * p.0 / a).sin() * (-g1 * p.1).exp();
+        let currents = dense_solve(matrix, rim.iter().map(|p| -incident(*p)).collect(), n).unwrap();
+        for p in &between {
+            let total = incident(*p) + inside.iter().zip(&currents).map(|(q, c)| wave(*p, *q) * c).sum::<C>();
+            assert!(total.norm() < 1e-7, "the field on the rim: {total}");
+        }
+        let part = |sign: f64| inside.iter().zip(&currents).map(|(q, c)| (PI * q.0 / a).sin() * (g1 * sign * q.1).exp() * c).sum::<C>() / (a * g1);
+        let (s11, s21) = (part(-1.0), (1.0 + part(1.0)) * (-g1 * length).exp());
+        let s = Posts { width: a, length, posts: vec![post] }.solve(f, 64).unwrap();
+        assert!((s.s11 - s11).norm() < 1e-8 && (s.s21 - s21).norm() < 1e-8 && s11.norm() > 0.5, "{} {s11} {} {s21}", s.s11, s.s21);
+    }
 }
