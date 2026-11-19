@@ -151,6 +151,24 @@ pub struct Board {
     /// The classes of nets and the impedances their lines should have (`pcb.class`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub classes: Vec<NetClass>,
+    /// The solder masks over its outer copper layers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub masks: Vec<Mask>,
+}
+
+/// The thickest solder mask a board takes (m).
+pub const MAX_MASK_THICKNESS: f64 = 1e-3;
+
+/// A solder mask over an outer copper layer (`layer`, the board's top or bottom): a coat
+/// `thickness` thick (m) over the board's face and over the copper on it (its top and sides), of
+/// relative permittivity `eps` and loss tangent `loss`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Mask {
+    pub layer: String,
+    pub thickness: f64,
+    pub eps: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub loss: f64,
 }
 
 /// The most net classes a board may have.
@@ -239,7 +257,7 @@ impl Board {
     ///
     /// ```
     /// use emcraft_model::pcb::{Board, Layer, Segment};
-    /// let empty = Board { name: "empty".into(), layers: vec![], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![] };
+    /// let empty = Board { name: "empty".into(), layers: vec![], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![], masks: vec![] };
     /// assert!(empty.bounds().is_none());
     /// let segment = Segment { id: "0".into(), net: "A".into(), layer: "F.Cu".into(), start: [0.0, 0.001], end: [0.01, 0.002], width: 2e-4 };
     /// let line = Board { segments: vec![segment], layers: vec![Layer { name: "F.Cu".into(), z: 0.0, eps_below: 4.2, loss_below: 0.0, copper: 0.0 }], ..empty };
@@ -260,7 +278,7 @@ impl Board {
     /// Validate a board before storing it. Empty layers, unknown layers and non-finite geometry
     /// are refused. Coordinates and lengths are SI metres.
     /// ```
-    /// let b=emcraft_model::pcb::Board{name:"empty".into(),layers:vec![],segments:vec![],vias:vec![],copper:vec![],notes:vec![],region:None,classes:vec![]};
+    /// let b=emcraft_model::pcb::Board{name:"empty".into(),layers:vec![],segments:vec![],vias:vec![],copper:vec![],notes:vec![],region:None,classes:vec![],masks:vec![]};
     /// assert!(b.check().is_err());
     /// ```
     pub fn check(&self) -> Result<()> {
@@ -335,6 +353,23 @@ impl Board {
         if self.classes.len() > MAX_CLASSES {
             return Err(bad());
         }
+        let outer = |n: &str| self.layers.first().is_some_and(|l| l.name == n) || self.layers.last().is_some_and(|l| l.name == n);
+        for (i, m) in self.masks.iter().enumerate() {
+            if !outer(&m.layer)
+                || self.masks[..i].iter().any(|q| q.layer == m.layer)
+                || !(m.thickness > 0.0 && m.thickness <= MAX_MASK_THICKNESS)
+                || !(1.0..=128.0).contains(&m.eps)
+                || !(0.0..=1.0).contains(&m.loss)
+            {
+                return Err(invalid(
+                    "solder mask",
+                    format!(
+                        "`{}` needs the board's top or bottom copper layer (once), a thickness over 0 up to {MAX_MASK_THICKNESS} m, εr 1–128 and tan δ 0–1",
+                        m.layer
+                    ),
+                ));
+            }
+        }
         for (i, c) in self.classes.iter().enumerate() {
             c.check()?;
             if self.classes[..i].iter().any(|q| q.name == c.name) {
@@ -349,7 +384,7 @@ impl Board {
     /// ```
     /// use emcraft_model::pcb::{Board, Layer};
     /// let layers = vec![Layer { name: "F.Cu".into(), z: 0.0, eps_below: 4.2, loss_below: 0.0, copper: 0.0 }, Layer { name: "B.Cu".into(), z: 1.6e-3, eps_below: 1.0, loss_below: 0.0, copper: 0.0 }];
-    /// let b = Board { name: "b".into(), layers, segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![] };
+    /// let b = Board { name: "b".into(), layers, segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![], masks: vec![] };
     /// assert_eq!(b.heights(), vec![1.6e-3, 0.0]);
     /// ```
     pub fn heights(&self) -> Vec<f64> {
@@ -362,7 +397,7 @@ impl Board {
     ///
     /// ```
     /// use emcraft_model::pcb::{Board, Layer};
-    /// let mut b = Board { name: "b".into(), layers: vec![Layer { name: "F.Cu".into(), z: 1.6, eps_below: 4.2, loss_below: 0.0, copper: 0.0 }], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![] };
+    /// let mut b = Board { name: "b".into(), layers: vec![Layer { name: "F.Cu".into(), z: 1.6, eps_below: 4.2, loss_below: 0.0, copper: 0.0 }], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![], masks: vec![] };
     /// b.map_lengths(|mm| mm * 1e-3);
     /// assert_eq!(b.layers[0].z, 1.6e-3);
     /// ```
@@ -397,6 +432,9 @@ impl Board {
             for v in r.lo.iter_mut().chain(&mut r.hi).chain([&mut r.above, &mut r.below]) {
                 *v = convert(*v);
             }
+        }
+        for m in &mut self.masks {
+            m.thickness = convert(m.thickness);
         }
     }
 }

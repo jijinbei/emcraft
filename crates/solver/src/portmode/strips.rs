@@ -1,5 +1,5 @@
-//! Printed lines' cross-sections: strips of no thickness at their heights in a stack of
-//! dielectric slabs, inside a conducting box whose floor and ceiling are the lines' reference
+//! Printed lines' cross-sections: strips (sheets, or of a thickness) at their heights in a stack of
+//! dielectric slabs and blocks (a solder mask over the strips, say), inside a conducting box whose floor and ceiling are the lines' reference
 //! planes (or far from them, for an open side), solved quasi-statically for their impedances —
 //! one strip a single line, two a coupled pair (its odd and even modes, the differential and
 //! common impedances).
@@ -13,10 +13,13 @@
 //! symmetric pair's), Z_o and Z_e from them, Z_diff = 2 Z_o and Z_common = Z_e/2 (Cohn 1955).
 //!
 //! **The grid.** A tensor grid of rectangles, each cut into two triangles: its lines through the
-//! box's sides, each strip's edges, floor and ceiling, each slab's faces and each strip's height,
+//! box's sides, each strip's edges, floor and ceiling, each slab's and block's faces and each
+//! strip's bottom and top,
 //! spaced geometrically from a fine size at the strips' edges and heights (where the field is
-//! singular) to a coarse one away from them. A strip is the grid's nodes along its height between
-//! its two edges. The same lines give the same grid, and the same impedances, bit for bit.
+//! singular) to a coarse one away from them. A strip is the grid's nodes in its rectangle (a sheet:
+//! along its height between its two edges); a triangle's permittivity is that of the block, else
+//! the slab, its middle lies in. The same lines give the same grid, and the same impedances, bit
+//! for bit.
 //!
 //! ```
 //! use emcraft_solver::portmode::strips::{Section, Slab, Strip};
@@ -27,12 +30,13 @@
 //!     floor: 0.0,
 //!     ceiling: 20.0 * h,
 //!     slabs: vec![Slab { bottom: 0.0, top: h, eps: 9.8 }],
-//!     strips: vec![Strip { left: -0.3e-3, right: 0.3e-3, height: h }],
+//!     blocks: vec![],
+//!     strips: vec![Strip { left: -0.3e-3, right: 0.3e-3, height: h, thickness: 0.0 }],
 //! };
 //! let line = section.solve()?;
 //! assert!((line.single().unwrap() - 50.0).abs() < 2.0);
 //! // A strip outside the box is refused.
-//! let outside = Section { strips: vec![Strip { left: 0.0, right: 1.0, height: h }], ..section };
+//! let outside = Section { strips: vec![Strip { left: 0.0, right: 1.0, height: h, thickness: 0.0 }], ..section };
 //! assert!(outside.solve().is_err());
 //! # Ok::<(), emcraft_solver::SolveError>(())
 //! ```
@@ -54,22 +58,42 @@ pub struct Slab {
     pub eps: f64,
 }
 
-/// A strip of no thickness from `left` to `right` across, at `height` (m).
+/// A rectangle of dielectric from `left` to `right` across and `bottom` to `top` up (m), of
+/// relative permittivity `eps`: over the slabs where it lies.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Block {
+    pub left: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub top: f64,
+    pub eps: f64,
+}
+
+/// A strip from `left` to `right` across, from `height` up by `thickness` (m; 0, a sheet).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Strip {
     pub left: f64,
     pub right: f64,
     pub height: f64,
+    pub thickness: f64,
+}
+
+impl Strip {
+    /// Its top face's height (m).
+    pub fn top(&self) -> f64 {
+        self.height + self.thickness
+    }
 }
 
 /// A cross-section: the box from −`half_width` to `half_width` across and from `floor` to
-/// `ceiling` (m), its walls conducting, its slabs and its one or two strips.
+/// `ceiling` (m), its walls conducting, its slabs, its blocks and its one or two strips.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Section {
     pub half_width: f64,
     pub floor: f64,
     pub ceiling: f64,
     pub slabs: Vec<Slab>,
+    pub blocks: Vec<Block>,
     pub strips: Vec<Strip>,
 }
 
@@ -115,6 +139,8 @@ const COARSE: f64 = 1.0 / 20.0;
 const ASPECT: f64 = 4.0;
 /// The most grid lines along either axis.
 const MAX_LINES: usize = 1200;
+/// The most dielectric blocks of a section.
+const MAX_BLOCKS: usize = 16;
 
 /// The points strictly between `a` and `b`: the space at x the smaller of the grades from either
 /// end — `fine` there growing by `GROWTH` a space (its spacing at distance d about fine + (GROWTH −
@@ -185,17 +211,23 @@ impl Section {
             if !(ok(s.left)
                 && ok(s.right)
                 && ok(s.height)
+                && ok(s.thickness)
+                && s.thickness >= 0.0
                 && s.left < s.right
                 && -self.half_width < s.left
                 && s.right < self.half_width
                 && self.floor < s.height
-                && s.height < self.ceiling)
+                && s.top() < self.ceiling)
             {
-                return Err(invalid("line cross-section", "a strip must lie inside the box, off its walls, its left edge left of its right"));
+                return Err(invalid(
+                    "line cross-section",
+                    "a strip must lie inside the box, off its walls, its left edge left of its right, its thickness ≥ 0",
+                ));
             }
         }
         if let [a, b] = self.strips[..]
-            && a.height == b.height
+            && a.height <= b.top()
+            && b.height <= a.top()
             && a.left < b.right
             && b.left < a.right
         {
@@ -203,6 +235,16 @@ impl Section {
         }
         if !self.slabs.iter().all(|s| ok(s.bottom) && ok(s.top) && s.bottom < s.top && s.eps.is_finite() && s.eps >= 1.0) {
             return Err(invalid("line cross-section", "a slab needs a finite bottom below its top and a permittivity of at least 1"));
+        }
+        if self.blocks.len() > MAX_BLOCKS
+            || !self.blocks.iter().all(|b| {
+                ok(b.left) && ok(b.right) && ok(b.bottom) && ok(b.top) && b.left < b.right && b.bottom < b.top && b.eps.is_finite() && b.eps >= 1.0
+            })
+        {
+            return Err(invalid(
+                "line cross-section",
+                format!("at most {MAX_BLOCKS} blocks, each with finite sides in order and a permittivity of at least 1"),
+            ));
         }
         Ok(())
     }
@@ -226,13 +268,20 @@ impl Section {
         }
         let mut up = vec![(self.floor, None), (self.ceiling, None)];
         for s in &self.strips {
-            up.push((s.height, Some(fine)));
+            up.extend([(s.height, Some(fine)), (s.top(), Some(fine))]);
         }
-        for s in &self.slabs {
-            for v in [s.bottom, s.top] {
-                if self.floor < v && v < self.ceiling {
-                    up.push((v, None));
-                }
+        // A block's faces are fine too (they lie by the strips, so the grading from the strips
+        // goes on past them).
+        let inside = |v: f64, lo: f64, hi: f64| lo < v && v < hi;
+        let faces = self.slabs.iter().flat_map(|s| [(s.bottom, None), (s.top, None)]);
+        for (v, f) in faces.chain(self.blocks.iter().flat_map(|b| [(b.bottom, Some(fine)), (b.top, Some(fine))])) {
+            if inside(v, self.floor, self.ceiling) {
+                up.push((v, f));
+            }
+        }
+        for u in self.blocks.iter().flat_map(|b| [b.left, b.right]) {
+            if inside(u, -self.half_width, self.half_width) {
+                across.push((u, Some(fine)));
             }
         }
         let (u, v) = (axis(&keys(across, scale), coarse_across), axis(&keys(up, scale), coarse_up));
@@ -247,7 +296,13 @@ impl Section {
     fn capacitances(&self, u: &[f64], v: &[f64], vacuum: bool) -> Result<Vec<Vec<f64>>> {
         let (nu, nv) = (u.len(), v.len());
         let node = |i: usize, j: usize| i + nu * j;
-        let eps_at = |height: f64| if vacuum { 1.0 } else { self.slabs.iter().find(|s| s.bottom <= height && height < s.top).map_or(1.0, |s| s.eps) };
+        let eps_at = |p: [f64; 2]| {
+            if vacuum {
+                return 1.0;
+            }
+            let block = self.blocks.iter().find(|b| b.left <= p[0] && p[0] < b.right && b.bottom <= p[1] && p[1] < b.top);
+            block.map(|b| b.eps).or_else(|| self.slabs.iter().find(|s| s.bottom <= p[1] && p[1] < s.top).map(|s| s.eps)).unwrap_or(1.0)
+        };
         let find = |xs: &[f64], x: f64| xs.iter().position(|y| (y - x).abs() <= 1e-12 * (1.0 + x.abs()));
         // Each node's strip (k + 1), or 0 free, or the box (u32::MAX).
         let mut fixed = vec![0u32; nu * nv];
@@ -259,11 +314,13 @@ impl Section {
             }
         }
         for (k, s) in self.strips.iter().enumerate() {
-            let (Some(i0), Some(i1), Some(j)) = (find(u, s.left), find(u, s.right), find(v, s.height)) else {
+            let (Some(i0), Some(i1), Some(j0), Some(j1)) = (find(u, s.left), find(u, s.right), find(v, s.height), find(v, s.top())) else {
                 return Err(invalid("line cross-section", "a strip's edges are not on the grid"));
             };
-            for i in i0..=i1 {
-                fixed[node(i, j)] = k as u32 + 1;
+            for j in j0..=j1 {
+                for i in i0..=i1 {
+                    fixed[node(i, j)] = k as u32 + 1;
+                }
             }
         }
         // The free nodes' unknowns.
@@ -278,11 +335,11 @@ impl Section {
         // The triangles: corners, εr, and the element matrix εr ∇λ_a·∇λ_b area.
         let mut tris: Vec<([usize; 3], [[f64; 3]; 3])> = Vec::with_capacity(2 * (nu - 1) * (nv - 1));
         for j in 0..nv - 1 {
-            let e = eps_at(0.5 * (v[j] + v[j + 1]));
             for i in 0..nu - 1 {
                 let [a, b, c, d] = [node(i, j), node(i + 1, j), node(i + 1, j + 1), node(i, j + 1)];
                 for t in [[a, b, c], [a, c, d]] {
                     let p = t.map(|n| [u[n % nu], v[n / nu]]);
+                    let e = eps_at([(p[0][0] + p[1][0] + p[2][0]) / 3.0, (p[0][1] + p[1][1] + p[2][1]) / 3.0]);
                     let area2 = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]);
                     // ∇λ_k = (y_{k+1} − y_{k+2}, x_{k+2} − x_{k+1}) / 2A.
                     let g: [[f64; 2]; 3] = std::array::from_fn(|k| {
@@ -369,12 +426,15 @@ mod tests {
     fn stripline_section(w: f64, s: Option<f64>) -> Section {
         let b = 3e-3;
         let strips = match s {
-            None => vec![Strip { left: -0.5 * w, right: 0.5 * w, height: 0.5 * b }],
+            None => vec![Strip { left: -0.5 * w, right: 0.5 * w, height: 0.5 * b, thickness: 0.0 }],
             Some(s) => {
-                vec![Strip { left: -0.5 * s - w, right: -0.5 * s, height: 0.5 * b }, Strip { left: 0.5 * s, right: 0.5 * s + w, height: 0.5 * b }]
+                vec![
+                    Strip { left: -0.5 * s - w, right: -0.5 * s, height: 0.5 * b, thickness: 0.0 },
+                    Strip { left: 0.5 * s, right: 0.5 * s + w, height: 0.5 * b, thickness: 0.0 },
+                ]
             }
         };
-        Section { half_width: 10.0 * b, floor: 0.0, ceiling: b, slabs: vec![Slab { bottom: 0.0, top: b, eps: 2.2 }], strips }
+        Section { half_width: 10.0 * b, floor: 0.0, ceiling: b, slabs: vec![Slab { bottom: 0.0, top: b, eps: 2.2 }], blocks: vec![], strips }
     }
 
     #[test]
@@ -387,7 +447,8 @@ mod tests {
             floor: 0.0,
             ceiling: 20.0 * h,
             slabs: vec![Slab { bottom: 0.0, top: h, eps: 9.8 }],
-            strips: vec![Strip { left: -0.3e-3, right: 0.3e-3, height: h }],
+            blocks: vec![],
+            strips: vec![Strip { left: -0.3e-3, right: 0.3e-3, height: h, thickness: 0.0 }],
         };
         let line = ms.solve().unwrap();
         let (z, eps) = (line.single().unwrap(), line.modes[0].eps_eff);
@@ -407,6 +468,60 @@ mod tests {
         assert!((odd.eps_eff / 2.2 - 1.0).abs() < 1e-9 && (even.eps_eff / 2.2 - 1.0).abs() < 1e-9);
     }
 
+    /// The 0.6 mm strip on alumina of `a_microstrip_and_a_stripline_match_their_closed_forms`,
+    /// `t` thick, under a block of mask `mask` = (thickness, εr) over it and the substrate.
+    fn coated(t: f64, mask: Option<(f64, f64)>) -> Section {
+        let h = 0.635e-3;
+        let strip = Strip { left: -0.3e-3, right: 0.3e-3, height: h, thickness: t };
+        let blocks = mask.map_or(vec![], |(m, eps)| {
+            vec![
+                Block { left: -20.0 * h, right: 20.0 * h, bottom: h, top: h + m, eps },
+                Block { left: strip.left - m, right: strip.right + m, bottom: h, top: strip.top() + m, eps },
+            ]
+        });
+        Section {
+            half_width: 20.0 * h,
+            floor: 0.0,
+            ceiling: 20.0 * h,
+            slabs: vec![Slab { bottom: 0.0, top: h, eps: 9.8 }],
+            blocks,
+            strips: vec![strip],
+        }
+    }
+
+    #[test]
+    fn a_thick_strip_lowers_its_impedance_as_hammerstad_and_jensen_give() {
+        // The change from the sheet, against the fit's own change: the box's and the fit's
+        // offsets cancel in the ratio.
+        let h = 0.635e-3;
+        let solve = |t: f64| {
+            let line = coated(t, None).solve().unwrap();
+            (line.single().unwrap(), line.modes[0].eps_eff)
+        };
+        let (z_sheet, eps_sheet) = solve(0.0);
+        for t in [0.017e-3, 0.035e-3, 0.07e-3] {
+            let (z, eps) = solve(t);
+            let (zf, epsf) = microstrip::thick(0.6e-3 / h, t / h, 9.8);
+            let (z0, eps0) = (microstrip::z0(0.6e-3 / h, 9.8), microstrip::eps_eff(0.6e-3 / h, 9.8));
+            assert!(((z / z_sheet) / (zf / z0) - 1.0).abs() < 0.005, "t {t}: {z} / {z_sheet} against {zf} / {z0}");
+            assert!(((eps / eps_sheet) / (epsf / eps0) - 1.0).abs() < 0.005, "t {t}: {eps} / {eps_sheet} against {epsf} / {eps0}");
+        }
+    }
+
+    #[test]
+    fn a_mask_slows_the_line_and_a_mask_like_the_substrate_fills_the_box() {
+        let bare = coated(0.035e-3, None).solve().unwrap().modes[0];
+        let masked = coated(0.035e-3, Some((0.025e-3, 3.5))).solve().unwrap().modes[0];
+        assert!(masked.eps_eff > bare.eps_eff && masked.impedance < bare.impedance, "{bare:?} {masked:?}");
+        // The mask εr 1: the bare line (only the grid's lines differ).
+        let air = coated(0.035e-3, Some((0.025e-3, 1.0))).solve().unwrap().modes[0];
+        assert!((air.impedance / bare.impedance - 1.0).abs() < 1e-3, "{bare:?} {air:?}");
+        // A mask of the substrate's εr up to the lid: one dielectric, ε_eff = εr exactly.
+        let h = 0.635e-3;
+        let full = coated(0.035e-3, Some((19.0 * h, 9.8))).solve().unwrap().modes[0];
+        assert!((full.eps_eff / 9.8 - 1.0).abs() < 1e-9, "{full:?}");
+    }
+
     #[test]
     fn hostile_sections_are_refused() {
         let good = stripline_section(1e-3, None);
@@ -414,13 +529,20 @@ mod tests {
             Section { half_width: f64::NAN, ..good.clone() },
             Section { ceiling: -1.0, ..good.clone() },
             Section { strips: vec![], ..good.clone() },
-            Section { strips: vec![Strip { left: 1e-3, right: -1e-3, height: 1e-3 }], ..good.clone() },
-            Section { strips: vec![Strip { left: -1e-3, right: 1e-3, height: 0.0 }], ..good.clone() },
+            Section { strips: vec![Strip { left: 1e-3, right: -1e-3, height: 1e-3, thickness: 0.0 }], ..good.clone() },
+            Section { strips: vec![Strip { left: -1e-3, right: 1e-3, height: 0.0, thickness: 0.0 }], ..good.clone() },
             Section {
-                strips: vec![Strip { left: -1e-3, right: 1e-3, height: 1e-3 }, Strip { left: 0.0, right: 2e-3, height: 1e-3 }],
+                strips: vec![
+                    Strip { left: -1e-3, right: 1e-3, height: 1e-3, thickness: 0.0 },
+                    Strip { left: 0.0, right: 2e-3, height: 1e-3, thickness: 0.0 },
+                ],
                 ..good.clone()
             },
             Section { slabs: vec![Slab { bottom: 0.0, top: 1.0, eps: 0.5 }], ..good.clone() },
+            Section { strips: vec![Strip { left: -1e-3, right: 1e-3, height: 1e-3, thickness: -1e-4 }], ..good.clone() },
+            Section { strips: vec![Strip { left: -1e-3, right: 1e-3, height: 1e-3, thickness: 1.0 }], ..good.clone() },
+            Section { blocks: vec![Block { left: 0.0, right: 1e-3, bottom: 0.0, top: 1e-3, eps: 0.5 }], ..good.clone() },
+            Section { blocks: vec![Block { left: 0.0, right: f64::NAN, bottom: 0.0, top: 1e-3, eps: 2.0 }], ..good.clone() },
         ] {
             assert!(bad.solve().is_err(), "{bad:?}");
         }

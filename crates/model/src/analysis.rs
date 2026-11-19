@@ -66,8 +66,17 @@ mod tests {
     /// sweep with waveguide-like ports, radiation once open (an antenna on the board).
     #[test]
     fn a_board_with_a_region_is_inferred_as_any_model() {
-        let board =
-            Board { name: "b".into(), layers: vec![], segments: vec![], vias: vec![], copper: vec![], notes: vec![], region: None, classes: vec![] };
+        let board = Board {
+            name: "b".into(),
+            layers: vec![],
+            segments: vec![],
+            vias: vec![],
+            copper: vec![],
+            notes: vec![],
+            region: None,
+            classes: vec![],
+            masks: vec![],
+        };
         let mut m = Model::new();
         m.set_pcb(Some(board.clone()));
         assert_eq!(Analysis::infer(&m), Analysis::Pcb);

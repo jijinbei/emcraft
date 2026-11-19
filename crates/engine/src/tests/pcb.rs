@@ -130,6 +130,39 @@ fn lines_board() -> serde_json::Value {
     })
 }
 
+/// The microstrip of `lines_board` with 35 µm of copper on TOP (and on the L2 plane under it):
+/// lower than the sheet, as Hammerstad and Jensen's thick strip over the thinner substrate is
+/// (to 1.5 %); under a 20 µm mask of εr 3.5 lower again, with no closed form. A mask on an
+/// inner layer, or of no thickness, is refused.
+#[test]
+fn copper_thickness_and_a_mask_lower_a_microstrips_impedance() {
+    let z = |copper: f64, mask: Option<serde_json::Value>| {
+        let mut b = lines_board();
+        b["layers"][0]["copper"] = json!(copper);
+        b["layers"][1]["copper"] = json!(copper);
+        if let Some(m) = mask {
+            b["masks"] = json!([m]);
+        }
+        let mut s = Session::new();
+        s.execute("pcb.load", &json!({"data": b})).unwrap();
+        s.execute("pcb.impedance", &json!({"net": "MS"})).unwrap()["sections"][0].clone()
+    };
+    let sheet = z(0.0, None)["z0"].as_f64().unwrap();
+    let thick = z(0.035, None);
+    let (zt, closed) = (thick["z0"].as_f64().unwrap(), thick["closed_form"].as_f64().unwrap());
+    assert!(zt < sheet - 1.0 && (zt / closed - 1.0).abs() < 0.015, "{sheet} {thick}");
+    // The closed form's substrate is the dielectric less the plane's half thickness: 0.1825 mm.
+    let (zf, _) = emcraft_theory::microstrip::thick(0.35 / 0.1825, 0.035 / 0.1825, 4.3);
+    approx::assert_abs_diff_eq!(closed, zf, epsilon = 1e-3);
+    let masked = z(0.035, Some(json!({"layer": "TOP", "thickness": 0.02, "eps": 3.5})));
+    assert!(masked["z0"].as_f64().unwrap() < zt - 0.5 && masked["closed_form"].is_null(), "{thick} {masked}");
+    for bad in [json!({"layer": "L2", "thickness": 0.02, "eps": 3.5}), json!({"layer": "TOP", "thickness": 0, "eps": 3.5})] {
+        let mut b = lines_board();
+        b["masks"] = json!([bad]);
+        assert!(Session::new().execute("pcb.load", &json!({"data": b})).is_err(), "{bad}");
+    }
+}
+
 #[test]
 fn line_impedances_come_from_their_cross_sections() {
     let mut s = Session::new();

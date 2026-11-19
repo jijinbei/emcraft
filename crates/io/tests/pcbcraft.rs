@@ -103,6 +103,22 @@ fn with_ground_zone() -> std::sync::Arc<pcbcraft_engine::Project> {
     s.snapshot().unwrap()
 }
 
+/// A copper layer's finished thickness, set through PCBCraft's own board setup, is the layer's
+/// copper; one not given stays a sheet; no mask is read (PCBCraft keeps none's thickness).
+#[test]
+fn a_copper_layers_finished_thickness_is_read() {
+    let mut s = pcbcraft_engine::Session::default();
+    s.open_snapshot(pcbcraft_storage::preview(&data("sensor-node-stackup")).unwrap());
+    let mut setup = s.inspect()["project"]["board"]["setup"].clone();
+    setup["stackup"]["strata"][0]["thickness_nm"] = serde_json::json!(35_000);
+    s.apply("pcb.set_board_setup", &serde_json::json!({"setup": setup, "expected_revision": s.revision()})).unwrap();
+    let (b, _) = board(&s.snapshot().unwrap(), None).unwrap();
+    assert_eq!(b.layers[0].name, "Top");
+    approx::assert_abs_diff_eq!(b.layers[0].copper, 35e-6, epsilon = 1e-15);
+    assert!(b.layers[1].copper == 0.0 && b.masks.is_empty());
+    approx::assert_abs_diff_eq!(b.layers[1].z, 1.5e-3, epsilon = 1e-15);
+}
+
 #[test]
 fn a_zone_comes_back_as_a_pour_to_fill() {
     let p = with_ground_zone();

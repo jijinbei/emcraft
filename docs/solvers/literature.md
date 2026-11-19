@@ -150,7 +150,8 @@ overlap tests).
 - E. Hammerstad, Ø. Jensen, *Accurate models for microstrip computer-aided design*, IEEE MTT-S
   International Microwave Symposium Digest, 1980, pp. 407–409 — microstrip's quasi-static
   effective permittivity and impedance, the benchmark for strips on a substrate
-  (`emcraft-theory::microstrip`). M. Kirschning, R. H. Jansen, *Accurate model for effective
+  (`emcraft-theory::microstrip`), and a strip of finite thickness by its effective widths
+  (`microstrip::thick`, oracle `pcb-thick-microstrip`). M. Kirschning, R. H. Jansen, *Accurate model for effective
   dielectric constant of microstrip with validity up to millimetre-wave frequencies*, Electron.
   Lett. 18(6):272–273, 1982 — its dispersion, the reference of oracle `pcb-fr4-microstrip`
   (FR-4 at 1.09 GHz).

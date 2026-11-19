@@ -1,0 +1,46 @@
+{
+  "title": "A microstrip's copper thickness: Z0 of a 0.35 mm trace over 0.2 mm of εr 4.3, 17.5, 35 and 70 µm thick",
+  "kind": "theory",
+  "source": "E. Hammerstad and Ø. Jensen, Accurate models for microstrip computer-aided design, IEEE MTT-S International Microwave Symposium Digest 1980, pp. 407–409: the strip of thickness t by its effective widths (Δu₁ = (t/πh) ln(1 + 4e/((t/h) coth²√(6.517 u))), Δu_r = ½(1 + 1/cosh√(εr − 1)) Δu₁, Z = Z_air(u_r)/√ε_eff(u_r)), a fit within about 1 %. Reference values evaluated independently of EMCraft from the published formulas.",
+  "quantities": [
+    {
+      "id": "half_ounce",
+      "quantity": "microstrip Z0 with 17.5 µm copper, ohms",
+      "measure": {
+        "step": "half_ounce",
+        "pointer": "/sections/0/z0"
+      },
+      "value": 51.74354773104479,
+      "tolerance": {
+        "relative": 0.015
+      },
+      "reason": "The finite elements' quasi-static Z0 of the thick strip (its lid 20 h up) against Hammerstad and Jensen's thick-strip fit, itself within about 1 %."
+    },
+    {
+      "id": "one_ounce",
+      "quantity": "microstrip Z0 with 35 µm copper, ohms",
+      "measure": {
+        "step": "one_ounce",
+        "pointer": "/sections/0/z0"
+      },
+      "value": 50.709086413592686,
+      "tolerance": {
+        "relative": 0.015
+      },
+      "reason": "The finite elements' quasi-static Z0 of the thick strip (its lid 20 h up) against Hammerstad and Jensen's thick-strip fit, itself within about 1 %."
+    },
+    {
+      "id": "two_ounce",
+      "quantity": "microstrip Z0 with 70 µm copper, ohms",
+      "measure": {
+        "step": "two_ounce",
+        "pointer": "/sections/0/z0"
+      },
+      "value": 49.13153140169917,
+      "tolerance": {
+        "relative": 0.015
+      },
+      "reason": "The finite elements' quasi-static Z0 of the thick strip (its lid 20 h up) against Hammerstad and Jensen's thick-strip fit, itself within about 1 %."
+    }
+  ]
+}

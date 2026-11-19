@@ -27,7 +27,9 @@ the finite elements — is the same for either source.
 - **Nothing guessed.** A dielectric's thickness and permittivity come from the board's own setup
   (the finished thickness, the one Dk its material's reports agree on, their Df the loss
   tangent); when unknown — PCBCraft leaves them blank by default — the import is refused unless
-  the caller gives the copper layers (`stackup`).
+  the caller gives the copper layers (`stackup`). A copper layer's finished thickness is its
+  copper's (a sheet when not given); PCBCraft keeps no solder mask's thickness or permittivity,
+  so none is read.
 - **Zones filled by EMCraft, until PCBCraft fills them.** PCBCraft keeps a zone's outline and
   fill settings (clearance, thermal gap and spokes, connection, minimum island, priority), not
   filled copper (its fill is PCBCraft's issue #232). Without the fill a board's ground pour is

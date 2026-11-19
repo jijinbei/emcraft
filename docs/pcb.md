@@ -85,8 +85,9 @@ copper and footprints' copper pads (rectangles, rounded rectangles as rectangles
 ovals by chords; custom and trapezoid pads as their bounding rectangles, noted; a through-hole
 pad also a via of its drill between the outer layers; pads without a net skipped, noted). Refill
 zones in the PCB editor and save before importing. An unfilled zone outline is skipped with a
-note; it is never treated as solid ground. Board outlines, mask and copper thickness are not
-read.
+note; it is never treated as solid ground. A copper layer's `thickness` in the stackup is its
+copper's thickness; `F.Mask` and `B.Mask` with a thickness and `epsilon_r` (and `loss_tangent`)
+are the solder masks over `F.Cu` and `B.Cu`. Board outlines are not read.
 Coordinates are read in KiCad's millimetres and stored in SI metres.
 
 An absent stackup or missing dielectric permittivity is an error, not an assumed FR-4 board.
@@ -145,7 +146,9 @@ parameters):
 
 A layer may also give `loss_below`, the loss tangent of the dielectric below it (0 when left
 out; a KiCad stackup's `loss_tangent` sets it): the finite elements then solve that substrate
-lossy (the ideal line estimate stays lossless).
+lossy (the ideal line estimate stays lossless). Its `copper` is its copper's thickness (0, a
+sheet, when left out). The board's `masks`, `[{"layer":"F.Cu","thickness":0.02,"eps":3.5,"loss":0.02}]`,
+are solder masks over its top or bottom copper layer (`loss` optional).
 Vias use `{net,at,layers:[from,to],diameter,drill}` (`drill` optional, the plated hole). Polygon interiors use the even-odd rule; multiple
 polygons on a reference layer are unioned for screening. Native input is checked before any
 model replacement; invalid numbers, layers, dimensions and excessive inputs return errors.
@@ -162,7 +165,14 @@ nearest planes of other nets above and below, the board's dielectrics) quasi-sta
 finite elements: Z₀ and ε_eff of a single line, or, beside its partner (`pair`, else the net its
 name pairs with), the pair's odd and even modes, z_diff and z_common
 ([`pcb-line-impedance`](../tests/oracle/pcb-line-impedance/README.md): within 1 % of
-Hammerstad–Jensen and Cohn).
+Hammerstad–Jensen and Cohn). A layer's copper thickness makes its strips and planes that thick —
+on the top layer standing up into the air, on the bottom one hanging down, on an inner layer
+centred on it — and a solder mask is a coat its thickness deep over the board's face and over
+that layer's strips (their top and sides). The closed form beside a microstrip is then
+Hammerstad and Jensen's thick strip, and none is given under a mask
+([`pcb-thick-microstrip`](../tests/oracle/pcb-thick-microstrip/README.md): 17.5–70 µm within
+0.7 % of it). The finite elements of `pcb.region` mesh the outer layers' copper with its
+thickness, an inner layer's as a sheet and no mask; `mesh.generate`'s `notes` say so.
 
 `pcb.class {"name":"USB","nets":["USB_D*"],"z_diff":90,"tolerance":10}` gives a class of nets
 the impedance its lines should have (`z0`, `z_diff` or both); `pcb.check` checks every segment

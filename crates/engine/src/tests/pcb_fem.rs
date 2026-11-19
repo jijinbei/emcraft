@@ -485,7 +485,7 @@ fn thick_copper_stands_into_the_air_and_lowers_the_lines_impedance() {
     let (sheet, thick) = (port_mode(0.0), port_mode(0.1));
     assert!(thick.1 < sheet.1 - 1.0, "{sheet:?} {thick:?}");
     assert!(thick.0 > sheet.0, "the copper's slab adds a level: {sheet:?} {thick:?}");
-    // Copper on an inner layer, or thicker than the air beside it: refused.
+    // Copper on an inner layer: meshed as a sheet, said so; thicker than the air beside it: refused.
     let mut s = Session::new();
     let board = json!({
         "name": "stripline",
@@ -494,7 +494,8 @@ fn thick_copper_stands_into_the_air_and_lowers_the_lines_impedance() {
     });
     s.execute("pcb.load", &json!({"data": board})).unwrap();
     s.execute("pcb.region", &json!({"lo": [0, -3], "hi": [4, 3], "above": 0, "below": 0})).unwrap();
-    assert!(s.execute("mesh.generate", &json!({"size": 1.0})).is_err());
+    let m = s.execute("mesh.generate", &json!({"size": 1.0})).unwrap();
+    assert!(m["notes"][0].as_str().unwrap().contains("In"), "{m}");
     let mut s = Session::new();
     let board = json!({
         "name": "microstrip",

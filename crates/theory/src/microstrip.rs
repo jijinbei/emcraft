@@ -29,9 +29,41 @@ pub fn eps_eff(u: f64, eps_r: f64) -> f64 {
 /// assert!(microstrip::eps_eff(1.0, 9.8) > 1.0 && microstrip::eps_eff(1.0, 9.8) < 9.8);
 /// ```
 pub fn z0(u: f64, eps_r: f64) -> f64 {
-    let eta0 = MU0 * C0;
+    z_air(u) / eps_eff(u, eps_r).sqrt()
+}
+
+/// The air line's impedance (Ω), u = W/h: η₀/(2π) ln(f(u)/u + √(1 + 4/u²)).
+fn z_air(u: f64) -> f64 {
     let f = 6.0 + (2.0 * PI - 6.0) * (-(30.666 / u).powf(0.7528)).exp();
-    eta0 / (2.0 * PI * eps_eff(u, eps_r).sqrt()) * (f / u + (1.0 + (2.0 / u).powi(2)).sqrt()).ln()
+    MU0 * C0 / (2.0 * PI) * (f / u + (1.0 + (2.0 / u).powi(2)).sqrt()).ln()
+}
+
+/// A strip of thickness t: its impedance (Ω) and effective permittivity, u = W/h and
+/// `t_h` = t/h, by Hammerstad and Jensen's widths (1980): the air line's width grown by
+/// Δu₁ = (t/πh) ln(1 + 4e/((t/h) coth² √(6.517 u))), the dielectric line's by
+/// Δu_r = ½ (1 + 1/cosh √(εr − 1)) Δu₁; ε_eff = ε_eff(u_r) (Z_air(u₁)/Z_air(u_r))² and
+/// Z = Z_air(u₁)/√ε_eff (that is, Z_air(u_r)/√ε_eff(u_r)). No thickness is the strip of [`z0`].
+///
+/// ```
+/// use emcraft_theory::microstrip;
+///
+/// // 35 µm copper on 0.2 mm (t/h = 0.175) of FR-4 lowers a W = 2h line's impedance by a few ohms.
+/// let (z, eps) = microstrip::thick(2.0, 0.175, 4.3);
+/// assert!(z < microstrip::z0(2.0, 4.3) - 2.0 && eps < microstrip::eps_eff(2.0, 4.3));
+/// let (z, _) = microstrip::thick(2.0, 0.0, 4.3);
+/// assert!((z - microstrip::z0(2.0, 4.3)).abs() < 1e-9);
+/// ```
+pub fn thick(u: f64, t_h: f64, eps_r: f64) -> (f64, f64) {
+    let du1 = if t_h > 0.0 {
+        let coth = 1.0 / (6.517 * u).sqrt().tanh();
+        t_h / PI * (1.0 + 4.0 * std::f64::consts::E / (t_h * coth * coth)).ln()
+    } else {
+        0.0
+    };
+    let dur = 0.5 * (1.0 + 1.0 / (eps_r - 1.0).sqrt().cosh()) * du1;
+    let (u1, ur) = (u + du1, u + dur);
+    let eps = eps_eff(ur, eps_r) * (z_air(u1) / z_air(ur)).powi(2);
+    (z_air(u1) / eps.sqrt(), eps)
 }
 
 #[cfg(test)]

@@ -180,13 +180,27 @@ pub(crate) fn generate(s: &mut Session, p: &Params, sizes: &Sizes) -> Result<Val
     }
     // Binned for locating points (fields, probes).
     mesh.buckets = Some(emcraft_mesh::solid::buckets(&mesh));
-    let reply = json!({
+    // What the mesh leaves out of the board, said rather than refused.
+    let last = board.layers.len().saturating_sub(1);
+    let mut notes: Vec<String> = Vec::new();
+    let inner: Vec<&str> =
+        board.layers.iter().enumerate().filter(|(l, x)| *l != 0 && *l != last && x.copper > 0.0).map(|(_, x)| x.name.as_str()).collect();
+    if !inner.is_empty() {
+        notes.push(format!("the copper of inner layers ({}) is meshed as sheets, without its thickness", inner.join(", ")));
+    }
+    if !board.masks.is_empty() {
+        notes.push("the solder masks are not meshed (pcb.impedance takes them)".into());
+    }
+    let mut reply = json!({
         "nodes": mesh.nodes.len(),
         "tetrahedra": mesh.tets.len(),
         "triangles": planar.triangles.len(),
         "copper_faces": sheet_nets.len(),
         "edge_size": s.show_length(edge),
     });
+    if !notes.is_empty() {
+        reply["notes"] = json!(notes);
+    }
     s.model.set_mesh(mesh);
     Ok(reply)
 }
@@ -318,9 +332,6 @@ fn stack(
     let heights = board.heights();
     let up = upwards(board);
     let (bottom, top) = (up.first().copied(), up.last().copied());
-    if let Some(l) = up.iter().skip(1).take(up.len().saturating_sub(2)).find(|&&l| board.layers[l].copper > 0.0) {
-        return Err(failed(format!("not supported yet: copper thickness on an inner layer ({}); give it 0, a sheet", board.layers[*l].name)));
-    }
     // Copper on the box's floor or under its cover (no air beyond) is the box's wall: no slab.
     let thickness = |l: Option<usize>, air: f64| if air > 0.0 { l.map_or(0.0, |l| board.layers[l].copper) } else { 0.0 };
     let (t_bottom, t_top) = (thickness(bottom, region.below), thickness(top, region.above));

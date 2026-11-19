@@ -5,6 +5,12 @@
 //! box's floor and ceiling, an open side's lid far away; the partner's parallel segment beside it
 //! for a pair. Outer and inner layers alike — microstrips, embedded microstrips, striplines.
 //!
+//! **Copper and mask.** A layer's copper thickness makes its strips (and its planes) that thick:
+//! on the top layer standing up into the air, on the bottom one hanging down, on an inner layer
+//! centred on the layer (half into each dielectric beside it). A solder mask on an outer layer is
+//! a coat its thickness deep over the board's face and over the strips on that layer, their top
+//! and sides.
+//!
 //! **References.** A segment's reference planes are the nearest layers below and above it with
 //! copper of another net (a pour, a plane, another net's wide trace) under its middle — the rule
 //! `pcb.port` follows. A segment with none has no defined impedance and is reported so.
@@ -15,13 +21,13 @@
 //! Z_common = Z_even / 2. A segment without one is solved alone.
 //!
 //! Each distinct cross-section is solved once (on the threads), segments sharing it share its
-//! result. The model is quasi-TEM, lossless, the copper of no thickness, the box's sides
-//! conducting walls far from the strips.
+//! result. The model is quasi-TEM and lossless, the box's sides conducting walls far from the
+//! strips.
 
 use std::collections::BTreeMap;
 
 use emcraft_model::pcb::{Board, Segment};
-use emcraft_solver::portmode::strips::{Line, Section, Slab, Strip};
+use emcraft_solver::portmode::strips::{Block, Line, Section, Slab, Strip};
 use rayon::prelude::*;
 use serde_json::{Value, json};
 
@@ -105,7 +111,7 @@ fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option
     let above = (0..board.layers.len()).filter(|&l| heights[l] > h0 && covered(l)).min_by(|&a, &b| heights[a].total_cmp(&heights[b]));
     if below.is_none() && above.is_none() {
         return Some(Built {
-            section: Section { half_width: 0.0, floor: 0.0, ceiling: 0.0, slabs: vec![], strips: vec![] },
+            section: Section { half_width: 0.0, floor: 0.0, ceiling: 0.0, slabs: vec![], blocks: vec![], strips: vec![] },
             below,
             above,
             partner: None,
@@ -135,7 +141,19 @@ fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option
     let reach = [below.map(|l| h0 - heights[l]), above.map(|l| heights[l] - h0)].into_iter().flatten().fold(f64::INFINITY, f64::min);
     let span = g.width + beside.map_or(0.0, |(o, w)| o.abs() + 0.5 * w);
     let open = 20.0 * reach.max(span);
-    let (floor, ceiling) = (below.map_or(h0 - open, |l| heights[l]), above.map_or(h0 + open, |l| heights[l]));
+    // Each layer's copper: its thickness and how far it reaches below and above the layer — up
+    // into the air on top, down on the bottom, half each way inside.
+    let last = board.layers.len() - 1;
+    let reaches = |l: usize| {
+        let t = board.layers[l].copper;
+        match l {
+            0 => (0.0, t),
+            l if l == last => (t, 0.0),
+            _ => (0.5 * t, 0.5 * t),
+        }
+    };
+    // The planes' faces towards the strip.
+    let (floor, ceiling) = (below.map_or(h0 - open, |l| heights[l] + reaches(l).1), above.map_or(h0 + open, |l| heights[l] - reaches(l).0));
     let half_width = 12.0 * reach.max(span) + span;
     // The dielectrics between the layers (top down: each layer's gap below it), clipped to the box.
     let slabs = (0..board.layers.len().saturating_sub(1))
@@ -144,11 +162,32 @@ fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option
             (bottom < top && board.layers[i].eps_below > 1.0).then_some(Slab { bottom, top, eps: board.layers[i].eps_below })
         })
         .collect();
-    let mut strips = vec![Strip { left: -0.5 * g.width, right: 0.5 * g.width, height: h0 }];
+    let (down, thickness) = (reaches(li).0, board.layers[li].copper);
+    let strip = |left: f64, right: f64| Strip { left, right, height: h0 - down, thickness };
+    let mut strips = vec![strip(-0.5 * g.width, 0.5 * g.width)];
     if let Some((o, w)) = beside {
-        strips.push(Strip { left: o - 0.5 * w, right: o + 0.5 * w, height: h0 });
+        strips.push(strip(o - 0.5 * w, o + 0.5 * w));
         strips.sort_by(|a, b| a.left.total_cmp(&b.left));
     }
+    // The masks over the outer faces in the box: a coat over the face, and over the strips when
+    // they are on that face's layer.
+    let mut blocks = Vec::new();
+    for m in &board.masks {
+        let Some(l) = [0, last].into_iter().find(|&l| board.layers[l].name == m.layer) else { continue };
+        let (face, sign) = if l == 0 { (heights[0], 1.0) } else { (heights[last], -1.0) };
+        let (lo, hi) = if sign > 0.0 { (face, face + m.thickness) } else { (face - m.thickness, face) };
+        if hi <= floor || lo >= ceiling {
+            continue;
+        }
+        blocks.push(Block { left: -half_width, right: half_width, bottom: lo, top: hi, eps: m.eps });
+        if l == li {
+            for s in &strips {
+                let (bottom, top) = if sign > 0.0 { (face, s.top() + m.thickness) } else { (s.height - m.thickness, face) };
+                blocks.push(Block { left: s.left - m.thickness, right: s.right + m.thickness, bottom, top, eps: m.eps });
+            }
+        }
+    }
+    let masked = !blocks.is_empty();
     // A closed form for a single line of one dielectric: Hammerstad and Jensen's outer microstrip,
     // Cohn's centred stripline.
     let eps_between = |a: f64, b: f64| {
@@ -156,33 +195,30 @@ fn build(board: &Board, g: &Segment, net: &str, partner: Option<&str>) -> Option
             (0..board.layers.len().saturating_sub(1)).filter(|&i| heights[i + 1] < b && heights[i] > a).map(|i| board.layers[i].eps_below).collect();
         (ls.windows(2).all(|w| w[0] == w[1])).then(|| ls.first().copied()).flatten()
     };
-    let outer = li == 0 || li + 1 == board.layers.len();
+    // Hammerstad and Jensen's microstrip (with its thickness) has no mask; Cohn's stripline no
+    // thickness either.
+    let microstrip = |h: f64, e: f64| emcraft_theory::microstrip::thick(g.width / h, thickness / h, e).0;
     let closed = match (beside, below, above) {
-        (None, Some(l), None) if outer && li == 0 => {
-            let h = h0 - heights[l];
-            eps_between(heights[l], h0).map(|e| emcraft_theory::microstrip::z0(g.width / h, e))
-        }
-        (None, None, Some(l)) if outer && li + 1 == board.layers.len() => {
-            let h = heights[l] - h0;
-            eps_between(h0, heights[l]).map(|e| emcraft_theory::microstrip::z0(g.width / h, e))
-        }
-        (None, Some(lb), Some(la)) => {
+        (None, Some(l), None) if li == 0 && !masked => eps_between(heights[l], h0).map(|e| microstrip(h0 - (heights[l] + reaches(l).1), e)),
+        (None, None, Some(l)) if li == last && !masked => eps_between(h0, heights[l]).map(|e| microstrip(heights[l] - reaches(l).0 - h0, e)),
+        (None, Some(lb), Some(la)) if thickness == 0.0 && floor == heights[lb] && ceiling == heights[la] => {
             let (b, centred) = (heights[la] - heights[lb], ((h0 - heights[lb]) - (heights[la] - h0)).abs());
             eps_between(heights[lb], heights[la]).filter(|_| centred <= 0.01 * b).map(|e| emcraft_theory::stripline::z0(g.width, b, e))
         }
         _ => None,
     };
     let partner = beside.and(partner).map(|p| (p.to_owned(), beside.map_or(0.0, |(o, w)| o.abs() - 0.5 * (g.width + w))));
-    Some(Built { section: Section { half_width, floor, ceiling, slabs, strips }, below, above, partner, closed })
+    Some(Built { section: Section { half_width, floor, ceiling, slabs, blocks, strips }, below, above, partner, closed })
 }
 
 /// A key equal for segments whose cross-sections are the same to a nanometre.
 fn key(b: &Built) -> String {
     let nm = |x: f64| (x * 1e9).round() as i64;
     let s = &b.section;
-    let strips: Vec<_> = s.strips.iter().map(|x| [nm(x.left), nm(x.right), nm(x.height)]).collect();
+    let strips: Vec<_> = s.strips.iter().map(|x| [nm(x.left), nm(x.right), nm(x.height), nm(x.thickness)]).collect();
     let slabs: Vec<_> = s.slabs.iter().map(|x| [nm(x.bottom), nm(x.top), (x.eps * 1e9).round() as i64]).collect();
-    format!("{:?}{:?}{:?}{:?}", [nm(s.half_width), nm(s.floor), nm(s.ceiling)], strips, slabs, (b.below, b.above))
+    let blocks: Vec<_> = s.blocks.iter().map(|x| [nm(x.left), nm(x.right), nm(x.bottom), nm(x.top), (x.eps * 1e9).round() as i64]).collect();
+    format!("{:?}{:?}{:?}{:?}{:?}", [nm(s.half_width), nm(s.floor), nm(s.ceiling)], strips, slabs, blocks, (b.below, b.above))
 }
 
 /// What a segment's cross-section gives: nothing (and why), a single line's impedance (with its
@@ -343,6 +379,6 @@ pub fn impedance(s: &mut Session, p: &Params) -> Result<Value> {
         "length_unit": length.symbol(),
         "sections": shown,
         "impedance": summary,
-        "model": "each segment's cross-section by the finite elements, quasi-statically (its capacitances with and without the dielectrics): quasi-TEM, lossless, copper of no thickness, references the nearest planes of other nets above and below; a pair's segments with the partner's parallel segment beside (z_diff = 2 z_odd); the summary is length-weighted, of z0 or of z_diff",
+        "model": "each segment's cross-section by the finite elements, quasi-statically (its capacitances with and without the dielectrics): quasi-TEM, lossless, each layer's copper its thickness (outer layers' standing into the air, inner ones' centred), the solder masks a coat over the outer faces and their strips, references the nearest planes of other nets above and below; a pair's segments with the partner's parallel segment beside (z_diff = 2 z_odd); the summary is length-weighted, of z0 or of z_diff",
     }))
 }

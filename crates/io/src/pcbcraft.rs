@@ -98,9 +98,11 @@ pub fn board(project: &Project, override_layers: Option<Vec<Layer>>) -> Result<(
         segments: Vec::new(),
         vias: Vec::new(),
         copper: Vec::new(),
-        notes: vec!["Packages, solder mask and copper thickness are not included in this routing model; pads are copper of their nets.".into()],
+        notes: vec![
+            "Packages and solder masks are not included (PCBCraft keeps no mask thickness or permittivity); copper of no given thickness is a sheet; pads are copper of their nets.".into(),
+        ],
         region: None,
-        classes: vec![],
+        classes: vec![], masks: vec![],
     };
     let note = |board: &mut Board, text: &str| {
         if board.notes.len() < 128 && !board.notes.iter().any(|n| n == text) {
@@ -197,16 +199,17 @@ fn pours(zones: &[zones::Zone], nets: &[(uuid::Uuid, String)], board_clearance: 
 
 /// The copper layers from the stackup, top down: each one's depth z (m) below the top copper,
 /// the sum of the finished dielectric thicknesses above it, and the permittivity and loss tangent
-/// of the gap below it. Copper thickness is not counted (the conductors are sheets).
+/// of the gap below it, and each copper layer's finished thickness (a sheet when not given). The
+/// depths count the dielectrics only.
 fn stackup(setup: &BoardSetup) -> Result<Vec<Layer>> {
     let name = |id: uuid::Uuid| setup.layers().iter().find(|l| l.id == id).map(|l| l.name.clone());
     let mut layers: Vec<Layer> = Vec::new();
     let mut z = 0.0;
     for stratum in &setup.stackup().strata {
         match stratum {
-            Stratum::Copper { layer, .. } => {
+            Stratum::Copper { layer, thickness_nm, .. } => {
                 let name = name(*layer).ok_or_else(|| bad("a copper stratum names no layer"))?;
-                layers.push(Layer { name, z, eps_below: 1.0, loss_below: 0.0, copper: 0.0 });
+                layers.push(Layer { name, z, eps_below: 1.0, loss_below: 0.0, copper: thickness_nm.map_or(0.0, m) });
             }
             Stratum::Dielectric { construction, thickness_nm, .. } => {
                 let unknown =

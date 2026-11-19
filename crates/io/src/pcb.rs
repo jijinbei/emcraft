@@ -2,7 +2,7 @@
 //! https://dev-docs.kicad.org/en/file-formats/sexpr-pcb/ . No KiCad source code is used.
 //! Only saved filled copper is treated as copper, never an unfilled zone outline.
 use crate::{Error, Result};
-use emcraft_model::pcb::{Board, Copper, Layer, Segment, Via};
+use emcraft_model::pcb::{Board, Copper, Layer, Mask, Segment, Via};
 use emcraft_model::units::Length;
 use std::collections::BTreeMap;
 const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -180,10 +180,14 @@ pub fn read(text: &str, override_layers: Option<Vec<Layer>>) -> Result<Board> {
         segments: Vec::new(),
         vias: Vec::new(),
         copper: Vec::new(),
-        notes: vec!["Packages, solder mask and copper thickness are not included in this routing model; pads are copper of their nets.".into()],
+        notes: vec!["Packages are not included in this routing model; pads are copper of their nets.".into()],
         region: None,
         classes: vec![],
+        masks: vec![],
     };
+    // The stackup's solder masks over the outer copper layers there are.
+    let outer = [board.layers.first(), board.layers.last()].map(|l| l.map(|l| l.name.clone()));
+    board.masks = masks(&root)?.into_iter().filter(|m| outer.iter().flatten().any(|n| *n == m.layer)).collect();
     for n in root.list() {
         match n.head() {
             Some("segment") => board.segments.push(Segment {
@@ -230,8 +234,27 @@ pub fn read(text: &str, override_layers: Option<Vec<Layer>>) -> Result<Board> {
     Ok(board)
 }
 
-/// The copper layers of the board's stackup, from the top: each one's height z (m) and the
-/// dielectric below it (one homogeneous ply between two copper layers).
+/// The solder masks of the board's stackup (`F.Mask` over `F.Cu`, `B.Mask` over `B.Cu`), each with
+/// its thickness and permittivity (and loss tangent, else lossless); a mask without a thickness
+/// or a permittivity is left out. None without a stackup.
+fn masks(root: &Node) -> Result<Vec<Mask>> {
+    let Some(stack) = root.child("setup").and_then(|n| n.child("stackup")) else { return Ok(Vec::new()) };
+    let mut out = Vec::new();
+    for n in stack.list().iter().filter(|n| n.head() == Some("layer")) {
+        let name = n.text(1)?;
+        let Some(side) = name.strip_suffix(".Mask") else { continue };
+        if n.child("thickness").is_none() || n.child("epsilon_r").is_none() {
+            continue;
+        }
+        let loss = if n.child("loss_tangent").is_some() { n.num("loss_tangent")? } else { 0.0 };
+        out.push(Mask { layer: format!("{side}.Cu"), thickness: Length::Millimetre.to_si(n.num("thickness")?), eps: n.num("epsilon_r")?, loss });
+    }
+    Ok(out)
+}
+
+/// The copper layers of the board's stackup, from the top: each one's height z (m), its copper's
+/// thickness (where the stackup gives one) and the dielectric below it (one homogeneous ply
+/// between two copper layers).
 fn stackup(root: &Node) -> Result<Vec<Layer>> {
     let mut layers: Vec<Layer> = Vec::new();
     let stack =
@@ -246,9 +269,12 @@ fn stackup(root: &Node) -> Result<Vec<Layer>> {
                 previous.eps_below = eps.ok_or_else(|| bad("dielectric epsilon_r is missing"))?;
                 previous.loss_below = tan_d.unwrap_or(0.0);
             }
-            layers.push(Layer { name: name.into(), z, eps_below: 1.0, loss_below: 0.0, copper: 0.0 });
+            let copper = if n.child("thickness").is_some() { Length::Millimetre.to_si(n.num("thickness")?) } else { 0.0 };
+            layers.push(Layer { name: name.into(), z, eps_below: 1.0, loss_below: 0.0, copper });
             eps = None;
             tan_d = None;
+        } else if name.ends_with(".Mask") {
+            // A solder mask (`masks`), not a ply between copper layers.
         } else if n.child("epsilon_r").is_some() || n.child("type").and_then(|n| n.text(1).ok()).is_some_and(|t| t == "prepreg" || t == "core") {
             let er = n.num("epsilon_r")?;
             if eps.is_some_and(|p| (p - er).abs() > 1e-9) {
@@ -429,6 +455,32 @@ mod tests {
         let b = read(&unfilled, None).unwrap();
         assert!(b.copper.is_empty());
         assert!(b.notes.iter().any(|n| n.contains("unfilled")));
+    }
+
+    /// The copper layers' thicknesses, and the solder masks over the outer layers with their
+    /// thickness, εr and tan δ — not plies between the copper (F.Cu stays at the top).
+    #[test]
+    fn copper_thickness_and_masks_are_read() {
+        let b = read(BOARD, None).unwrap();
+        assert!(b.layers.iter().all(|l| (l.copper - 35e-6).abs() < 1e-15) && b.masks.is_empty());
+        let masked = BOARD
+            .replace(
+                "(stackup (layer \"F.Cu\"",
+                "(stackup (layer \"F.Mask\" (type \"Top Solder Mask\") (thickness 0.01) (epsilon_r 3.3) (loss_tangent 0.025)) (layer \"F.Cu\"",
+            )
+            .replace(
+                "(thickness 0.035))))",
+                "(thickness 0.035)) (layer \"B.Mask\" (type \"Bottom Solder Mask\") (thickness 0.02) (epsilon_r 3.8))))",
+            );
+        let b = read(&masked, None).unwrap();
+        assert_eq!(b.layers[0].z, 0.0);
+        approx::assert_abs_diff_eq!(b.layers[1].z, 0.00018, epsilon = 1e-15);
+        assert_eq!(b.masks.len(), 2);
+        let (f, k) = (&b.masks[0], &b.masks[1]);
+        assert!(f.layer == "F.Cu" && (f.thickness - 1e-5).abs() < 1e-15 && f.eps == 3.3 && f.loss == 0.025, "{f:?}");
+        assert!(k.layer == "B.Cu" && (k.thickness - 2e-5).abs() < 1e-15 && k.eps == 3.8 && k.loss == 0.0, "{k:?}");
+        // A mask of no permittivity is left out.
+        assert!(read(&masked.replace("(epsilon_r 3.8)", ""), None).unwrap().masks.len() == 1);
     }
 
     /// A ply's loss tangent is the dielectric's below its upper copper; without one, lossless;
